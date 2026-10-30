@@ -11,7 +11,7 @@ user-written text on connections.
 ## Layout (planned)
 - `scanner/coderstanding/` Python package `coderstanding`: CLI, model, resolver, file walk,
   level guesser; `scanner/coderstanding/languages/` one module per language (C#, GDScript +
-  Godot, Python, JS/TS)
+  Godot, Python, JS/TS, Kotlin)
 - `scanner/coderstanding/views.py` view engine: collapse, concrete view, zoom (the only place for it)
 - `scanner/coderstanding/textout.py` slim text format for Claude
 - `scanner/coderstanding/guide.py` + `docs/AI_GUIDE.md` the tool-neutral AI guide (`coderstanding guide`) and the snippet for agent instruction files
@@ -30,7 +30,7 @@ user-written text on connections.
 - Tests: `.venv/bin/pytest tests/<file>` for your own work; the full suite runs after merges.
   Viewer JS tests: `node --test tests/js/test_layout.mjs tests/js/test_badges.mjs` (no npm needed).
   Viewer end-to-end checks in headless Chromium (Node 22 + `chromium-browser`, no packages):
-  `node tests/e2e/run.mjs` (own server on a spare port, fixture `tests/e2e/fixture`, failure shots
+  `node tests/e2e/run.mjs` (silent: real speech only with `CODERSTANDING_E2E_SPEECH=1`, never on the user's desktop unless asked; own server on a spare port, fixture `tests/e2e/fixture`, failure shots
   in `~/Downloads/coderstanding-wip/qa-fail-*.png`); add `--app <repo> --app-data <scratch dir>`
   to also check a real app's layout (read-only). Light: run it after viewer changes.
 - Run without installing: `bin/coderstanding scan <path>` (uses `.venv/bin/python`).

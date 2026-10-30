@@ -209,6 +209,27 @@ modules (see `docs/COMPONENTS.md` once built).
 - Godot C#: `GetNode<T>()` → `uses T`, `[Signal]` delegates listed on the node,
   `GD.Load<PackedScene>("res://...")` → `dependency` (detail `load`).
 
+### 4.2b Java
+
+- Declarations: class, interface, enum, record, annotation type (kind `interface`), nested types
+  (`inner` for classes); ids are `package.Class` and `package.Outer.Inner` (`model.child_id`),
+  the scheme the Kotlin reader shares, so mixed Java/Kotlin projects link through the shared
+  resolver with no language-specific code. Methods, constructors and fields are members (methods
+  with start/end lines). Anonymous classes and lambdas count as their enclosing method.
+- Edges follow C#: `extends`/`implements` (`generalization`, `realization` when the target is an
+  interface), field types (`composition` for `new T()` or assignment of one, else `association`),
+  one ref per type name in parameters, returns, `throws`, generic arguments, locals, casts and
+  annotations (arrays, generics, wildcards stripped; `java.lang` names skipped), `new T()`, calls
+  through a held field (detail `call`) and static calls `T.m()`. Every ref has `from_member`
+  (`<field>`, `<init>` for initializers and static blocks).
+- Imports: a single-type import is a file alias, `pkg.*` and `import static pkg.T.*` are
+  import prefixes, `import static pkg.T.m` makes an unqualified `m()` a call on `T`. Same-package
+  names resolve through the package scope chain, as C# namespaces do. Unresolved imports stay
+  outside names (mapped to a Maven dependency by groupId prefix; `java.*`/`javax.*` are the JDK).
+- Entry: `public static void main` gives `program-main`. Spring annotations are plain
+  `annotation` dependencies (no flag): `@Autowired` fields and constructor parameter types are
+  already ordinary refs.
+
 ### 4.3 GDScript
 
 - One node per `.gd` file: id = `class_name` if set, else the `res://` path; name = class
@@ -269,6 +290,34 @@ Needed to scan Coderstanding itself. Same declarations/references model as the o
   `addEventListener`/`on(...)` with a known target (`signal`). npm packages → outside code.
 - Plain-JS code with few classes is mostly module-to-module lines with call lists; that is
   fine and still what you need to see.
+- **TypeScript projects** (built 2026-10-30, after a report of many unconnected classes):
+  - Reader: each named/default import is also a `dependency`/`import` ref from the module to
+    that name (an imported class is used); JSX elements (`dependency`, detail `jsx`, call = the
+    component); class decorators and the known names in their arguments (detail `decorator`:
+    Angular/Nest modules list the classes they use there); constructor parameter properties
+    (`private`/`readonly`/`override`) and `x = inject(Foo)` fields are held fields like C#
+    fields; any other type position with a known name (type arguments, `as`, locals, type
+    aliases, interface bodies) is a `dependency` with detail `type`. Type aliases and type
+    parameters are no nodes and make no refs; enums are `enum` nodes. `export default class {}`
+    is the node `<file>.default`, named after the file.
+  - Exports (`FileResult.exports`, `star_exports`): re-exports and the default export as names
+    a file node offers. The shared resolver follows them when a `Target(path, member)` asks for
+    a name that is not a child (barrels, chains, loops end); `import X` asks for `default`;
+    exported functions/consts/types point at their own module.
+  - Paths: `LanguageModule.read_path_map` runs once per scan; the JS module returns
+    `tsconfig.read_path_map`: per folder, its tsconfig/jsconfig files (`tsconfig.json` first,
+    then siblings like `tsconfig.app.json`), `extends` applied (a child's `paths` replace the
+    parent's; `baseUrl` is relative to the config that set it; `paths` without `baseUrl` are
+    relative to their config), and package.json names of workspace packages (entry from
+    `source`/`types`/`main`, built `dist/` mapped to `src/`, else `src/index`). The nearest
+    folder with configs applies to a file. The resolver tries the path map's bases (best
+    `paths` pattern = longest prefix, then `baseUrl`, then packages), then the path as written,
+    each with the module's `path_suffixes`, then again without the written extension.
+  - `coderstanding diagnose`: the resolver keeps every path no file matched; the scan sorts them
+    into reasons (alias marker with no `paths` match, alias matched but no file, repo folder
+    name without `baseUrl`, folder without index, missing relative file, package in no
+    package.json) into `graph.json` `diagnostics`; the command prints counts only (no app name,
+    names, paths or code), `--examples` adds anonymised examples (names -> letters).
 
 ### 4.4c C/C++ and HTML
 
@@ -291,6 +340,43 @@ Needed to scan Coderstanding itself. Same declarations/references model as the o
   args are stripped; macros are ignored (ALL_CAPS calls and names `#define`d in the file).
 - **HTML** (`languages/html.py`): one `module` node per page; `<script src>` and
   `<link href>` to repo files are `dependency` detail `import`. Inline scripts are ignored.
+
+### 4.4d Kotlin
+
+`languages/kotlin.py` reads `*.kt` and `*.kts` (tree-sitter-kotlin). Ids are full names like
+Java's: `com.example.ChatService`, nested `Outer.Inner`, a companion `Outer.Companion`
+(or its own name), so a Java reader links to it through the shared resolver with no
+language-specific resolution: Java interop works through shared ids once both readers exist.
+
+- **Nodes:** class, interface (also `fun`/`sealed interface`), enum, `data`/`value class`
+  (kind `record`), `object` (flag `singleton`), `companion object` (kind `inner`, flag `static`),
+  nested and `inner class` (kind `inner`), `sealed`/`abstract` (flag `abstract`). Top-level
+  functions and properties live in one `module` node per file, `<package>.<File>Kt`
+  (Kotlin's own class name for them). `typealias` becomes a file alias.
+- **Members:** functions (`method`, or `function` on the module node) with first and last line,
+  properties (`property`), constructor `val`/`var`.
+- **Edges:** supertypes after `:` (the resolver picks generalization or realization); property
+  and `val`/`var` constructor parameter types are held fields (`composition` when the class
+  creates the object itself: `= Foo()`, `by lazy { Foo() }`, `x = Foo()`; else `association`,
+  e.g. constructor injection); a plain constructor parameter, function parameters, returns,
+  local types, casts, `Foo()` calls and `Util.helper()` / `Color.RED` uses are `dependency`;
+  calls through a held field are `association` detail `call`. Untyped properties take the type
+  of `= Foo()` or of `by inject<Foo>()` / `get<Foo>()`. `fun Foo.bar()` gives a dependency
+  (detail `extension`) from the declaring type or file to `Foo`. Every ref carries its
+  `from_member` (`<init>` for `init` blocks, initializers and enum entries).
+- **Imports:** `import a.b.C` and `import a.b.C as D` are file aliases, `import a.b.*` an import
+  prefix. Same-package types resolve through the scope chain. Unresolved ones are outside
+  refs (a Gradle `group:artifact` dependency claims names by its group, or its artifact read as a
+  package); `kotlin.*`, `java.*`, `javax.*` and the default collection names are standard.
+- **Entry:** top-level `fun main` is `program-main`, as is a class with `@JvmStatic fun main`
+  and an Android `Application` subclass (Activities are not flagged: the manifest decides).
+  `*.kts` scripts are `script-main`; `*.gradle.kts` build scripts are left to the stack reader.
+- **Limits:** the grammar needs real statement breaks, so a one-line `class A { fun f() {} }`
+  can parse as an error and the rest of that declaration is lost. Calls through a variable
+  whose type is only inferred from another call are not followed. Built-in types (`Int`,
+  `String`, `Unit`, `Any`) are dropped; other stdlib names are emitted like any outside name.
+  Java classes a Kotlin file names resolve to the Java reader's nodes through the shared
+  ids (and the reverse); Kotlin and Java deps share one `maven` kind.
 
 ### 4.5 Levels: a rough guess, then Claude sorts them
 
@@ -802,6 +888,8 @@ What it reads:
 | `project.godot` | Godot version (`config/features`), renderer, C# enabled, autoloads |
 | `addons/*/plugin.cfg` | Godot addons with name, version, author |
 | `*.csproj`, `Directory.Packages.props` | target framework, NuGet packages + versions, project references |
+| `pom.xml` | project name/group/version/packaging, modules, dependencies (`maven` deps `group:artifact`, `${property}` and `dependencyManagement` versions filled in) |
+| `build.gradle(.kts)`, `settings.gradle(.kts)` | Kotlin/Android plugin as the stack name, `group:artifact:version` dependencies (the same `maven` deps and `graph.stack["maven"]` list as `pom.xml`, entries with `build: gradle`), included modules |
 | `package.json`, `requirements*.txt`, `pyproject.toml` | JS/Python deps for tools or web parts |
 | `Dockerfile`, `docker-compose*.yml` | base images, services |
 | `.gitmodules` | vendored repos |
@@ -1149,9 +1237,16 @@ Built by the view engine (it is view data, not scan data); text output prints
     lines; degree and cycles ignore tests, outside code and type/nested-type pairs; unsure =
     outgoing unsure lines; unresolved = outside refs that are no package, engine API or
     Python standard library. Static reading misses dynamic loads, so `unused` is a hint.
-  - Note fields have one wording each, kept in `viewer/field_help.js` (the "?" tips beside
-    every field in the details panel and the "Note fields" help block) and repeated in
-    docs/AI_GUIDE.md. Meaning in short: `hint` = one line, what it is or does; `description` =
+  - Note fields have one set of rules each (who it is for, what goes in, what does not, a good and
+    a bad example), built in as `docs/field_rules.json`; a project may override any part, and add
+    house rules for AI notes, in `<data>/fields.md` (beside tours; shared through git; a section per
+    field, `key: value` lines, edited by `coderstanding fields`, the details panel's "Edit field
+    rules" or by hand). `field_rules.effective` is the one resolver: the viewer's "?" tips and form
+    (`GET/PUT /api/fields`), `guide --app`, `curate` and the AI_GUIDE section all read it. `hint` and
+    `description` are for a non-technical newcomer: what it is FOR, never how the code works. `set`
+    (AI writes only) prints a reminder, never refuses, for a hint over `max` characters or
+    code-like hint/description text (identifiers with `()`, `snake_case`, `camelCase`, `::`, generics,
+    type names, code fences). The AI_GUIDE field section is checked against the built-in rules by a test. Meaning in short: `hint` = one line, what it is or does; `description` =
     what the class is and what its functions do (a connection: what it represents and why it
     exists), never problems; `review` = code-review findings (smells, risks, suggested splits,
     with concrete targets; classes, connections and functions; `node` prints one short

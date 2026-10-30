@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .cache import CACHE_DIR_ENV, ScanCache, default_cache_dir, file_hash, write_gitignore
 from .checks import check_graph
+from .diagnose import collect as collect_diagnostics
 from .filewalk import DEFAULT_SKIP_DIRS, assign_files
 from .fingerprints import compute_fingerprints
 from .language import FileContext, load_builtin_modules, track_dependencies
@@ -70,6 +71,12 @@ def parse_files(root, modules, skip_dirs, cache=None, workers=None,
             if (rel, module.name) in results]
 
 
+def read_path_maps(root, modules, skip_dirs):
+    """module name -> its import path aliases (tsconfig `paths`), for modules that have any."""
+    found = {m.name: m.read_path_map(root, skip_dirs) for m in modules}
+    return {name: path_map for name, path_map in found.items() if path_map is not None}
+
+
 def scan_repo(root, modules=None, skip_dirs=DEFAULT_SKIP_DIRS, use_cache=True,
               cache_dir=None, workers=None, parallel_min=PARALLEL_MIN_FILES, hub_threshold=AUTO):
     """cache_dir: where the per-file cache lives (default: <root>/.coderstanding/cache).
@@ -85,8 +92,10 @@ def scan_repo(root, modules=None, skip_dirs=DEFAULT_SKIP_DIRS, use_cache=True,
             write_gitignore(root)
         cache = ScanCache(root, cache_dir or default_cache_dir(root))
     parsed = parse_files(root, modules, skip_dirs, cache, workers, parallel_min)
-    graph = build_graph(root, parsed, repo=root.name)
+    path_maps = read_path_maps(root, modules, skip_dirs)
+    graph = build_graph(root, parsed, repo=root.name, path_maps=path_maps)
     read_stack(root, graph, skip_dirs)
+    graph.diagnostics = collect_diagnostics(root, graph, path_maps)
     mark_tests(graph)
     guess_levels(graph, hub_threshold=hub_threshold)
     check_graph(graph)

@@ -4,7 +4,8 @@
 import sys
 from argparse import BooleanOptionalAction
 
-from . import guide, helper, hook, skill
+from . import field_rules, guide, helper, hook, skill
+from .apps import AppError, find_app
 
 
 def run_helper(args):
@@ -81,13 +82,23 @@ def add_skill(commands):
     parser.set_defaults(run=run_skill)
 
 
+def guide_app_data(name):
+    """The registered app's data folder, or None (a name only used in the snippet)."""
+    try:
+        return find_app(name).data if name else None
+    except AppError:
+        return None
+
+
 def run_guide(args):
+    data = guide_app_data(args.app)
+    custom = bool(data and field_rules.read_overrides(data) != ({}, ""))
     if args.write:
-        print(f"{guide.write_snippet(args.write, args.app)} {args.write}")
+        print(f"{guide.write_snippet(args.write, args.app, custom)} {args.write}")
     elif args.snippet:
-        print(guide.snippet(args.app), end="")
+        print(guide.snippet(args.app, custom), end="")
     else:
-        print(guide.guide_text(), end="")
+        print(guide.guide_text(data), end="")
 
 
 def add_guide(commands):
@@ -97,7 +108,7 @@ def add_guide(commands):
                         "AGENTS.md, CLAUDE.md, .github/copilot-instructions.md or a Cursor rule")
     parser.add_argument("--write", metavar="FILE", help="add the block to FILE (created if missing; "
                         "a re-run replaces its own block)")
-    parser.add_argument("--app", metavar="NAME", help="app name for the snippet (default <app>)")
+    parser.add_argument("--app", metavar="NAME", help="app name: the snippet uses it, and the guide shows that project's field rules (default <app>)")
     parser.set_defaults(run=run_guide)
 
 

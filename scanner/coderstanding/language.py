@@ -89,6 +89,10 @@ class FileResult:
     aliases: dict = field(default_factory=dict)  # file-local name -> Target (preload consts, imports)
     global_aliases: dict = field(default_factory=dict)  # name -> Target for every file (autoloads)
     marks: list = field(default_factory=list)  # Mark
+    # Names this file's node offers beyond its own children (JS barrels, default exports):
+    # exported name -> Target, resolved in this file; `Target(path=..., member=name)` asks for them.
+    exports: dict = field(default_factory=dict)
+    star_exports: list = field(default_factory=list)  # paths whose names this file re-exports
 
 
 @dataclass
@@ -159,6 +163,11 @@ class LanguageModule:
 
     def start_scan(self):
         """Called once before each scan; drop any in-memory state from earlier scans."""
+
+    def read_path_map(self, root, skip_dirs):
+        """Once per scan: a path map (`tsconfig.PathMap`: `bases(written, from_file)`) for
+        import paths that are not relative (aliases like `@/x`), or None."""
+        return None
 
 
 

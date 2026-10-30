@@ -131,11 +131,17 @@ from coderstanding.offline import install
 install()
 from coderstanding.language import FileContext, load_builtin_modules
 from coderstanding.languages.csharp import CSharpModule
+from coderstanding.languages.java import JavaModule
+from coderstanding.languages.kotlin import KotlinModule
 modules = load_builtin_modules()
 import pathlib, tempfile
 root = pathlib.Path(tempfile.mkdtemp())
 (root / "a.cs").write_text("namespace N { class A : B { C c; } }")
+(root / "A.java").write_text("package n; class A extends B { C c; }")
 print(len(CSharpModule().parse(FileContext(root, "a.cs")).declarations), len(modules))
+print(len(JavaModule().parse(FileContext(root, "A.java")).declarations))
+(root / "a.kt").write_text("package n\nclass A : B()\n")
+print(len(KotlinModule().parse(FileContext(root, "a.kt")).declarations))
 print("socket events:", events)
 """)
     assert done.returncode == 0, done.stderr

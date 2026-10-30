@@ -36,7 +36,7 @@ NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 # What a data folder holds: files Coderstanding makes (safe to delete with an app) and files the
 # user and AI wrote (deleted only when asked by name). tour_code.json: left by the dropped lab sync.
 GENERATED_FILES = ("graph.json", "cache", LAYOUT_FILE, "tour_code.json")
-OWN_FILES = ("notes.jsonl", "specs", "memos", "tours", "settings.json")
+OWN_FILES = ("notes.jsonl", "specs", "memos", "tours", "settings.json", "fields.md")
 
 REGISTRY_ENV = "CODERSTANDING_REGISTRY"  # other registry file (tests, a second profile)
 DATA_HOME_ENV = "CODERSTANDING_DATA_HOME"  # other parent of the default data folders

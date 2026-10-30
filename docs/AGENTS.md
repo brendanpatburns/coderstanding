@@ -61,6 +61,11 @@ or guesses levels: the shared core does that (`scanner/coderstanding/`, see COMP
      (GDScript `const X := preload(...)`, Python/JS imports). `global_aliases`: names for all
      files (Godot autoloads); their paths resolve relative to the declaring file.
    - `marks`: `Mark(Target, flags)` to flag a node declared elsewhere (autoload, entry).
+   - `exports` / `star_exports`: names the file's node offers beyond its own children
+     (`export { A as B } from './y'` = `exports["B"] = Target(path="./y", member="A")`,
+     `export * from './x'` = `star_exports.append("./x")`); the resolver follows them.
+   - Import path aliases (tsconfig `paths`): override `read_path_map(root, skip_dirs)` on the
+     module to return a shared path map (see `tsconfig.py`); never resolve them in the reader.
 3. Do not filter outside names: emit them as normal refs. Unresolved ones become the
    node's `external_refs` (for the stack reader); ambiguous ones get `unsure`.
 4. Strip generics/arrays yourself: emit one Ref per type name (`Dictionary<K, Foo>` -> `Foo`).

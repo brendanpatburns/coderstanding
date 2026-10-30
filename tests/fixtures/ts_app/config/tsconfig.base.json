@@ -1,0 +1,11 @@
+// Shared compiler options (tsconfig files are JSONC: comments and trailing commas)
+{
+  "compilerOptions": {
+    /* paths below resolve against this baseUrl */
+    "baseUrl": "../src",
+    "strict": true,
+    "paths": {
+      "@legacy/*": ["legacy/*"], // replaced by the child config's paths
+    },
+  },
+}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderstanding"
-version = "0.2.2"
+version = "0.2.3"
 description = "Scan a code base and show its classes and connections as a graph"
 readme = "README.md"
 license = "MIT"
@@ -14,6 +14,7 @@ dependencies = [
     "tomli; python_version < '3.11'",
     "tree-sitter>=0.23",
     "tree-sitter-c-sharp",
+    "tree-sitter-java",
     "tree-sitter-gdscript",
     "tree-sitter-python",
     "tree-sitter-javascript",
@@ -21,6 +22,7 @@ dependencies = [
     "tree-sitter-c",
     "tree-sitter-cpp",
     "tree-sitter-html",
+    "tree-sitter-kotlin",
 ]
 
 [project.optional-dependencies]
@@ -44,7 +46,7 @@ packages = ["coderstanding", "coderstanding.languages", "coderstanding.viewer",
 [tool.setuptools.package-data]
 "coderstanding.viewer" = ["*.html", "*.js", "*.css", "*.json"]
 "coderstanding.viewer.vendor" = ["*"]
-"coderstanding.docs" = ["AI_GUIDE.md"]
+"coderstanding.docs" = ["AI_GUIDE.md", "field_rules.json"]
 "coderstanding.docs.skill" = ["SKILL.md"]
 
 [tool.pytest.ini_options]

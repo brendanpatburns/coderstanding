@@ -4,8 +4,14 @@ Order for a name: file aliases, global aliases, scope chain (innermost first; no
 global aliases with the scoped name), imports,
 global id, longest existing dotted prefix, then (loose modules only) any id ending in
 ".Name". Several matches at one step -> first match, unsure. No match -> external ref.
+
+A path tries the module's path map first (tsconfig aliases), then the path as written, each
+with the module's path suffixes, then again without the written extension (`./x.js` is
+`./x.ts`). A member of a file node is its child, else a name the file exports (re-exports,
+default export, `export *`), followed through barrel files.
 """
 
+import posixpath
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -22,6 +28,15 @@ class Parsed:
 
 
 @dataclass(frozen=True)
+class PathMiss:
+    """A path no file matched (for `coderstanding diagnose`)."""
+    written: str
+    from_file: str
+    bases: list  # repo-relative bases tried (path map ones first)
+    matched: bool  # a path map alias (tsconfig `paths`, workspace package) matched it
+
+
+@dataclass(frozen=True)
 class Resolution:
     id: str = ""  # node id, "" when the target is outside the repo
     label: str = ""  # outside name, used when id is ""
@@ -34,12 +49,17 @@ class Resolver:
     graph: Graph
     file_nodes: dict = field(default_factory=dict)  # rel_path -> node id
     global_aliases: dict = field(default_factory=dict)  # name -> (Target, declaring Parsed)
+    path_maps: dict = field(default_factory=dict)  # module name -> its read_path_map()
+    file_parsed: dict = field(default_factory=dict)  # file node id -> Parsed (its exports)
+    path_misses: dict = field(default_factory=dict)  # (module, written, from file) -> PathMiss
+    _following: set = field(default_factory=set)  # (node id, member) being followed
+    _exported_cache: dict = field(default_factory=dict)  # (node id, member) -> id or None
 
     def resolve(self, target, parsed, scope="", use_aliases=True):
         resolution = self._resolve_base(target, parsed, scope or target.scope, use_aliases)
         if target.member and resolution.id:
             return self._with_member(resolution, target.member)
-        if target.member:
+        if target.member and not target.path:  # an unresolved file keeps its path as label
             return Resolution(label=target.text)
         return resolution
 
@@ -54,16 +74,63 @@ class Resolver:
         return Resolution(node_id) if node_id in self.graph.nodes else None
 
     def _with_member(self, resolution, member):
-        found = self._known(child_id(resolution.id, member))
-        return Resolution(found.id if found else resolution.id, unsure=resolution.unsure)
+        found = self._member_of(resolution.id, member)
+        return Resolution(found or resolution.id, unsure=resolution.unsure)
+
+    def _member_of(self, node_id, member):
+        """The child `member` of a node, or the node a file node exports under that name
+        (followed through re-exports); None when neither is found."""
+        found = self._known(child_id(node_id, member))
+        if found:
+            return found.id
+        parsed = self.file_parsed.get(node_id)
+        key = (node_id, member)
+        if parsed is None or key in self._following:
+            return None
+        if key in self._exported_cache:
+            return self._exported_cache[key]
+        self._following.add(key)
+        try:
+            found = self._exported(parsed, member)
+        finally:
+            self._following.discard(key)
+        if not self._following:  # inside a loop of re-exports a miss is not final
+            self._exported_cache[key] = found
+        return found
+
+    def _exported(self, parsed, member):
+        target = parsed.result.exports.get(member)
+        if target is not None:
+            return self.resolve(target, parsed).id or None
+        for written in parsed.result.star_exports:
+            source = self._resolve_path(written, parsed)
+            found = source.id and self._member_of(source.id, member)
+            if found:
+                return found
+        return None
 
     def _resolve_path(self, written, parsed):
         rel = paths.normalize_ref_path(written, parsed.rel_path, self.root)
-        for suffix in parsed.module.path_suffixes:
-            node_id = self.file_nodes.get(rel + suffix)
+        path_map = self.path_maps.get(parsed.module.name)
+        mapped, matched = path_map.bases(written, parsed.rel_path) if path_map else ([], False)
+        bases = mapped + [rel]
+        for base in bases:
+            node_id = self._file_node(base, parsed.module.path_suffixes)
             if node_id:
                 return Resolution(node_id)
+        self.path_misses.setdefault((parsed.module.name, written, parsed.rel_path),
+                                    PathMiss(written, parsed.rel_path, bases, matched))
         return Resolution(label=rel)
+
+    def _file_node(self, base, suffixes):
+        """The file node at base + one of the suffixes, else with base's extension dropped."""
+        stem, ext = posixpath.splitext(base)
+        for candidate in (base, stem) if ext else (base,):
+            for suffix in suffixes:
+                node_id = self.file_nodes.get(candidate + suffix)
+                if node_id:
+                    return node_id
+        return None
 
     def _resolve_name(self, name, parsed, scope, use_aliases):
         steps = (
@@ -95,7 +162,8 @@ class Resolver:
         found = self.resolve(target, origin, use_aliases=False)
         if not found.id or name in aliases or not rest:
             return found
-        return self._known(child_id(found.id, rest)) or found
+        member = self._member_of(found.id, rest)
+        return Resolution(member) if member else found
 
     def _via_scope_chain(self, name, scope, use_aliases=True):
         """`scope.name` for each enclosing scope: a node, or a global alias with that full
@@ -134,10 +202,11 @@ class Resolver:
         return self._pick(i for i in self.graph.nodes if i.endswith(f".{name}"))
 
 
-def build_graph(root, parsed_files, repo=""):
-    """Make the graph: nodes from declarations, then edges from resolved refs."""
+def build_graph(root, parsed_files, repo="", path_maps=None):
+    """Make the graph: nodes from declarations, then edges from resolved refs.
+    path_maps: module name -> PathMap (LanguageModule.read_path_map)."""
     graph = Graph(repo=repo)
-    resolver = Resolver(root, graph)
+    resolver = Resolver(root, graph, path_maps=dict(path_maps or {}))
     for parsed in parsed_files:
         add_declarations(graph, resolver, parsed)
         for name, target in parsed.result.global_aliases.items():
@@ -147,6 +216,7 @@ def build_graph(root, parsed_files, repo=""):
         for ref in parsed.result.refs:
             add_ref(graph, resolver, parsed, ref)
     graph.fold_held_edges()
+    graph.path_misses = list(resolver.path_misses.values())
     return graph
 
 
@@ -177,6 +247,7 @@ def add_declarations(graph, resolver, parsed):
         ))
         if decl.file_node:
             resolver.file_nodes.setdefault(parsed.rel_path, decl.id)
+            resolver.file_parsed.setdefault(decl.id, parsed)
 
 
 def apply_marks(graph, resolver, parsed):

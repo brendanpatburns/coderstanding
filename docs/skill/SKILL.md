@@ -34,5 +34,8 @@ instead of grepping files.
    start with `coderstanding graph <app> 1`, then zoom/node/specs instead of broad grepping."
    Paste any `rules X:` lines it prints for classes the agent touches.
 
+Writing `hint`/`description` with `set`: they are for a newcomer who does not know the code, so say what
+the class is FOR, not how it works (`coderstanding fields <app>`, "Writing note fields" in the guide).
+
 Full reference (how to read the text, curating with `set`): run `coderstanding guide` (the same
 text is `AI_GUIDE.md` in this skill's folder).

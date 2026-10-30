@@ -1,6 +1,6 @@
 """Stack reader (docs/DESIGN.md 8): tech stack, outside dependencies, and outside nodes.
 
-Reads project files (project.godot, addons, *.csproj, package.json, Python requirements,
+Reads project files (project.godot, addons, *.csproj, pom.xml, package.json, Python requirements,
 Docker files, .gitmodules) into graph.stack, then maps the graph's outside refs to those
 dependencies: a mapped ref becomes an edge to one `external` node per dependency, Godot
 API names are counted as one "godot-api" entry, and the rest is listed as unresolved.
@@ -30,6 +30,24 @@ RENDERERS = {"Forward Plus": "forward_plus", "Mobile": "mobile",
 ENGINE_LANGS = ("gdscript", "godot")
 UNRESOLVED_TOP = 20
 REQUIREMENT_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(\[[^\]]*\])?\s*(.*)$")
+JVM_LANGS = ("java", "kotlin")
+JVM_STANDARD_PREFIXES = ("java.", "javax.", "kotlin.")
+# Names Kotlin imports by default (kotlin.*, kotlin.collections.*, java.lang.*), written without a package
+KOTLIN_DEFAULT_NAMES = {
+    "List", "MutableList", "Map", "MutableMap", "Set", "MutableSet", "Collection", "Iterable",
+    "Sequence", "Pair", "Triple", "Result", "Lazy", "Comparable", "Throwable", "Exception",
+    "RuntimeException", "IllegalStateException", "IllegalArgumentException", "Thread",
+    "Runnable", "StringBuilder", "Regex", "Number", "Enum", "Annotation", "Object", "Class",
+}
+GRADLE_DEP_RE = re.compile(
+    r"""^\s*(\w+)\s*\(?\s*(?:platform\(\s*)?["']([^"':\s$]+):([^"':\s]+)(?::([^"'\s]+))?["']""", re.M)
+GRADLE_PLUGIN_RES = (
+    re.compile(r"""\bid\s*\(?\s*["']([^"']+)["']"""),
+    re.compile(r"""\bapply\s+plugin\s*:\s*["']([^"']+)["']"""),
+)
+GRADLE_KOTLIN_SHORT_RE = re.compile(r"""\bkotlin\(\s*["']([^"']+)["']\s*\)""")  # kotlin("jvm")
+GRADLE_INCLUDE_RE = re.compile(r"^\s*include\s*\(?([^\n)]*)", re.M)
+GRADLE_ROOT_RE = re.compile(r"""rootProject\.name\s*=\s*["']([^"']+)["']""")
 FROM_RE = re.compile(r"^\s*FROM\s+(?:--\S+\s+)*(\S+)(?:\s+AS\s+(\S+))?", re.I | re.M)
 COMPOSE_IMAGE_RE = re.compile(r"^\s*image:\s*[\"']?([^\"'\s#]+)", re.M)
 SUBMODULE_RE = re.compile(r'^\[submodule\s+"([^"]+)"\]')
@@ -37,7 +55,7 @@ SUBMODULE_RE = re.compile(r'^\[submodule\s+"([^"]+)"\]')
 
 @dataclass
 class Dep:
-    kind: str  # addon, nuget, npm, pip, image, submodule
+    kind: str  # addon, nuget, npm, pip, maven ("group:artifact"), image, submodule
     name: str
     version: str = ""
     file: str = ""
@@ -63,6 +81,7 @@ class Stack:
     dotnet: list = field(default_factory=list)
     deps: dict = field(default_factory=dict)  # node_id -> Dep
     central_versions: dict = field(default_factory=dict)  # NuGet Directory.Packages.props
+    maven: list = field(default_factory=list)  # one entry per pom.xml / build.gradle(.kts) / settings.gradle(.kts)
 
     def add_dep(self, dep):
         self.deps.setdefault(dep.node_id, dep)
@@ -154,6 +173,84 @@ def read_csproj(stack, root, rel):
         stack.add_dep(Dep("nuget", name, version, rel))
 
 
+# --- Maven ---
+
+POM_PROPERTY_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def pom_child(element, name):
+    """Text of the direct child `name` of a pom element (XML namespace dropped), else ""."""
+    child = next((c for c in element if c.tag.rpartition("}")[2] == name), None)
+    return (child.text or "").strip() if child is not None else ""
+
+
+def pom_children(element, name):
+    child = next((c for c in element if c.tag.rpartition("}")[2] == name), None)
+    return list(child) if child is not None else []
+
+
+def read_pom(stack, root, rel):
+    project = ElementTree.fromstring(read_text(root, rel))
+    properties = {c.tag.rpartition("}")[2]: (c.text or "").strip() for c in pom_children(project, "properties")}
+    parent = next((c for c in project if c.tag.rpartition("}")[2] == "parent"), None)
+    group = pom_child(project, "groupId") or (pom_child(parent, "groupId") if parent is not None else "")
+    version = pom_child(project, "version") or (pom_child(parent, "version") if parent is not None else "")
+    properties.update({"project.groupId": group, "project.version": version})
+    fill = lambda value: POM_PROPERTY_RE.sub(lambda m: properties.get(m.group(1), m.group(0)), value)
+    managed = {(pom_child(d, "groupId"), pom_child(d, "artifactId")): fill(pom_child(d, "version"))
+               for d in pom_children(next((c for c in project if c.tag.rpartition("}")[2] == "dependencyManagement"),
+                                          ElementTree.Element("x")), "dependencies")}
+    packages = []
+    for dependency in pom_children(project, "dependencies"):
+        key = (pom_child(dependency, "groupId"), pom_child(dependency, "artifactId"))
+        if all(key):
+            packages.append({"name": ":".join(key),
+                             "version": fill(pom_child(dependency, "version")) or managed.get(key, ""),
+                             "scope": pom_child(dependency, "scope") or "compile"})
+    stack.maven.append({
+        "file": rel, "name": pom_child(project, "name") or pom_child(project, "artifactId"),
+        "group": group, "artifact": pom_child(project, "artifactId"), "version": version,
+        "packaging": pom_child(project, "packaging") or "jar",
+        "modules": [(m.text or "").strip() for m in pom_children(project, "modules")],
+        "packages": packages,
+    })
+    for package in packages:
+        stack.add_dep(Dep("maven", package["name"], package["version"], rel, {"scope": package["scope"]}))
+
+
+def gradle_stack_name(plugins):
+    """The stack a build file's plugins name: "Kotlin Android", "Kotlin JVM", "Android", ..."""
+    kotlin = [p for p in plugins if p.startswith(("org.jetbrains.kotlin.", "kotlin"))]
+    android = any(p.startswith("com.android.") for p in plugins)
+    if any("multiplatform" in p for p in kotlin):
+        return "Kotlin Multiplatform"
+    if kotlin:
+        return "Kotlin Android" if android else "Kotlin JVM"
+    return "Android" if android else ("Java" if any(p.startswith("java") for p in plugins) else "")
+
+
+def read_gradle(stack, root, rel):
+    """build.gradle(.kts): plugins -> the stack name, `implementation("g:a:v")` lines -> `maven`
+    deps. settings.gradle(.kts): the root project name and its `include`d modules. Plain regexes."""
+    source = read_text(root, rel)
+    if Path(rel).name.startswith("settings."):
+        names = [m for line in GRADLE_INCLUDE_RE.findall(source)
+                 for m in re.findall(r"""["']([^"']+)["']""", line)]
+        found = GRADLE_ROOT_RE.search(source)
+        stack.maven.append({"file": rel, "build": "gradle", "name": found.group(1) if found else "",
+                            "modules": names})
+        return
+    plugins = [p for regex in GRADLE_PLUGIN_RES for p in regex.findall(source)]
+    plugins += [f"org.jetbrains.kotlin.{p}" for p in GRADLE_KOTLIN_SHORT_RE.findall(source)]
+    packages = [{"name": f"{group}:{name}", "version": version,
+                 "scope": "test" if configuration.lower().startswith(("test", "androidtest")) else "compile"}
+                for configuration, group, name, version in GRADLE_DEP_RE.findall(source)]
+    stack.maven.append({"file": rel, "build": "gradle", "stack": gradle_stack_name(plugins),
+                        "plugins": plugins, "packages": packages})
+    for package in packages:
+        stack.add_dep(Dep("maven", package["name"], package["version"], rel, {"scope": package["scope"]}))
+
+
 def read_package_props(stack, root, rel):
     elements, _ = xml_elements(root, rel)
     for tag, el in elements:
@@ -242,6 +339,9 @@ def read_gitmodules(stack, root, rel):
 READERS = (
     ("project.godot", read_godot_project),
     ("*.csproj", read_csproj),
+    ("pom.xml", read_pom),
+    ("build.gradle", read_gradle), ("build.gradle.kts", read_gradle),
+    ("settings.gradle", read_gradle), ("settings.gradle.kts", read_gradle),
     ("Directory.Packages.props", read_package_props),
     ("package.json", read_package_json),
     ("requirements*.txt", read_requirements),
@@ -290,6 +390,7 @@ class DepIndex:
         self.npm = {d.name: d for d in by_kind("npm")}
         self.pip = {pip_key(d.name): d for d in by_kind("pip")}
         self.nuget = sorted(by_kind("nuget"), key=lambda d: -len(d.name))
+        self.maven = by_kind("maven")
 
     def dep_for(self, node, label):
         if "/" in label or label.endswith((".gd", ".tscn", ".cs")):
@@ -303,11 +404,27 @@ class DepIndex:
             return self.pip.get(pip_key(head))
         if node.lang == "csharp":
             return self.nuget_for(label)
+        if node.lang in JVM_LANGS:
+            return self.maven_for(label)
         return None
 
     def by_path(self, label):
         addon = next((d for prefix, d in self.addon_dirs if label.startswith(prefix)), None)
         return addon or self.npm.get(npm_package(label))
+
+    def maven_for(self, qualified):
+        """The Maven / Gradle dependency owning a package or class name: its groupId, or its
+        artifactId read as a package (`kotlinx-coroutines-core` also owns `kotlinx.coroutines`)
+        is a prefix of the name; the longest prefix wins."""
+        best = (0, None)
+        for dep in self.maven:
+            group, _, artifact = dep.name.partition(":")
+            parts = artifact.replace("-", ".").split(".")
+            prefixes = [group] + [".".join(parts[:n]) for n in range(len(parts), 1, -1)]
+            for prefix in prefixes:
+                if (qualified == prefix or qualified.startswith(prefix + ".")) and len(prefix) > best[0]:
+                    best = (len(prefix), dep)
+        return best[1]
 
     def nuget_for(self, namespace):
         return next((d for d in self.nuget
@@ -328,6 +445,9 @@ STANDARD_PYTHON = set(sys.stdlib_module_names) | set(dir(builtins))
 
 def is_standard_name(node, label):
     """The language's own library (Python stdlib and builtins): neither a package nor unknown."""
+    if node.lang in JVM_LANGS:
+        return label.startswith(JVM_STANDARD_PREFIXES) or (
+            node.lang == "kotlin" and label in KOTLIN_DEFAULT_NAMES)
     return node.lang == "python" and label.split(".", 1)[0] in STANDARD_PYTHON
 
 
@@ -398,6 +518,7 @@ def stack_json(graph, stack, usage):
         "languages": dict(sorted(Counter(n.lang for n in graph.nodes.values() if n.lang).items())),
         "godot": stack.godot,
         "dotnet": stack.dotnet,
+        "maven": stack.maven,
         "deps": deps,
         "unresolved": {"refs": sum(usage.unresolved.values()),
                        "top": usage.unresolved.most_common(UNRESOLVED_TOP)},

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.2.3 (2026-10-30)
+
+- TypeScript projects: far fewer classes that look unconnected. Imports now resolve through
+  tsconfig/jsconfig `paths` and `baseUrl` (with `extends`, JSONC comments and trailing commas,
+  and `tsconfig.app.json`-style siblings), workspace package names (`@example/shared` -> its
+  folder), barrel files (`export * from`, `export { A as B } from`, `export * as ns from`), default
+  exports (incl. `export default class { }`), folder `index` files and ESM `./x.js` meaning `./x.ts`.
+  The JS/TS reader adds JSX components (`<UserCard/>`, `<Ns.Item/>`), class decorators and the
+  classes listed in them (Angular/Nest `@NgModule`/`@Module`/`@Component({imports})`), `inject(X)`
+  fields, `readonly` parameter properties, `implements Foo<T>`, type arguments, `as` casts and other
+  type positions, interface members, enums, lazy `import('./x')`, and `.jsx`/`.mts`/`.cts` files.
+  An imported class counts as used by the importing file.
+- `coderstanding diagnose <app> [--examples]`: a privacy-safe summary of why things are unconnected
+  (unresolved import patterns, tsconfig counts, unresolved names), safe to paste into a public issue.
+  `warnings` points to it when imports found no file. Scanner version 11 (rescan).
+- Java reader (`*.java`): types, nested types, members with line ranges, field/parameter/return/
+  generic type refs, calls, imports (single, `.*`, static), `main` entry; Maven `pom.xml` in the
+  stack reader (`maven` dependencies mapped from imports by groupId).
+- Kotlin reader (`*.kt`, `*.kts`): types, companions, supertypes, constructor-injected and
+  delegated properties, calls, imports/aliases, extension functions, entry points; Gradle build
+  files feed the stack (Kotlin/Android plugin as stack name, dependencies as `maven`, modules).
+  Needs `tree-sitter-kotlin`.
+- Field rules: every note field now says who it is for, what goes in, what does not, with a good and a bad
+  example. `hint` and `description` are for a non-technical newcomer (what it is FOR, not how the code works).
+  Shown in the viewer's "?" tips, the AI guide ("Writing note fields"), `set --help` and `curate`; `set`
+  reminds an AI (never refuses) about long or code-like hints. Teams override any part, set the hint length
+  and add house rules per project: `coderstanding fields`, the details panel's "Edit field rules", or
+  `fields.md` in the project data folder (`GET/PUT /api/fields`).
+
 ## 0.2.2 (2026-10-30)
 
 - Fixes #2 (Windows helper):

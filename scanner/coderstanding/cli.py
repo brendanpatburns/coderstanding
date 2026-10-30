@@ -8,7 +8,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import textout
+from . import field_rules, textout
 from .textout import short_namer
 from .apps import (AppError, load_registry, SETTINGS, find_app, find_id, load_graph, parse_target, register,
                    remove_app, rename_app, rescan, selection_id)
@@ -17,8 +17,9 @@ from .cache import SCANNER_VERSION
 from .offline import helper_listening, install as install_offline_guard, privacy_report
 from .levels import parse_hub_threshold
 from .checks import RULE_FILTERS, warnings_by_kind
+from .diagnose import diagnose_text
 from .notes import (AI_AUTHOR, HUMAN_AUTHOR, clean_value, edge_key, function_key, is_function,
-                    node_key)
+                    human_author, node_key)
 from .setup_cli import SETUP_COMMANDS
 from .scan import default_output, scan_repo
 from .testcode import is_test, files_to_retest
@@ -655,6 +656,8 @@ def run_warnings(args):
     for kind in KINDS:
         for card_id, problem in open_cards(app, graph, notes, kind).all_problems():
             print(f"{kind} problem: {card_id}: {problem}")
+    if graph.diagnostics.get("imports"):
+        print(f"hint: `coderstanding diagnose {app.name}` sums up imports that found no file")
 
 
 def add_warnings(commands):
@@ -662,6 +665,21 @@ def add_warnings(commands):
     app_args(parser, view_options=False)
     parser.add_argument("--all", action="store_true", help="also show ignored warnings")
     parser.set_defaults(run=run_warnings)
+
+
+def run_diagnose(args):
+    _, graph, _ = open_app(args)
+    for line in diagnose_text(graph, args.examples):
+        print(line)
+
+
+def add_diagnose(commands):
+    parser = commands.add_parser("diagnose", help="why classes look unconnected: counts of import "
+                                 "patterns that found no file, safe to paste in a public issue")
+    app_args(parser, view_options=False)
+    parser.add_argument("--examples", action="store_true",
+                        help="add a few short anonymised examples (names replaced by letters)")
+    parser.set_defaults(run=run_diagnose)
 
 
 def rule_text(number, rule):
@@ -732,6 +750,7 @@ def run_curate(args):
             for node_id, node in sorted(graph.nodes.items())
             if node.kind != "external" and not is_test(node) and missing_fields(notes, node_id)]
     print(f"{app.name} curate {len(rows)} to do (id file level in/out -missing {{calls}})")
+    print("\n".join(field_rules.reminder_lines(field_rules.effective(app.data))))
     if rows:
         print("\n".join(rows))
 
@@ -775,7 +794,7 @@ def note_target(graph, notes, target):
 
 
 def apply_set(graph, notes, tokens, by, ai=None):
-    """One `target key=value ...` line; returns (note key, fields kept because they are yours)."""
+    """One `target key=value ...` line; returns (note key, fields kept because they are yours, fields given)."""
     if len(tokens) < 2:
         raise AppError(f"need a target and key=value: {' '.join(tokens)}")
     key = note_target(graph, notes, tokens[0])
@@ -789,7 +808,7 @@ def apply_set(graph, notes, tokens, by, ai=None):
         except ValueError as error:
             raise AppError(f"{token}: {error}") from error
     try:
-        return key, notes.set(key, by, fields, ai, graph)
+        return key, notes.set(key, by, fields, ai, graph), fields
     except ValueError as error:
         raise AppError(str(error)) from error
 
@@ -819,13 +838,64 @@ def run_set(args):
     results = [apply_set(graph, notes, tokens, by, ai) for tokens in set_lines(args)]
     app.save_notes(notes)
     print(f"set {len(results)} by {by}{' (AI draft)' if ai else ''}")
-    for key, kept in results:
+    for key, kept, _ in results:
         if kept:
             print(f"{key}: kept your {', '.join(kept)}")
+    if ai:
+        print_field_warnings(app, results)
+
+
+def print_field_warnings(app, results):
+    """Reminders (never a refusal) when an AI-written hint/description is long or code-like."""
+    rules = field_rules.effective(app.data)
+    warned = False
+    for key, kept, fields in results:
+        written = {name: text for name, text in fields.items() if name not in kept}
+        for warning in field_rules.field_warnings(rules, written):
+            print(f"reminder {key}: {warning}")
+            warned = True
+    if warned:
+        print("\n".join(field_rules.reminder_lines(rules)))
+
+
+SET_EPILOG = """Writing hint and description:
+  They are for a new developer who is not very technical and does not know the code. Say what the
+  class or connection is FOR and where it fits, not how it works (no types, function names or
+  algorithms). hint = one short plain line (~80 chars). Details: `coderstanding fields <app>`."""
+
+
+def run_fields(args):
+    app = find_app(args.app, args.data)
+    if args.reset or args.sets:
+        sets = {}
+        for token in args.sets or ():
+            target, sep, text = token.partition("=")
+            if not sep:
+                raise AppError(f"not field.key=value: {token}")
+            sets[target] = text
+        try:
+            field_rules.change(app.data, sets, args.reset, by=args.by or human_author(app.root))
+        except ValueError as error:
+            raise AppError(str(error)) from error
+    print(field_rules.effective_text(field_rules.effective(app.data)))
+
+
+def add_fields(commands):
+    parser = commands.add_parser("fields", help="how to write each note field (hint, description, ...): "
+                                 "the effective rules, your project's overrides marked")
+    app_args(parser, view_options=False)
+    parser.add_argument("--set", dest="sets", nargs="+", metavar="FIELD.KEY=VALUE",
+                        help="override, e.g. hint.what=\"...\" hint.max=120 description.code_check=off "
+                             "(keys: what who not good bad max code_check); house=\"...\" = house rules; "
+                             "an empty value goes back to the built-in one")
+    parser.add_argument("--reset", nargs="+", metavar="FIELD", help="drop overrides: a field name, house_rules or all")
+    parser.add_argument("--by", metavar="NAME", help="record this editor (default: the human here)")
+    parser.set_defaults(run=run_fields)
 
 
 def add_set(commands):
-    parser = commands.add_parser("set", help="set notes: target key=value ...")
+    parser = commands.add_parser("set", help="set notes: target key=value ...",
+                                 epilog=SET_EPILOG, formatter_class=argparse.RawDescriptionHelpFormatter)
     app_args(parser, view_options=False)
     parser.add_argument("items", nargs="*", help="Name|A>B key=value ...")
     parser.add_argument("--file", help="batch file, one `target key=value ...` per line; - = stdin")
@@ -951,7 +1021,7 @@ def build_parser():
     for add in (add_scan, add_add, add_settings, add_graph, add_zoom, add_node, add_view,
                 add_specs, add_memos, add_tours, add_tour, add_comment, add_outline, add_find, add_impact,
                 add_brief, add_tests,
-                add_warnings, add_rules, add_curate, add_set, add_serve, add_rescan,
+                add_warnings, add_diagnose, add_rules, add_curate, add_set, add_fields, add_serve, add_rescan,
                 add_remove, add_rename, add_privacy, *SETUP_COMMANDS):
         add(commands)
     return parser

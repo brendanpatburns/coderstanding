@@ -124,6 +124,9 @@ const specFile = (id, folder = "specs") => (existsSync(join(data, folder, `${id}
 
 /** Every utterance speaks at volume 0 (no sound from the checks) and logs its events
  *  (`__speech`: names; `__speechLog`: {t, type, text} with performance.now() times). */
+// Real speech is opt-in: speech-dispatcher plays out loud whatever the page volume, so by default
+// Chromium gets no voices and the speech check skips. CODERSTANDING_E2E_SPEECH=1 turns it on.
+const REAL_SPEECH = process.env.CODERSTANDING_E2E_SPEECH === "1";
 const SILENT_SPEECH = `(() => {
   if (!window.speechSynthesis) return;
   window.__speech = [];
@@ -158,7 +161,8 @@ async function main() {
   // --enable-speech-dispatcher: Chromium on Linux lists speech-dispatcher voices only with it;
   // fake microphone (a tone, never played: --mute-audio) for the tour recording check
   const { page, close } = await launch({ width: 1780, height: 1000,
-    args: ["--enable-speech-dispatcher", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });  // graph area ~1400x800
+    args: [...(REAL_SPEECH ? ["--enable-speech-dispatcher"] : []), "--use-fake-device-for-media-stream",
+      "--use-fake-ui-for-media-stream"] });  // graph area ~1400x800
   await page.send("Page.addScriptToEvaluateOnNewDocument", { source: SILENT_SPEECH });
   const requests = [];  // every request the page makes over the whole run (offline guarantee, DESIGN 18)
   page.conn.on((method, params) => { if (method === "Network.requestWillBeSent") requests.push(params.request.url); });
@@ -323,6 +327,24 @@ async function main() {
       await page.key("ArrowDown");
       await settle();
       assert(lastNote("node:Big", "status")?.status, "status saved");
+    });
+
+    await step("edit a field rule and see it in the ? popup", async () => {
+      await page.eval(`renderHelp()`);
+      await page.clickOn('#details [data-act="edit-fields"]');
+      await sleep(150);
+      await page.eval(`(() => { const t = document.querySelector('#details textarea[data-field="hint"][data-key="what"]'); t.value = "Team wording for hints"; })()`);
+      await page.clickOn('#details [data-act="fields-save"]');
+      await settle();
+      assert(await page.eval(`!document.querySelector('#details .fr-input')`), "form closed after saving");
+      assert(await page.eval(`/Team wording for hints/.test(document.querySelector('#details .help-list').textContent) && /\\(this project\\)/.test(document.querySelector('#details .help-list').textContent)`), "help list shows the project rule");
+      await page.eval(`document.querySelector('#details [data-act="edit-fields"]').click()`);
+      await sleep(150);
+      await page.clickOn('#details [data-act="fields-reset"][data-field="hint"]');
+      await settle();
+      await page.clickOn('#details [data-act="fields-cancel"]');
+      await sleep(150);
+      assert(await page.eval(`!/Team wording for hints/.test(document.querySelector('#details .help-list').textContent)`), "reset goes back to the default");
     });
 
     await step("double-click a line zooms; breadcrumb back", async () => {
@@ -824,7 +846,7 @@ async function main() {
     await step("Tours speech: chunks in step with the voice (speech-dispatcher voices in Chromium)", async () => {
       await openTour("tab=tours&tour=first-steps&step=1");
       const voices = await page.eval("speechSynthesis.getVoices().length");
-      if (!voices) { console.log("     skip: no speech voices (speech-dispatcher + a voice, Chromium with --enable-speech-dispatcher)"); return; }
+      if (!voices) { console.log("     skip: real speech is off (CODERSTANDING_E2E_SPEECH=1 to hear it)"); return; }
       await page.eval("window.__speech.length = 0");
       const voice = await page.eval("document.getElementById('tourVoice').value");
       // chunk sync: every chunk's start puts the highlight on its first word (sampled every frame)

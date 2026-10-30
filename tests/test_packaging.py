@@ -55,7 +55,7 @@ def test_installed_layout_uses_package_data(tmp_path):
 
 
 def test_wheel_package_data_lists_the_ai_guide():
-    assert '"coderstanding.docs" = ["AI_GUIDE.md"]' in (ROOT / "pyproject.toml").read_text()
+    assert '"coderstanding.docs" = ["AI_GUIDE.md", "field_rules.json"]' in (ROOT / "pyproject.toml").read_text()
 
 
 def test_server_serves_the_resolved_viewer(tmp_path):

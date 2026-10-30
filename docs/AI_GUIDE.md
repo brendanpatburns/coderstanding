@@ -31,6 +31,7 @@ package; `coderstanding <command> --help` lists every option.
 | the plan, the user's notes | `specs <app>`, `memos <app>` |
 | how a flow works | `tours <app>`, `tour <app> <id>` |
 | problems | `warnings <app>` |
+| why classes look unconnected | `diagnose <app> [--examples]` |
 | proof that it is offline | `privacy` |
 
 ## Commands in detail
@@ -76,6 +77,13 @@ package; `coderstanding <command> --help` lists every option.
   `rules <app> add-layer FROM TO --forbid|--only [--kind K] [--why TEXT]` (FROM/TO = folder glob,
   `domain:<name>` or `tag:<tag>`; `--only`: only FROM may use TO); `rules` numbers both kinds,
   `remove N` removes either. Turn rules written in a project's docs into these, then show the user `rules`.
+- `coderstanding diagnose <app>`: when many classes look unconnected, why: imports that found no
+  file, counted by pattern (e.g. "34 imports starting with an alias marker (`@/` 34), no tsconfig
+  paths match", "12 imports of folders with no index file"), tsconfig/jsconfig and workspace
+  package counts, and unresolved names. Counts only: no app name, file names, paths or code, so
+  it is safe to paste into a public bug report (e.g. a GitHub issue) for a private code base.
+  `--examples` adds up to three short examples per pattern with every name replaced by a letter
+  (`@/a/b.js`); read them before pasting.
 - Who calls what inside a class: `coderstanding node <app> <name> --functions` prints
   `net.gd#join_room > media*: upload ×2, clean_file_name` per function, an `in:` line of its
   callers (`A#f in: ...` when it calls nothing), `A (fields) > B` for lines with no function
@@ -157,17 +165,8 @@ the code should not go.
 - Answer with one batch: `coderstanding set <app> --file batch.txt`,
   lines like `Renderer level=3 domain=Rendering hint="draws frames"`; `A>B hint="..."` for a
   connection; `key=` clears. One-off: `coderstanding set <app> Renderer level=3`.
-- What each note field means (source of truth: `viewer/field_help.js`, which also feeds the
-  "?" tips in the viewer; keep this wording in sync, a test checks it). Put things in the
-  right one:
-  - `hint`: One line on the box or line: what it is or does.
-  - `description`: What the class is and what its functions do; for a connection, what it represents and why it exists. No problems here.
-  - `review`: Findings from a code review: smells, risks, suggested splits with concrete targets. Set with `review="..."`, `\n` = new line.
-  - `rules`: Things never to do here; shown to anyone (and any AI) changing this code. One rule per line.
-  - `status`: stable / wip / fragile / deprecated: how safe it is to change.
-  - `tags`: Free labels for search and grouping, comma separated.
-  - `level`: How high up it shows: 1 is the top picture, higher numbers are more detail.
-  - `domain`: The broad area it belongs to.
+- What goes in each note field, and what does not: see "Writing note fields" below. Set
+  `review` and `rules` text with `\n` for a new line.
 - Also `status=stable|wip|fragile|deprecated`, `tags=net,audio`, `rules="no X\nno Y"`
   (`\n` = new line). Test classes are left out of `curate`.
 - `set` writes AI drafts (author `claude`, `ai: true`, whichever agent you are); human values (any other author) are
@@ -181,10 +180,65 @@ the code should not go.
   `coderstanding set <app> --still-true A 'A#f' A>B`. Notes written before this feature have no
   fingerprint and are never marked stale.
 
+## Writing note fields
+The built-in rules (source: `docs/field_rules.json`, also shown by the viewer's "?" tips). A team
+may change them per project: `coderstanding fields <app>` shows the effective rules (marking
+the project's own), `fields <app> --set hint.max=120 description.code_check=off hint.what="..."
+house="short house rules for AI notes"`, `fields <app> --reset hint` (or `all`). They live in
+`fields.md` in the project's data folder, shared through git like tours; `coderstanding guide
+--app <app>` prints this section with the project's rules. When you write a note and the project has
+house rules, follow them over the defaults. `set` only reminds you (never refuses) when an AI-written
+hint is too long or a hint/description reads like code.
+
+<!-- field-rules:begin -->
+`hint` and `description` are for a new developer who is not very technical and does not know the code base. Say what the class or connection is FOR and where it fits; never how the code works. Do not restate code, signatures, types or algorithms, and explain any jargon in a few plain words. Implementation detail belongs in code comments, or in `review` / `rules` for their own purposes.
+
+- `hint`: One short plain line (about 80 characters) shown on the box or line: what it is for. Max 100 characters.
+  - For: A new developer who is not very technical and does not know this code base.
+  - Not: How the code works: no types, function names, signatures or algorithms; no unexplained jargon.
+  - Good: `Sends chat messages between players; everything that talks to the server goes through it`
+  - Bad: `Uses a Dictionary<int, Peer> and calls rpc_id() per message`
+- `description`: A few plain sentences: what the class (or connection) is for, what uses it, and what a newcomer should watch out for.
+  - For: A new developer who is not very technical and does not know this code base or what the class is for.
+  - Not: A walk through the code: no restating of functions, types or algorithms (that belongs in code comments); no problems (use review).
+  - Good: `Keeps the list of items in a shop and their prices. The checkout and the shelf display both read from it. Changing a price here changes it everywhere at once.`
+  - Bad: `Holds a List<Item> and sorts it with a comparer in Refresh(); GetPrice() returns item.price * taxRate.`
+- `review`: Findings from a code review: smells, risks, suggested splits with concrete targets.
+  - For: Developers about to change or clean up this code.
+  - Not: What the class is for (hint/description) or do-nots (rules); no praise or plain description.
+  - Good: `3800 lines; move the chat functions into a separate ChatLog class`
+  - Bad: `Handles the shop.`
+- `rules`: Things never to do here, one rule per line; shown to anyone (and any AI) changing this code.
+  - For: Anyone, human or AI, about to edit this code.
+  - Not: Descriptions, wishes or findings; only firm do-nots, each with its reason if it is not obvious.
+  - Good: `Never call the Server from here; go through the Chat system`
+  - Bad: `This class is complicated`
+- `status`: stable / wip / fragile / deprecated: how safe it is to change.
+  - For: Anyone deciding how carefully to touch this code.
+  - Not: Anything else: reasons go in review or rules.
+  - Good: `fragile`
+  - Bad: `needs work`
+- `tags`: Short free labels for search and grouping, comma separated.
+  - For: Anyone searching or filtering the map.
+  - Not: Sentences, or the class's own name; no duplicates of status or domain.
+  - Good: `chat, audio`
+  - Bad: `this is the thing that plays sounds`
+- `level`: How high up it shows: 1 is the top picture, higher numbers are more detail.
+  - For: Anyone reading the map from the top down.
+  - Not: How important the class is; it is how much detail you need before it appears.
+  - Good: `2`
+  - Bad: `5 because it is boring`
+- `domain`: The broad area it belongs to, in one or two plain words.
+  - For: A newcomer scanning the map for an area.
+  - Not: A code folder or namespace; a sentence; a new name when an existing domain fits.
+  - Good: `Chat, Shop, Players`
+  - Bad: `Scripts/Net/Impl`
+<!-- field-rules:end -->
+
 ## Flags and code descriptions
 - Entry flags name the mechanism: `godot-main` (root script of `run/main_scene`),
-  `godot-main-scene`, `autoload`, `program-main` (C# `Main`/top-level statements, C/C++
-  `main`), `script-main` (Python `__main__`, Node shebang or package.json `bin`/`scripts`; a
+  `godot-main-scene`, `autoload`, `program-main` (C# and Java `Main`/top-level statements, C/C++
+  `main`, Kotlin top-level `main` / `@JvmStatic main` / Android `Application`), `script-main` (Python `__main__`, Node shebang or package.json `bin`/`scripts`; a
   tool, level 2 when the app has a start). Every entry also has `entry`.
 - A node's `description` falls back to the code's own header comment (`description_by:
   "code"`); your AI drafts and the user's text replace it. Curate only what the code leaves

@@ -63,6 +63,7 @@ def graph_to_json(graph):
         "settings": graph.settings,
         "hubs": graph.hubs,
         "fingerprints": graph.fingerprints,
+        "diagnostics": graph.diagnostics,
     }
 
 
@@ -99,7 +100,8 @@ def graph_from_json(data):
     # Any scanner version loads (only an unknown format refuses); callers note an old one.
     graph = Graph(repo=data.get("repo", ""), scanned_at=data.get("scannedAt", ""),
                   stack=data.get("stack", {}), settings=data.get("settings", {}),
-                  hubs=data.get("hubs", {}), scanner_version=data.get("scannerVersion") or 0, fingerprints=data.get("fingerprints", {}))
+                  hubs=data.get("hubs", {}), scanner_version=data.get("scannerVersion") or 0, fingerprints=data.get("fingerprints", {}),
+                  diagnostics=data.get("diagnostics", {}))
     for node in data["nodes"]:
         graph.add_node(node_from_json(node))
     for edge in data["edges"]:

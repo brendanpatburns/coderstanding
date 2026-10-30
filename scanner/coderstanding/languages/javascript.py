@@ -7,31 +7,34 @@ import tree_sitter_typescript
 
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult,
                                     LanguageModule, Ref, Target, register)
+from coderstanding import tsconfig
 from coderstanding.model import Member, child_id, entry_flags
 
 from . import doc_text
 from .ts_util import children_of_type, descendants, first_child_of_type, end_line, line, make_parser, text
 
-PARSERS = {
-    ".ts": make_parser(tree_sitter_typescript.language_typescript()),
-    ".tsx": make_parser(tree_sitter_typescript.language_tsx()),
-}
+TS_PARSER = make_parser(tree_sitter_typescript.language_typescript())
+PARSERS = {".ts": TS_PARSER, ".mts": TS_PARSER, ".cts": TS_PARSER,
+           ".tsx": make_parser(tree_sitter_typescript.language_tsx())}
 JS_PARSER = make_parser(tree_sitter_javascript.language())
 SKIPPED_TYPES = {"Array", "Promise", "Record", "Map", "Set", "Partial", "Readonly", "Omit",
                  "Pick", "Function", "Object", "String", "Number", "Boolean", "Date",
                  "Error", "RegExp", "Required"}
 EVENT_METHODS = ("addEventListener", "on", "once", "addListener")
 CLASS_TYPES = ("class_declaration", "abstract_class_declaration", "interface_declaration")
+DECLARATION_TYPES = CLASS_TYPES + ("enum_declaration",)
 DOC_MARKERS = ("/**",)
 STOP_AT_CLASSES = ("class_declaration", "abstract_class_declaration", "class")
+STOP_AT_TYPES = STOP_AT_CLASSES + ("interface_declaration", "enum_declaration")
+TYPE_NAME_NODES = ("type_identifier", "nested_type_identifier")
+FIELD_NODES = ("public_field_definition", "field_definition", "property_signature")
+PARAM_PROPERTY_MODIFIERS = ("accessibility_modifier", "readonly", "override_modifier")
+INJECT_CALLS = ("inject",)  # `private api = inject(ApiService)` holds an ApiService
+DEFAULT_EXPORT = "default"  # the member name `import X from './x'` asks for
 
 
 def string_value(node):
     return text(first_child_of_type(node, "string_fragment")) if node is not None else ""
-
-
-def is_relative(spec):
-    return spec.startswith((".", "/"))
 
 
 FUNCTION_NODES = ("method_definition", "function_declaration", "generator_function_declaration",
@@ -75,6 +78,8 @@ class JavaScriptFile:
         self.result = FileResult()
         self.imported = set()
         self.local_classes = {}
+        self.local_types = set()  # type aliases and type parameters: no node, no ref
+        self.typed = set()  # ids of type nodes a specific reader already turned into refs
 
     def read(self):
         parser = PARSERS.get(posixpath.splitext(self.ctx.rel_path)[1], JS_PARSER)
@@ -89,24 +94,33 @@ class JavaScriptFile:
         for node in root.children:
             self.read_top_level(node)
         self.read_calls(root, self.module_id, {}, "")
+        self.read_type_uses(root, self.module_id)
         return self.result
 
     # --- top level --------------------------------------------------------------------
 
     def find_classes(self, root):
-        for node in descendants(root, CLASS_TYPES):
-            if node.type in CLASS_TYPES:
+        for node in descendants(root):
+            if node.type in DECLARATION_TYPES:
                 name = text(node.child_by_field_name("name"))
                 self.local_classes.setdefault(name, child_id(self.module_id, name))
+            elif node.type in ("type_alias_declaration", "type_parameter"):
+                self.local_types.add(text(node.child_by_field_name("name")))
 
     def read_top_level(self, node):
         outer = node  # comments sit above the `export`, not above the class inside it
         if node.type == "export_statement":
-            node = node.child_by_field_name("declaration") or node
+            self.read_export(node)
+            node = node.child_by_field_name("declaration") or node.child_by_field_name("value") or node
+            self.export_module_names(node)
         if node.type == "import_statement":
             self.read_import(node)
         elif node.type in CLASS_TYPES:
             self.read_class(node, outer)
+        elif node.type == "class" and outer is not node:  # `export default class { }`
+            self.read_class(node, outer, DEFAULT_EXPORT)
+        elif node.type == "enum_declaration":
+            self.read_enum(node, outer)
         elif node.type == "function_declaration":
             self.module.members.append(Member(text(node.child_by_field_name("name")),
                                               "function", line=line(node),
@@ -125,15 +139,18 @@ class JavaScriptFile:
         elif value.type in ("arrow_function", "function_expression") and name.type == "identifier":
             self.module.members.append(Member(text(name), "function", line=line(declarator),
                                               end=end_line(declarator)))
+            self.read_signature(value, self.module_id)
 
     # --- imports ----------------------------------------------------------------------
 
-    def import_target(self, spec, member=""):
-        return Target(path=spec, member=member if is_relative(spec) else "")
+    @staticmethod
+    def import_target(spec, member=""):
+        return Target(path=spec, member=member)
 
-    def add_import(self, spec, node):
-        self.result.refs.append(Ref(self.module_id, Target(path=spec), "dependency",
-                                    line(node), "import"))
+    def add_import(self, spec, node, member=""):
+        """An import of a file; with `member`, of one name in it (a class it imports is used)."""
+        self.result.refs.append(Ref(self.module_id, self.import_target(spec, member),
+                                    "dependency", line(node), "import"))
 
     def bind(self, name, target):
         self.imported.add(name)
@@ -145,14 +162,69 @@ class JavaScriptFile:
         clause = first_child_of_type(node, "import_clause")
         for part in (clause.children if clause is not None else []):
             if part.type == "identifier":
-                self.bind(text(part), self.import_target(spec))
+                self.bind_import(text(part), spec, DEFAULT_EXPORT, node)
             elif part.type == "namespace_import":
                 self.bind(text(first_child_of_type(part, "identifier")), self.import_target(spec))
             elif part.type == "named_imports":
                 for item in children_of_type(part, "import_specifier"):
                     real = item.child_by_field_name("name")
                     alias = item.child_by_field_name("alias") or real
-                    self.bind(text(alias), self.import_target(spec, text(real)))
+                    self.bind_import(text(alias), spec, text(real), node)
+
+    def bind_import(self, local, spec, member, node):
+        self.bind(local, self.import_target(spec, member))
+        self.add_import(spec, node, member)
+
+    # --- exports ----------------------------------------------------------------------
+
+    def read_export(self, node):
+        """Re-exports and the default export: names the resolver follows (barrel files)."""
+        source = node.child_by_field_name("source")
+        spec = string_value(source) if source is not None else ""
+        if spec:
+            self.add_import(spec, node)
+        clause = first_child_of_type(node, "export_clause")
+        namespace = first_child_of_type(node, "namespace_export")
+        if namespace is not None and spec:  # export * as ns from './x'
+            self.result.exports[text(first_child_of_type(namespace, "identifier"))] = Target(path=spec)
+        elif clause is not None:  # export { A, B as C } [from './y']
+            for item in children_of_type(clause, "export_specifier"):
+                self.read_export_specifier(item, spec)
+        elif spec:  # export * from './x'
+            self.result.star_exports.append(spec)
+        elif first_child_of_type(node, "default") is not None:
+            self.read_default_export(node)
+
+    def export_module_names(self, declaration):
+        """`export function f`, `export const x`, `export type T`: names that are no node of
+        their own mean this module (so a barrel's `export *` leads to the file declaring them)."""
+        names = []
+        if declaration.type in ("function_declaration", "type_alias_declaration",
+                                "generator_function_declaration"):
+            names = [declaration.child_by_field_name("name")]
+        elif declaration.type in ("lexical_declaration", "variable_declaration"):
+            names = [d.child_by_field_name("name") for d in
+                     children_of_type(declaration, "variable_declarator")]
+        for name in names:
+            if name is not None and name.type in ("identifier", "type_identifier"):
+                self.result.exports.setdefault(text(name), Target(id=self.module_id))
+
+    def read_export_specifier(self, item, spec):
+        name = text(item.child_by_field_name("name"))
+        exported = text(item.child_by_field_name("alias")) or name
+        if spec:
+            self.result.exports[exported] = Target(path=spec, member=name)
+        elif exported != name or name not in self.local_classes:
+            self.result.exports[exported] = self.target_for(name)
+
+    def read_default_export(self, node):
+        declaration = node.child_by_field_name("declaration")
+        value = node.child_by_field_name("value")
+        if declaration is not None and declaration.type in DECLARATION_TYPES:
+            name = text(declaration.child_by_field_name("name"))
+            self.result.exports[DEFAULT_EXPORT] = Target(id=child_id(self.module_id, name))
+        elif value is not None and member_chain(value):
+            self.result.exports[DEFAULT_EXPORT] = self.target_for(".".join(member_chain(value)))
 
     def read_require(self, name, call, node):
         spec = string_value(first_child_of_type(call.child_by_field_name("arguments"), "string"))
@@ -172,9 +244,11 @@ class JavaScriptFile:
 
     # --- classes ----------------------------------------------------------------------
 
-    def read_class(self, node, outer):
+    def read_class(self, node, outer, id_name=""):
+        """id_name: the id part for an unnamed class (named after its file)."""
         name = text(node.child_by_field_name("name"))
-        class_id = child_id(self.module_id, name)
+        class_id = child_id(self.module_id, id_name or name)
+        name = name or posixpath.splitext(posixpath.basename(self.module_id))[0]
         kind = "interface" if node.type == "interface_declaration" else "class"
         declaration = Declaration(class_id, name, kind, line(node), end_line=end_line(node),
                                   namespace=self.module_id,
@@ -184,6 +258,7 @@ class JavaScriptFile:
         for base in self.base_names(node):
             declaration.base = declaration.base or base
             self.add_type_ref(class_id, base, "generalization", node, "")
+        self.read_decorators(node, outer, class_id)
         body = node.child_by_field_name("body")
         fields = self.read_fields(body, class_id, declaration)
         for member in body.named_children:
@@ -193,28 +268,68 @@ class JavaScriptFile:
                                                   end=end_line(member)))
                 self.read_signature(member, class_id)
         self.read_calls(body, class_id, fields, class_id)
+        self.read_type_uses(node, class_id)
+
+    def read_enum(self, node, outer):
+        name = text(node.child_by_field_name("name"))
+        self.result.declarations.append(Declaration(
+            child_id(self.module_id, name), name, "enum", line(node), end_line=end_line(node),
+            namespace=self.module_id, doc=doc_text.doc_above(outer, DOC_MARKERS)))
 
     def base_names(self, node):
-        """Names after `extends` / `implements` (TS clauses, or the JS expression)."""
+        """Names after `extends` / `implements` (TS clauses, or the JS expression); type
+        arguments (`Repo<User>`) are left for read_type_uses."""
         names = []
         for heritage in node.children:
             if heritage.type == "extends_type_clause":
-                names += [text(n) for n in heritage.named_children]
+                names += [self.base_name(n) for n in heritage.named_children]
             elif heritage.type == "class_heritage":
                 names += self.heritage_names(heritage)
-        return names
+        return [n for n in names if n]
 
-    @staticmethod
-    def heritage_names(heritage):
+    def heritage_names(self, heritage):
         names = []
         for clause in heritage.named_children:
             if clause.type in ("extends_clause", "implements_clause"):
-                names += [".".join(member_chain(n)) or text(n) for n in clause.named_children
-                          if n.type not in ("type_arguments",)]
+                names += [self.base_name(n) for n in clause.named_children
+                          if n.type != "type_arguments"]
         if not names:  # plain JS: `extends Base`
             names += [".".join(member_chain(n)) for n in heritage.named_children
                       if member_chain(n)]
         return names
+
+    def base_name(self, node):
+        """`Base`, `ns.Base`, `Base<T>` -> the base's name; marks its type nodes as read."""
+        if node.type == "generic_type":
+            node = node.child_by_field_name("name")
+        self.typed.update(n.id for n in [node, *descendants(node)])
+        return ".".join(member_chain(node)) or text(node)
+
+    def read_decorators(self, node, outer, class_id):
+        """`@Component({imports: [X]})`: the decorator and the known names in its arguments
+        (Angular / Nest modules list the classes they use there)."""
+        decorators = children_of_type(node, "decorator")
+        if outer is not node:
+            decorators += children_of_type(outer, "decorator")
+        for decorator in decorators:
+            for part in [decorator, *descendants(decorator)]:
+                chain = self.value_chain(part)
+                if chain and self.is_known(chain[0]):
+                    self.add_type_ref(class_id, ".".join(chain), "dependency", part, "decorator")
+
+    @staticmethod
+    def value_chain(node):
+        """A name used as a value in a decorator: `X`, `ns.X` (not a part of a longer chain)."""
+        if node.type not in ("identifier", "member_expression"):
+            return []
+        parent = node.parent
+        if parent is not None and parent.type == "member_expression" and \
+                parent.child_by_field_name("object") == node:
+            return []
+        if node.type == "member_expression" and parent is not None and \
+                parent.type == "call_expression":
+            return member_chain(node)[:-1]  # `Ns.decorate(...)` uses Ns
+        return member_chain(node)
 
     # --- fields -----------------------------------------------------------------------
 
@@ -222,9 +337,10 @@ class JavaScriptFile:
         """field name -> type name, emitting composition / association refs."""
         fields = {}
         for node in descendants(body, STOP_AT_CLASSES):
-            if node.type in ("public_field_definition", "field_definition"):
+            if node.type in FIELD_NODES:
                 self.read_declared_field(node, fields, class_id, declaration)
-            elif node.type == "required_parameter" and first_child_of_type(node, "accessibility_modifier"):
+            elif node.type == "required_parameter" and \
+                    first_child_of_type(node, *PARAM_PROPERTY_MODIFIERS):  # constructor(private a: A)
                 self.read_declared_field(node, fields, class_id, declaration)
             elif node.type == "assignment_expression":
                 self.read_assigned_field(node, fields, class_id, declaration)
@@ -238,8 +354,26 @@ class JavaScriptFile:
         if names:
             self.set_field(fields, class_id, declaration, text(name_node), names[0],
                            "association", node)
+            for name in names[1:]:  # Map<Key, User>: one ref per type name
+                self.add_type_ref(class_id, name, "association", node, "field",
+                                  from_member=FIELD_MEMBER)
         elif value is not None and value.type == "new_expression":
             self.set_new_field(fields, class_id, declaration, text(name_node), value)
+        elif value is not None and self.injected_type(value):
+            self.set_field(fields, class_id, declaration, text(name_node),
+                           self.injected_type(value), "association", node)
+
+    @staticmethod
+    def injected_type(value):
+        """`inject(ApiService)` -> "ApiService" (Angular's field injection), else ""."""
+        if value.type != "call_expression":
+            return ""
+        chain = member_chain(value.child_by_field_name("function"))
+        args = value.child_by_field_name("arguments")
+        first = args.named_children[0] if args is not None and args.named_children else None
+        if chain[-1:] and chain[-1] in INJECT_CALLS and first is not None:
+            return ".".join(member_chain(first))
+        return ""
 
     def read_assigned_field(self, node, fields, class_id, declaration):
         left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
@@ -289,7 +423,7 @@ class JavaScriptFile:
 
     def add_type_ref(self, from_id, name, kind, node, detail, call="", auto="",
                      from_member=None):
-        if name in SKIPPED_TYPES:
+        if name in SKIPPED_TYPES or name in self.local_types:
             return
         self.result.refs.append(Ref(from_id, self.target_for(name), kind, line(node),
                                     detail, call, auto=auto, from_member=from_member))
@@ -298,7 +432,7 @@ class JavaScriptFile:
         if annotation is None:
             return []
         names, nested = [], set()
-        for node in descendants(annotation):
+        for node in [annotation, *descendants(annotation)]:
             if node.id in nested:
                 continue
             if node.type == "nested_type_identifier":
@@ -306,7 +440,26 @@ class JavaScriptFile:
                 names.append(text(node))
             elif node.type == "type_identifier":
                 names.append(text(node))
-        return [n for n in names if n not in SKIPPED_TYPES]
+            self.typed.add(node.id)
+        return [n for n in names if n not in SKIPPED_TYPES and n not in self.local_types]
+
+    def read_type_uses(self, scope, owner_id):
+        """Type names no specific reader took (`Repo<User>` arguments, `as User`, local
+        variables, type aliases, interface bodies): a dependency when the name is known."""
+        nested = set()
+        for node in descendants(scope, STOP_AT_TYPES):
+            if node.id in self.typed or node.id in nested or node.type not in TYPE_NAME_NODES:
+                continue
+            if node.type == "nested_type_identifier":
+                nested.update(n.id for n in descendants(node))
+            name = text(node)
+            parent = node.parent
+            if parent is not None and parent.child_by_field_name("name") == node and \
+                    parent.type != "generic_type":
+                continue  # the name a type, alias or type parameter is declared with
+            if self.is_known(name.partition(".")[0]):
+                self.add_type_ref(owner_id, name, "dependency", node, "type",
+                                  from_member=enclosing_member(node))
 
     def read_signature(self, function, owner_id):
         member = function_name(function)
@@ -329,6 +482,15 @@ class JavaScriptFile:
                 self.read_call(node, owner_id, fields, enclosing_member(node))
             elif node.type == "new_expression" and node.id not in stored:
                 self.read_new(node, owner_id, enclosing_member(node))
+            elif node.type in ("jsx_opening_element", "jsx_self_closing_element"):
+                self.read_jsx(node, owner_id, enclosing_member(node))
+
+    def read_jsx(self, node, owner_id, member):
+        """`<UserCard/>`, `<Ns.Item/>`: the component is used (rendered) here."""
+        chain = member_chain(node.child_by_field_name("name"))
+        if chain and self.is_known(chain[0]):
+            self.add_type_ref(owner_id, ".".join(chain), "dependency", node, "jsx", chain[-1],
+                              from_member=member)
 
     @staticmethod
     def is_stored_new(node):
@@ -347,7 +509,12 @@ class JavaScriptFile:
 
     def read_call(self, call, owner_id, fields, member):
         function = call.child_by_field_name("function")
-        chain = member_chain(function) if function.type != "import" else []
+        if function.type == "import":  # import('./page'): a lazy import
+            arg = first_child_of_type(call.child_by_field_name("arguments"), "string")
+            if arg is not None:
+                self.add_import(string_value(arg), call)
+            return
+        chain = member_chain(function)
         if chain[:1] == ["this"]:
             self.read_this_call(chain, call, owner_id, fields, member)
         elif len(chain) == 1 and chain[0] in self.imported:
@@ -384,9 +551,12 @@ class JavaScriptFile:
 @register
 class JavaScriptModule(LanguageModule):
     name = "javascript"
-    patterns = ("*.js", "*.mjs", "*.cjs", "*.ts", "*.tsx")
-    path_suffixes = ("", ".js", ".mjs", ".cjs", ".ts", ".tsx", "/index.js", "/index.ts",
-                     "/index.tsx")
+    patterns = ("*.js", "*.jsx", "*.mjs", "*.cjs", "*.ts", "*.tsx", "*.mts", "*.cts")
+    path_suffixes = ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".mts", ".cts", ".d.ts",
+                     "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/index.mjs")
+
+    def read_path_map(self, root, skip_dirs):
+        return tsconfig.read_path_map(root, skip_dirs)
 
     def parse(self, ctx):
         return JavaScriptFile(ctx).read()

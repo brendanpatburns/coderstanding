@@ -250,7 +250,7 @@ td.num { font-variant-numeric: tabular-nums; font-family: var(--f-mono); font-si
 .details .help { position: relative; display: inline-block; margin-left: 5px; text-transform: none; letter-spacing: 0; }
 .details .help-btn { font: 600 10px var(--f-mono); width: 15px; height: 15px; padding: 0; border-radius: 50%; border: 1px solid var(--line); background: none; color: var(--muted); cursor: help; }
 .details .help-btn:hover, .details .help-btn:focus-visible { color: var(--accent); border-color: var(--accent); }
-.details .help-tip { display: none; position: absolute; z-index: 5; left: 0; top: 20px; width: 220px; padding: 7px 9px; font: 12px var(--f-body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px #0003; }
+.details .help-tip { display: none; position: absolute; z-index: 5; left: 0; top: 20px; width: 280px; padding: 7px 9px; font: 12px var(--f-body); color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px #0003; }
 .details .help:hover .help-tip, .details .help:focus-within .help-tip, .details .help.open .help-tip { display: block; }
 .details .help-list dt { padding-top: 6px; }
 .details .help-list em, .details .help-tip em { color: var(--muted); }
@@ -515,3 +515,7 @@ pre.code-src .cmark { margin-left: 10px; font: 600 10.5px var(--f-mono); color: 
   color: var(--accent-ink); font: 600 10px/16px var(--f-mono); text-align: center; }
 .dots button .cbadge { position: absolute; bottom: -6px; right: -7px; min-width: 14px; height: 14px; line-height: 14px; padding: 0 3px;
   border: 1px solid var(--surface); }
+.details fieldset { margin: 8px 0; border: 1px solid var(--line); border-radius: 6px; }
+.details fieldset label, .details > label { display: block; margin: 4px 0; font-size: 12px; color: var(--muted); }
+.details .fr-input[type="number"] { width: 5em; }
+.details textarea.fr-input { width: 100%; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; }

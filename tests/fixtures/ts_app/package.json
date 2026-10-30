@@ -1,0 +1,11 @@
+{
+  "name": "ts-app",
+  "private": true,
+  "workspaces": ["packages/*"],
+  "dependencies": {
+    "@angular/core": "^17.0.0",
+    "@nestjs/common": "^10.0.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  }
+}

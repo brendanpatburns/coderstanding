@@ -1044,7 +1044,7 @@ function renderHelp() {
 }
 
 function showDetails(item) {
-  if (editingNote()) return;  // hover must not replace the box being typed in
+  if (editingNote() || $("details").dataset.fieldsForm) return;  // hover must not replace the box being typed in
   $("details").dataset.showing = item ? `${item.type}:${item.raw.id || item.raw.key}` : "";
   if (!item) renderHelp();
   else if (item.type === "node") renderNode(item.raw);
@@ -1056,8 +1056,28 @@ function renderSelected() {
   showDetails(state.selected);
 }
 
+async function onFieldRulesAct(act, button) {
+  const post = (body) => api("/api/fields", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const details = $("details");
+  if (act === "edit-fields") { details.dataset.fieldsForm = "1"; details.innerHTML = FieldHelp.editorHtml(); return; }
+  if (act === "fields-cancel") { delete details.dataset.fieldsForm; renderHelp(); return; }
+  try {
+    if (act === "fields-reset") FieldHelp.setRules(await post({ reset: [button.dataset.field] }));
+    else FieldHelp.setRules(await post(FieldHelp.readForm(details)));
+  } catch (error) {
+    const box = $("fieldsError");
+    if (box) { box.textContent = error.message; box.hidden = false; }
+    return;
+  }
+  if (act === "fields-reset") { details.innerHTML = FieldHelp.editorHtml(); return; }
+  delete details.dataset.fieldsForm;
+  renderHelp();
+}
+
 function onDetailsClick(event) {
-  const act = event.target.closest("[data-act]")?.dataset.act;
+  const button = event.target.closest("[data-act]");
+  const act = button?.dataset.act;
+  if (act && /^(edit-fields|fields-)/.test(act)) { onFieldRulesAct(act, button); return; }
   const shown = $("details").dataset.showing;
   const item = shownItem(shown);
   if (!act || !item) return;
@@ -1412,7 +1432,8 @@ async function init() {
       showOverlay(CoderApps.emptyHtml(), true);
       return;
     }
-    const [meta, layout] = await Promise.all([api("/api/meta"), api("/api/layout")]);
+    const [meta, layout, fieldRules] = await Promise.all([api("/api/meta"), api("/api/layout"), api("/api/fields")]);
+    FieldHelp.setRules(fieldRules);
     state.meta = meta;
     layout.items.forEach((item) => state.saved.set(item.key, item));
     document.title = `${meta.repo} · Coderstanding`;

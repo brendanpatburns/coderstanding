@@ -6,11 +6,15 @@ its own block and never duplicates it.
 
 from pathlib import Path
 
-from . import assets
+from . import assets, field_rules
 
 BEGIN = "<!-- coderstanding:begin -->"
 END = "<!-- coderstanding:end -->"
 DEFAULT_APP = "<app>"
+FIELDS_BEGIN = "<!-- field-rules:begin -->"
+FIELDS_END = "<!-- field-rules:end -->"
+CUSTOM_LINE = ("- This project has its own rules for writing note fields (hint, description, ...): "
+               "run `coderstanding fields {app}` before using `set`.\n")
 CURSOR_HEADER = "---\ndescription: Coderstanding code map\nalwaysApply: true\n---\n\n"
 
 SNIPPET = """## Coderstanding (code map)
@@ -29,23 +33,37 @@ This repo is in Coderstanding as `{app}`: a local map of its classes, calls, not
 """
 
 
-def guide_text():
-    return (assets.docs_dir() / "AI_GUIDE.md").read_text(encoding="utf-8")
+def with_fields(text, rules):
+    """`text` with the part between the field-rules markers replaced by these rules."""
+    start, end = text.find(FIELDS_BEGIN), text.find(FIELDS_END)
+    if not 0 <= start < end:
+        return text
+    return text[:start + len(FIELDS_BEGIN)] + "\n" + field_rules.guide_markdown(rules) + "\n" + text[end:]
 
 
-def snippet(app=None):
-    return SNIPPET.format(app=app or DEFAULT_APP)
+def guide_text(data_dir=None):
+    """The AI guide; with an app's data folder, its field section shows that project's rules."""
+    text = (assets.docs_dir() / "AI_GUIDE.md").read_text(encoding="utf-8")
+    return with_fields(text, field_rules.effective(data_dir)) if data_dir else text
 
 
-def marked_block(app=None):
-    return f"{BEGIN}\n{snippet(app)}{END}\n"
+def snippet(app=None, custom_fields=False):
+    text = SNIPPET.format(app=app or DEFAULT_APP)
+    if custom_fields:
+        marker = "- Everything runs locally"
+        text = text.replace(marker, CUSTOM_LINE.format(app=app or DEFAULT_APP) + marker)
+    return text
 
 
-def write_snippet(path, app=None):
+def marked_block(app=None, custom_fields=False):
+    return f"{BEGIN}\n{snippet(app, custom_fields)}{END}\n"
+
+
+def write_snippet(path, app=None, custom_fields=False):
     """Put the marked block into `path` (created if missing): replace our block, else append.
     Returns "created", "updated" or "added"."""
     path = Path(path)
-    block = marked_block(app)
+    block = marked_block(app, custom_fields)
     if not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         header = CURSOR_HEADER if path.suffix == ".mdc" else ""

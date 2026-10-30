@@ -1,0 +1,77 @@
+{
+  "rule": "`hint` and `description` are for a new developer who is not very technical and does not know the code base. Say what the class or connection is FOR and where it fits; never how the code works. Do not restate code, signatures, types or algorithms, and explain any jargon in a few plain words. Implementation detail belongs in code comments, or in `review` / `rules` for their own purposes.",
+  "fields": {
+    "hint": {
+      "what": "One short plain line (about 80 characters) shown on the box or line: what it is for.",
+      "who": "A new developer who is not very technical and does not know this code base.",
+      "not": "How the code works: no types, function names, signatures or algorithms; no unexplained jargon.",
+      "good": "Sends chat messages between players; everything that talks to the server goes through it",
+      "bad": "Uses a Dictionary<int, Peer> and calls rpc_id() per message",
+      "max": 100,
+      "code_check": true
+    },
+    "description": {
+      "what": "A few plain sentences: what the class (or connection) is for, what uses it, and what a newcomer should watch out for.",
+      "who": "A new developer who is not very technical and does not know this code base or what the class is for.",
+      "not": "A walk through the code: no restating of functions, types or algorithms (that belongs in code comments); no problems (use review).",
+      "good": "Keeps the list of items in a shop and their prices. The checkout and the shelf display both read from it. Changing a price here changes it everywhere at once.",
+      "bad": "Holds a List<Item> and sorts it with a comparer in Refresh(); GetPrice() returns item.price * taxRate.",
+      "max": 0,
+      "code_check": true
+    },
+    "review": {
+      "what": "Findings from a code review: smells, risks, suggested splits with concrete targets.",
+      "who": "Developers about to change or clean up this code.",
+      "not": "What the class is for (hint/description) or do-nots (rules); no praise or plain description.",
+      "good": "3800 lines; move the chat functions into a separate ChatLog class",
+      "bad": "Handles the shop.",
+      "max": 0,
+      "code_check": false
+    },
+    "rules": {
+      "what": "Things never to do here, one rule per line; shown to anyone (and any AI) changing this code.",
+      "who": "Anyone, human or AI, about to edit this code.",
+      "not": "Descriptions, wishes or findings; only firm do-nots, each with its reason if it is not obvious.",
+      "good": "Never call the Server from here; go through the Chat system",
+      "bad": "This class is complicated",
+      "max": 0,
+      "code_check": false
+    },
+    "status": {
+      "what": "stable / wip / fragile / deprecated: how safe it is to change.",
+      "who": "Anyone deciding how carefully to touch this code.",
+      "not": "Anything else: reasons go in review or rules.",
+      "good": "fragile",
+      "bad": "needs work",
+      "max": 0,
+      "code_check": false
+    },
+    "tags": {
+      "what": "Short free labels for search and grouping, comma separated.",
+      "who": "Anyone searching or filtering the map.",
+      "not": "Sentences, or the class's own name; no duplicates of status or domain.",
+      "good": "chat, audio",
+      "bad": "this is the thing that plays sounds",
+      "max": 0,
+      "code_check": false
+    },
+    "level": {
+      "what": "How high up it shows: 1 is the top picture, higher numbers are more detail.",
+      "who": "Anyone reading the map from the top down.",
+      "not": "How important the class is; it is how much detail you need before it appears.",
+      "good": "2",
+      "bad": "5 because it is boring",
+      "max": 0,
+      "code_check": false
+    },
+    "domain": {
+      "what": "The broad area it belongs to, in one or two plain words.",
+      "who": "A newcomer scanning the map for an area.",
+      "not": "A code folder or namespace; a sentence; a new name when an existing domain fits.",
+      "good": "Chat, Shop, Players",
+      "bad": "Scripts/Net/Impl",
+      "max": 0,
+      "code_check": false
+    }
+  }
+}

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import language, model
 
-SCANNER_VERSION = 8  # bump to invalidate every cache entry
+SCANNER_VERSION = 11  # bump to invalidate every cache entry
 CACHE_DIR_ENV = "CODERSTANDING_CACHE_DIR"
 GITIGNORE_TEXT = "cache/\ngraph.json\n"
 

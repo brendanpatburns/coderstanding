@@ -204,6 +204,8 @@ class Graph:
     hubs: dict = field(default_factory=dict)  # {"threshold": n, "ids": [...]} promoted to L1
     scanner_version: int = 0  # the scanner that wrote graph.json (0: built in memory)
     fingerprints: dict = field(default_factory=dict)  # note key -> code hash (fingerprints.py)
+    diagnostics: dict = field(default_factory=dict)  # why things are unconnected (diagnose.py)
+    path_misses: list = field(default_factory=list)  # resolver.PathMiss, scan only (not saved)
 
     def add_node(self, node):
         existing = self.nodes.get(node.id)

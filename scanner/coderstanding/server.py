@@ -18,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import assets, userconfig
+from . import assets, field_rules, userconfig
 from .checks import WARNING_HELP
 from .graph_json import external_to_json, write_graph
 from .layout import read_layout, update_layout
@@ -102,6 +102,7 @@ class Api:
         self.graph_stamp = self.stamp()
         self.notes_lock = threading.Lock()  # one notes read-modify-write at a time
         self.tours_lock = threading.Lock()  # one tour read-modify-write at a time
+        self.fields_lock = threading.Lock()  # one field-rules read-modify-write at a time
         self.cards_lock = threading.Lock()  # one spec/memo read-modify-write at a time
 
     def load(self):
@@ -239,6 +240,20 @@ class Api:
         """`coderstanding tour <app> <id> [--step N]` as text (the same textout function)."""
         step = params.get("step", [""])[0]
         return format_tour(self.app.name, self.tour(tour_id), number=int(step) if step else None)
+
+    def fields(self):
+        """The effective field rules (built-in plus this project's overrides), DESIGN 7e."""
+        return field_rules.effective(self.app.data)
+
+    def put_fields(self, body):
+        """Change field rules as the viewer's user: `set` {"hint.what": text}, `reset` [names], `house` text."""
+        if not isinstance(body, dict) or set(body) - {"set", "reset", "house"}:
+            raise ValueError("send a JSON object with set, reset and/or house")
+        if not isinstance(body.get("set", {}), dict) or not isinstance(body.get("reset", []), list):
+            raise ValueError("set is an object, reset a list")
+        with self.fields_lock:
+            return field_rules.change(self.app.data, body.get("set"), body.get("reset"),
+                                      house=body.get("house"), by=self.human)
 
     def tour_audio(self, tour_id, key):
         return self.tours().audio_file(tour_id, key)
@@ -488,6 +503,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json(self.api.stack())
         if path == "/api/layout":
             return self.send_json(self.api.layout())
+        if path == "/api/fields":
+            return self.send_json(self.api.fields())
         card = CARD_PATH.match(path)
         if card and not card[3]:
             if not card[2]:
@@ -573,7 +590,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_PUT(self):
         self.route_write("PUT", "/api/layout", lambda body: self.api.put_layout(body),
-                         "/api/notes", lambda body: self.api.put_notes(body))
+                         "/api/notes", lambda body: self.api.put_notes(body),
+                         "/api/fields", lambda body: self.api.put_fields(body))
 
     def do_POST(self):
         self.route_write("POST", "/api/comments", lambda body: self.api.post_comment(body),
