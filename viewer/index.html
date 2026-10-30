@@ -100,6 +100,7 @@
         <div class="ctl" role="group" aria-label="Show types">
           <span class="ctl-label">Show</span>
           <label class="check"><input type="checkbox" id="showExternal" checked> Outside code</label>
+          <label class="check" title="Sockets and network endpoints: servers, clients, web sockets, HTTP"><input type="checkbox" id="showComm" checked> Communications</label>
           <label class="check" title="Test code: hidden by default, removed rather than folded"><input type="checkbox" id="showTest"> Tests</label>
           <label class="check" title="§N on classes and lines that N specs or notes link"><input type="checkbox" id="showCards" checked> Specs &amp; notes</label>
           <label class="check off" title="Arrives when domains exist"><input type="checkbox" disabled> Domains</label>
@@ -157,12 +158,13 @@
         <div class="ruler-cols" id="rulerCols" role="group" aria-label="Level (arrow keys step it)"></div>
       </section>
       <div class="legend" aria-label="Legend">
-        <span><i class="lg lg-comp"></i>composition</span>
-        <span><i class="lg lg-assoc"></i>association</span>
-        <span><i class="lg lg-dep"></i>dependency</span>
-        <span><i class="lg lg-sig"></i>signal</span>
-        <span><i class="lg lg-gen"></i>generalization</span>
-        <span><i class="lg lg-real"></i>realization</span>
+        <button type="button" class="legend-kind" data-kind="composition"><i class="lg lg-comp"></i>composition</button>
+        <button type="button" class="legend-kind" data-kind="association"><i class="lg lg-assoc"></i>association</button>
+        <button type="button" class="legend-kind" data-kind="dependency"><i class="lg lg-dep"></i>dependency</button>
+        <button type="button" class="legend-kind" data-kind="signal"><i class="lg lg-sig"></i>signal</button>
+        <button type="button" class="legend-kind" data-kind="loaded-by"><i class="lg lg-loaded"></i>loaded by (by name)</button>
+        <button type="button" class="legend-kind" data-kind="generalization"><i class="lg lg-gen"></i>generalization</button>
+        <button type="button" class="legend-kind" data-kind="realization"><i class="lg lg-real"></i>realization</button>
         <span><i class="lg lg-derived"></i>through hidden classes</span>
         <span><i class="lg lg-faded"></i>outside the zoom</span>
         <span><i class="lg lg-internal"></i>call inside the class</span>

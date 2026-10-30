@@ -42,7 +42,7 @@ def test_old_scene_switches_map_onto_hide_types():
     from types import SimpleNamespace
     from coderstanding.cli import view_options
     from coderstanding.server import view_args
-    args = SimpleNamespace(concrete=False, no_scenes=True, no_external=False, tests=False, hide_type=[".GD"])
+    args = SimpleNamespace(concrete=False, no_scenes=True, no_external=False, no_comm=False, tests=False, hide_type=[".GD"], hide_kind=[])
     assert view_options(args)["show"]["hide_types"] == [".gd", ".tscn"]
     assert view_args({"scene": ["0"]})["show"]["hide_types"] == [".tscn"]
     assert view_args({"hide": [".tscn"], "scene": ["0"]})["show"]["hide_types"] == [".tscn"]

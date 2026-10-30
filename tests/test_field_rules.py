@@ -36,7 +36,7 @@ def data_of(repo):
 
 def test_defaults_cover_every_note_field_with_all_parts(tmp_path):
     rules = field_rules.effective(tmp_path)
-    assert list(rules["fields"]) == ["hint", "description", "review", "rules", "status", "tags", "level", "domain"]
+    assert list(rules["fields"]) == ["hint", "description", "review", "rules", "status", "tags", "level", "domain", "loaded_by", "loaded_how"]
     for name, f in rules["fields"].items():
         assert all(f[k] for k in field_rules.TEXT_KEYS), name
         assert f["custom"] == []

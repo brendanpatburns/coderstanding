@@ -10,8 +10,8 @@ from pathlib import Path
 
 from . import field_rules, textout
 from .textout import short_namer
-from .apps import (AppError, load_registry, SETTINGS, find_app, find_id, load_graph, parse_target, register,
-                   remove_app, rename_app, rescan, selection_id)
+from .apps import (AppError, load_registry, RELEVEL_SCOPES, SETTINGS, find_app, find_id, load_graph, parse_target, register,
+                   relevel, remove_app, rename_app, rescan, selection_id)
 from .graph_json import write_graph
 from .cache import SCANNER_VERSION
 from .offline import helper_listening, install as install_offline_guard, privacy_report
@@ -100,14 +100,20 @@ def add_add(commands):
     parser.set_defaults(run=run_add)
 
 
-def run_settings(args):
-    app = find_app(args.app, args.data)
-    changes = {}
-    for token in args.items:
+def key_values(items):
+    """{key: text} from `key=value` tokens."""
+    pairs = {}
+    for token in items:
         name, sep, text = token.partition("=")
         if not sep:
             raise AppError(f"not key=value: {token}")
-        changes[name] = text
+        pairs[name] = text
+    return pairs
+
+
+def run_settings(args):
+    app = find_app(args.app, args.data)
+    changes = key_values(args.items)
     settings = app.change_settings(changes) if changes else app.scan_settings()
     print(f"{app.name} settings " + " ".join(f"{k}={'off' if v == 0 else v}"
                                              for k, v in settings.items())
@@ -134,9 +140,13 @@ def app_args(parser, view_options=True, optional=False):
         parser.add_argument("--calls", action="store_true", help="list every call")
         parser.add_argument("--no-scenes", action="store_true", help="same as --hide-type .tscn")
         parser.add_argument("--no-external", action="store_true", help="hide outside code")
+        parser.add_argument("--no-comm", action="store_true",
+                            help="hide communications nodes (sockets, network endpoints)")
         parser.add_argument("--tests", action="store_true", help="show test code (hidden by default)")
         parser.add_argument("--hide-type", action="append", default=[], metavar="EXT",
                             help="hide the classes of a file type, e.g. .gd (repeatable)")
+        parser.add_argument("--hide-kind", action="append", default=[], metavar="KIND",
+                            help="hide the lines of a kind, e.g. signal (repeatable)")
 
 
 def open_app(args):
@@ -159,8 +169,8 @@ def hidden_types(args):
 
 def view_options(args):
     return {"view": CONCRETE if args.concrete else "all",
-            "show": {"external": not args.no_external, "test": args.tests,
-                     "hide_types": hidden_types(args)}}
+            "show": {"external": not args.no_external, "comm": not args.no_comm, "test": args.tests,
+                     "hide_types": hidden_types(args), "hide_kinds": args.hide_kind}}
 
 
 def unique_namer(graph):
@@ -784,7 +794,7 @@ def parse_value(graph, notes, name, text):
         if text.lower() not in TRUE_WORDS + FALSE_WORDS:
             raise AppError(f"singleton must be true or false, got {text}")
         return text.lower() in TRUE_WORDS
-    if name == "bindings":
+    if name in ("bindings", "loaded_by"):
         return [find_id(graph, notes, t.strip()) for t in text.split(",") if t.strip()]
     if name in ("rules", "review"):
         return text.replace("\\n", "\n")  # `\n` in a set line starts a new line
@@ -957,14 +967,29 @@ def add_serve(commands):
 
 def run_rescan(args):
     app = find_app(args.app, args.data)
-    graph = rescan(app)
+    if args.reset_level_names and not args.relevel:
+        raise AppError("--reset-level-names only goes with --relevel")
+    graph = rescan(app, key_values(args.setting))
     print(f"{app.name}: {len(graph.nodes)} nodes, {len(graph.edges)} edges -> {app.graph_path}")
+    if args.relevel:
+        done = relevel(app, args.relevel, args.reset_level_names)
+        print(f"relevel {args.relevel}: cleared {done['cleared']} level notes"
+              + (f", backup {done['backup']}" if done["backup"] else "")
+              + (", level names reset" if args.reset_level_names else ", level names kept"))
 
 
 def add_rescan(commands):
     parser = commands.add_parser("rescan", help="scan an app now into its data folder "
                                  "(what the viewer's Rescan runs, niced)")
     app_args(parser, view_options=False)
+    parser.add_argument("--setting", action="append", default=[], metavar="KEY=VALUE",
+                        help=f"a scan setting for this run only, never saved ({', '.join(SETTINGS)}); repeatable")
+    parser.add_argument("--relevel", nargs="?", const="ai", choices=RELEVEL_SCOPES,
+                        help="opt-in: guess every level again and clear the per-class level notes so the "
+                        "guess shows (ai = only AI-drafted ones, the default; all = yours too). The cleared "
+                        "notes are backed up in the data folder; level names are kept")
+    parser.add_argument("--reset-level-names", action="store_true",
+                        help="with --relevel: also drop the saved level count and names")
     parser.set_defaults(run=run_rescan)
 
 

@@ -153,3 +153,14 @@ def test_ignore_warnings_field():
             notes.set("node:A", "you", bad)
     assert clean_value("ignore_warnings", []) is None
     assert clean_value("ignore_warnings", ["unused"]) == ["unused"]
+
+
+def test_clear_field_ai_only_or_all():
+    from coderstanding.notes import Notes
+    notes = Notes()
+    notes.set("node:A", "Ann", {"level": 2, "hint": "h"}, ai=False)
+    notes.set("node:B", "claude", {"level": 3})
+    assert notes.clear_field("level") == [{"key": "node:B", "level": 3, "by": "claude", "ai": True}]
+    assert notes.get("node:A", "level") == (2, "Ann")
+    assert [line["by"] for line in notes.clear_field("level", ai_only=False)] == ["Ann"]
+    assert notes.value("node:A", "hint") == "h" and not notes.has("node:A", "level")

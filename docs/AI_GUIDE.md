@@ -40,11 +40,15 @@ package; `coderstanding <command> --help` lists every option.
   `coderstanding node <app> <name> [level]`. `graph <app> 0` shows domains. Headers print the
   user's level name next to the number (`L2 Systems`); a user-named level count caps the levels.
 - Names: full id or a unique short name (`Net`, `net.gd`, `src/net.gd`); ambiguous names
-  list the candidates. Options: `--concrete`, `--calls` (all calls), `--hide-type .gd`
-  (repeatable; `--no-scenes` = `--hide-type .tscn`), `--no-external`, `--data DIR` (keep graph/notes outside the repo).
+  list the candidates. Options: `--concrete`, `--calls` (all calls), `--hide-type .gd`, `--hide-kind signal`
+  (repeatable; `--no-scenes` = `--hide-type .tscn`), `--no-external`, `--no-comm` (hide socket / network endpoint nodes, tagged `[comm]`), `--data DIR` (keep graph/notes outside the repo).
 - Level 1 also holds hubs (classes with too many connections, `[hub 80]` = 80 neighbours); the
   `graph` header lists them. `coderstanding settings <app> [hub_threshold=N|auto|off]` shows or
   changes the threshold (rescans next command); also `add ... --hub-threshold`, `scan ... --hub-threshold`.
+  `rescan <app> --setting hub_threshold=20` tries a setting for one run without saving it.
+- Wrong level guess everywhere? You may suggest `coderstanding rescan <app> --relevel ai` (clears only
+  AI-drafted level notes, backs them up, keeps level names). Never run `--relevel all` (also clears the
+  human's level notes) or `--reset-level-names` without asking the user first.
 - Specs (the plan as nested epics, `specs/<id>.md` in the app's data folder) and memos (the
   viewer's "Notes": comments and information, `memos/<id>.md`; not the per-class notes of `set`)
   share one set of commands: `coderstanding specs|memos <app>` prints the tree (`id: Title [L2,
@@ -170,6 +174,12 @@ the code should not go.
   `review` and `rules` text with `\n` for a new line.
 - Also `status=stable|wip|fragile|deprecated`, `tags=net,audio`, `rules="no X\nno Y"`
   (`\n` = new line). Test classes are left out of `curate`.
+- Classes nothing references in code (plugin registries that load files by name, `__main__`,
+  files a tool or engine loads) show `warn: unused`. Say who loads them:
+  `set <app> Plugin loaded_by=Registry loaded_how="auto-loaded by the registry"` (`loaded_by` is a
+  comma list of class ids). For a whole folder add one rule to the app's `settings.json`:
+  `"loaded_by": [{"loaded_by": "<registry class id>", "files": "src/plugins/*.py", "how": "..."}]`.
+  Only add links you checked in the code.
 - `set` writes AI drafts (author `claude`, `ai: true`, whichever agent you are); human values (any other author) are
   never overwritten. `--by NAME` writes as that person, only when the user asks. Function
   notes: `set <app> 'Net#join_room' hint="..."`.
@@ -234,6 +244,16 @@ hint is too long or a hint/description reads like code.
   - Not: A code folder or namespace; a sentence; a new name when an existing domain fits.
   - Good: `Chat, Shop, Players`
   - Bad: `Scripts/Net/Impl`
+- `loaded_by`: The classes that load or start this one by name (a registry, a plugin list, an engine setting), when no code reference shows it.
+  - For: Anyone wondering why this class looks unused.
+  - Not: Normal code references (the scan finds those) or guesses; only loaders you checked.
+  - Good: `coderstanding.language`
+  - Bad: `probably main`
+- `loaded_how`: One short line on how the loaders find this class. Max 120 characters.
+  - For: Anyone following the loaded-by line.
+  - Not: How the class works, or a list of loaders (those go in loaded by).
+  - Good: `Auto-loaded by the language registry from the languages folder`
+  - Bad: `Loaded somehow at startup`
 <!-- field-rules:end -->
 
 ## Flags and code descriptions

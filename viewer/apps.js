@@ -272,10 +272,10 @@ async function renameApp(app, name) {
   } catch (error) { appsMessage(`Rename failed: ${error.message}`, true); }
 }
 
-async function rescanApp(app) {
+async function rescanApp(app, options = {}) {
   try {
     await CoderApps.request(`/api/rescan?app=${encodeURIComponent(app.name)}`, { method: "POST",
-      headers: { "Content-Type": "application/json" }, body: "{}" });
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify(options) });
     app.scanning = true;
     renderManager();
     const done = await untilScanned(app.name);
@@ -310,6 +310,25 @@ function removeRow(app) {
     notesBox && el("label", {}, notesBox, ` Also delete what you and the AI wrote there: ${own.join(", ")}`));
 }
 
+/** The in-modal "Redo levels" question: opt-in, AI-drafted level notes by default, names kept unless ticked. */
+function relevelRow(app) {
+  const names = el("input", { type: "checkbox", className: "relevel-names" });
+  const redo = (relevel) => {
+    manager.open = null;
+    rescanApp(app, { relevel, resetLevelNames: names.checked });
+  };
+  return el("div", { className: "app-confirm", role: "group", ariaLabel: `Redo levels of ${app.name}` },
+    el("div", {}, `Refresh ${app.name} and guess every level again. The per-class level notes are cleared so the fresh guess shows; ` +
+      "what was cleared is saved as notes.levels-<time>.bak.jsonl in the data folder. Your level count and names are kept unless ticked below."),
+    el("div", { className: "choices" },
+      el("button", { className: "btn small", dataset: { act: "relevel-ai" }, onclick: () => redo("ai") },
+        "Redo, clearing AI-drafted levels only"),
+      el("button", { className: "btn small danger", dataset: { act: "relevel-all" }, onclick: () => redo("all") },
+        "Redo, clearing yours too"),
+      el("button", { className: "btn small", onclick: () => { manager.open = null; renderManager(); } }, "Cancel")),
+    el("label", {}, names, " Also reset the level count and names"));
+}
+
 function appRow(app, now) {
   const here = app.name === CoderApps.current;
   const act = (mode) => () => { manager.open = app.name; manager.mode = mode; renderManager(); };
@@ -323,8 +342,10 @@ function appRow(app, now) {
     busy && manager.mode === "rename" ? renameRow(app) : el("div", { className: "app-actions" },
       el("button", { className: "btn small", disabled: here, onclick: () => open(app.name) }, "Open"),
       el("button", { className: "btn small", disabled: app.scanning, onclick: () => rescanApp(app) }, app.scanning ? "Refreshing…" : "Refresh"),
+      el("button", { className: "btn small", disabled: app.scanning, dataset: { act: "relevel" }, onclick: act("relevel") }, "Redo levels…"),
       el("button", { className: "btn small", onclick: act("rename") }, "Rename"),
       el("button", { className: "btn small", onclick: act("remove") }, "Remove…")),
+    busy && manager.mode === "relevel" && relevelRow(app),
     busy && manager.mode === "remove" && removeRow(app));
 }
 

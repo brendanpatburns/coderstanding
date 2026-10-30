@@ -30,6 +30,20 @@ TYPE_NAME_NODES = ("type_identifier", "nested_type_identifier")
 FIELD_NODES = ("public_field_definition", "field_definition", "property_signature")
 PARAM_PROPERTY_MODIFIERS = ("accessibility_modifier", "readonly", "override_modifier")
 INJECT_CALLS = ("inject",)  # `private api = inject(ApiService)` holds an ApiService
+# Names a browser/Node runtime provides: never a page global of another script.
+RUNTIME_GLOBALS = frozenset((
+    "window document console Math JSON Object Array String Number Boolean Date RegExp Error "
+    "Promise Map Set WeakMap WeakSet Symbol Intl URL Blob File FileReader FormData Image "
+    "Event CustomEvent Node Element HTMLElement fetch setTimeout clearTimeout setInterval "
+    "clearInterval requestAnimationFrame cancelAnimationFrame localStorage sessionStorage "
+    "navigator location history performance alert confirm prompt parseInt parseFloat isNaN "
+    "isFinite undefined NaN Infinity globalThis self arguments this require module exports "
+    "encodeURIComponent decodeURIComponent atob btoa structuredClone queueMicrotask "
+    "MutationObserver ResizeObserver IntersectionObserver AbortController Worker WebSocket "
+    "XMLHttpRequest Uint8Array Float32Array Int32Array ArrayBuffer TextEncoder TextDecoder "
+    "speechSynthesis SpeechSynthesisUtterance MediaRecorder Audio getComputedStyle").split())
+DECLARING_FIELDS = (("variable_declarator", "name"), ("catch_clause", "parameter"),
+                    ("for_in_statement", "left"))
 DEFAULT_EXPORT = "default"  # the member name `import X from './x'` asks for
 
 
@@ -80,6 +94,7 @@ class JavaScriptFile:
         self.local_classes = {}
         self.local_types = set()  # type aliases and type parameters: no node, no ref
         self.typed = set()  # ids of type nodes a specific reader already turned into refs
+        self.declared = set()  # classic scripts: every name declared anywhere in the file
 
     def read(self):
         parser = PARSERS.get(posixpath.splitext(self.ctx.rel_path)[1], JS_PARSER)
@@ -95,7 +110,99 @@ class JavaScriptFile:
             self.read_top_level(node)
         self.read_calls(root, self.module_id, {}, "")
         self.read_type_uses(root, self.module_id)
+        if self.is_classic_script(root):
+            self.read_page_globals(root)
+            self.read_shared_names(root)
         return self.result
+
+    # --- classic browser scripts ------------------------------------------------------
+
+    def is_classic_script(self, root):
+        """A plain `.js` file without import/export/require: when a page loads it with
+        `<script src>`, its top-level names are global to the page's other classic scripts."""
+        if posixpath.splitext(self.ctx.rel_path)[1] != ".js":
+            return False
+        source = self.ctx.read_bytes()
+        if b"require(" in source or b"module.exports" in source:
+            return False
+        return not any(n.type in ("import_statement", "export_statement") for n in root.children)
+
+    def read_page_globals(self, root):
+        names = {}
+        for node in root.children:
+            if node.type in ("function_declaration", "generator_function_declaration"):
+                names[text(node.child_by_field_name("name"))] = Target(id=self.module_id)
+            elif node.type == "class_declaration":
+                name = text(node.child_by_field_name("name"))
+                names[name] = Target(id=child_id(self.module_id, name))
+            elif node.type in ("lexical_declaration", "variable_declaration"):
+                for declarator in children_of_type(node, "variable_declarator"):
+                    name = declarator.child_by_field_name("name")
+                    if name.type == "identifier":
+                        names[text(name)] = Target(id=self.module_id)
+        for node in descendants(root):  # window.X = ...
+            left = node.child_by_field_name("left") if node.type == "assignment_expression" else None
+            if left is not None and left.type == "member_expression" and \
+                    text(left.child_by_field_name("object")) == "window":
+                names.setdefault(text(left.child_by_field_name("property")),
+                                 Target(id=self.module_id))
+        self.result.page_globals = names
+
+    def collect_declared(self, root):
+        """Every name declared anywhere (functions, classes, variables, parameters, catch and
+        loop variables). A name declared anywhere in the file is never taken as a page global."""
+        for node in descendants(root):
+            if node.type in FUNCTION_NODES + ("class_declaration", "class"):
+                name = node.child_by_field_name("name")
+                if name is not None:
+                    self.declared.add(text(name))
+                for params in (node.child_by_field_name("parameters"),
+                               node.child_by_field_name("parameter")):
+                    self.add_declared_names(params)
+            for kind, field_name in DECLARING_FIELDS:
+                if node.type == kind:
+                    self.add_declared_names(node.child_by_field_name(field_name))
+
+    def add_declared_names(self, pattern):
+        if pattern is None:
+            return
+        for node in [pattern, *descendants(pattern)]:
+            if node.type in ("identifier", "shorthand_property_identifier_pattern"):
+                self.declared.add(text(node))
+
+    def read_shared_names(self, root):
+        """Refs for bare names this script does not declare; the resolver keeps those that
+        another classic script on the same page declares (Ref.shared) and drops the rest."""
+        self.collect_declared(root)
+        seen = set()
+        for node in descendants(root):
+            if node.type != "identifier":
+                continue
+            name = text(node)
+            if name in self.declared or name in self.imported or name in RUNTIME_GLOBALS:
+                continue
+            detail, call = self.shared_use(node)
+            member = enclosing_member(node)
+            if not call and detail == "use":
+                if (name, member) in seen:
+                    continue
+                seen.add((name, member))
+            self.result.refs.append(Ref(self.module_id, Target(name=name), "dependency",
+                                        line(node), detail, call, from_member=member, shared=True))
+
+    @staticmethod
+    def shared_use(node):
+        """(detail, called member) of a bare name: `f()` call, `x.f()` call of f, `new X`."""
+        parent = node.parent
+        if parent.type == "call_expression" and parent.child_by_field_name("function") == node:
+            return "call", text(node)
+        if parent.type == "new_expression" and parent.child_by_field_name("constructor") == node:
+            return "create", ""
+        if parent.type == "member_expression" and parent.child_by_field_name("object") == node:
+            outer = parent.parent
+            if outer.type == "call_expression" and outer.child_by_field_name("function") == parent:
+                return "call", text(parent.child_by_field_name("property"))
+        return "use", ""
 
     # --- top level --------------------------------------------------------------------
 
@@ -515,7 +622,9 @@ class JavaScriptFile:
                 self.add_import(string_value(arg), call)
             return
         chain = member_chain(function)
-        if chain[:1] == ["this"]:
+        if chain == ["require"]:
+            self.read_nested_require(call)
+        elif chain[:1] == ["this"]:
             self.read_this_call(chain, call, owner_id, fields, member)
         elif len(chain) == 1 and chain[0] in self.imported:
             self.add_type_ref(owner_id, chain[0], "dependency", call, "call", chain[0],
@@ -525,6 +634,20 @@ class JavaScriptFile:
                 return
             self.add_type_ref(owner_id, ".".join(chain[:-1]), "dependency", call, "call",
                               chain[-1], from_member=member)
+
+    def read_nested_require(self, call):
+        """`require('./x')` below the top level (in a function, `if`, `try`): the same import
+        as a top-level one. Top-level `const x = require()` is read by read_declarator."""
+        declarator = call.parent
+        if declarator.type == "variable_declarator" and declarator.parent.parent.type == "program":
+            return
+        if first_child_of_type(call.child_by_field_name("arguments"), "string") is None:
+            return
+        if declarator.type == "variable_declarator":
+            self.read_require(declarator.child_by_field_name("name"), call, call)
+        else:
+            self.add_import(string_value(first_child_of_type(
+                call.child_by_field_name("arguments"), "string")), call)
 
     def read_this_call(self, chain, call, owner_id, fields, member):
         if len(chain) < 3 or chain[1] not in fields:

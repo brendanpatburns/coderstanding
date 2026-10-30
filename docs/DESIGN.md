@@ -259,7 +259,8 @@ modules (see `docs/COMPONENTS.md` once built).
 - **Entry flags** name the mechanism (`model.ENTRY_MECHANISMS`), and all of them also carry
   `entry`: `godot-main`, `godot-main-scene`, `autoload`, `program-main` (C# `static Main` or
   top-level statements, C/C++ `main`) and `script-main` (Python `if __name__ == "__main__"`,
-  a Node file with a shebang or named in package.json `bin` / `node x.js` scripts). The first
+  a Node file with a shebang or named in package.json `bin` / `node x.js` scripts, and a Python
+  `__main__.py`, which `python -m package` starts). The first
   four start the app; `script-main` is a tool.
 - **Descriptions from the code**: each reader takes the file's or class's header comment
   (GDScript `##`, Python docstring, C# `/// <summary>`, JSDoc / C++ `/** */`; for a file also
@@ -285,13 +286,21 @@ Needed to scan Coderstanding itself. Same declarations/references model as the o
   Edges: base classes (`generalization`; `Protocol`/ABC bases → `realization`),
   `self.x = Foo()` in `__init__` (`composition`), `self.x: Foo` / annotated attributes
   (`association`), calls to imported functions/classes and type hints (`dependency`),
-  `import`/`from … import` of a repo module (`dependency`, detail `import`). Third-party
+  `import`/`from … import` of a repo module (`dependency`, detail `import`), wherever the
+  import sits (function bodies, `try`, `if TYPE_CHECKING:`). Third-party
   imports go to the stack reader as outside code.
 - **JavaScript/TypeScript**: one `module` node per file (id = repo-relative path), classes
   inside it. Edges: `extends` / `implements` (TS), `this.x = new Foo()` (`composition`),
   typed fields (`association`), calls to imported names and `new Foo()` not stored
   (`dependency`), `import`/`require` of a repo file (`dependency`, detail `import`),
   `addEventListener`/`on(...)` with a known target (`signal`). npm packages → outside code.
+  `require()` and `import()` count at any depth. **Browser scripts**: plain `<script src>`
+  files of one HTML page share their top-level names (functions, classes, `var`/`let`/`const`,
+  `window.X =`). The HTML reader lists a page's classic scripts (`type="module"` excluded); a
+  `.js` file with no import/export/require lists its top-level names (`page_globals`) and
+  emits `shared` refs for bare names it declares nowhere itself. The resolver keeps a shared
+  ref only when another script on a page loading this file declares the name (a real edge,
+  with calls), else drops it. Scripts loaded by no page, module scripts: unchanged.
 - Plain-JS code with few classes is mostly module-to-module lines with call lists; that is
   fine and still what you need to see.
 - **TypeScript projects** (built 2026-10-30, after a report of many unconnected classes):
@@ -399,7 +408,16 @@ first guess so a fresh scan is usable:
    app before scanning: `<data>/settings.json`, set by `add --hub-threshold`, `settings <app>
    hub_threshold=N`, or one-off `scan --hub-threshold`. graph.json records the settings used
    (`settings`, `hubs`); new settings apply at the next rescan (levels are cache-free, so
-   only the cheap whole-graph stages rerun). Notes level overrides still win.
+   only the cheap whole-graph stages rerun). Notes level overrides still win. The deepest
+   level the guess uses is the setting `max_level` (default 5, 1-12).
+   **Redoing the guess is opt-in, never default.** A rescan keeps per-class `level` notes and the
+   saved level count/names. When the guess went wrong: `coderstanding rescan <app> --relevel
+   [ai|all]` (viewer: Projects… -> "Redo levels…", with a confirm) rescans, then clears the
+   `level` notes through the notes store (`Notes.clear_field`; `ai` = AI drafts only, the default
+   scope; `all` = yours too) so the fresh guess shows. What was cleared is first written to
+   `notes.levels-<time>.bak.jsonl` in the data folder and reported. Level count/names stay unless
+   `--reset-level-names`. `rescan --setting key=value` (repeatable) overrides any scan setting for
+   that run only (never saved).
 3. Others: 1 + shortest distance from a level-1 node along `composition`/`association`,
    capped at the max level (default 5).
 
@@ -939,6 +957,54 @@ like any other line. A toolbar switch hides all outside nodes.
 - **The Godot engine API** would connect to almost every class, so it is not a node by
   default; each class's details list the engine types it uses.
 
+### Communications nodes (built 2026-10-30)
+
+Sockets and network endpoints are their own nodes, so "what talks to the network" is one look.
+Built on data the readers already collect (no new scan pass): `stack.py` reads each class's outside
+refs and field members against one fixed table, `COMM_TYPES` (`comm_for` looks a name up per language):
+
+- Godot (GDScript and C#): WebSocketPeer, WebSocketMultiplayerPeer, ENetMultiplayerPeer, ENetConnection,
+  StreamPeerTCP/TLS, TCPServer, PacketPeerUDP, UDPServer, HTTPClient, HTTPRequest, WebRTC peers.
+  C#: TcpListener, TcpClient, UdpClient, Socket, HttpClient, ClientWebSocket, HttpListener.
+  Python: `socket.socket`, `websockets.serve/connect`, `asyncio.start_server`, `HTTPServer`,
+  aiohttp `ClientSession` / `web.Application`, `discord.Client`. JS/TS: `WebSocket`,
+  `net`/`http`/`https` `createServer`.
+- **It is a node when** the class holds a field of that type, creates one, or calls a (non-constant)
+  function on one. Type checks (`is` / `as`), bare locals, parameters, return types and constant reads
+  (`STATUS_OK`) make none. Names the reader loses at the import (socket.io `Server`, discord.js
+  `Client`) are not detected: no guessing.
+- **Identity**: one node per (owner class, field, type): `comm:<owner-id>#<field>`; a socket only made
+  or called in code: `comm:<owner-id>@<type>`. Never the address or port, so ids survive rescans and
+  edits. Several fields of one type in a class share that type's calls and role.
+- **Kind**: an `external` node with namespace `comm` (so it is always visible, never expands, is
+  skipped by the checks and the layout puts it beside its user, like outside code); `file` is empty so
+  it is no class of a file type. Its facts are in `node.comm` = `{type, role, owner, field, messages,
+  at}`. The owner's edge reuses `composition` (it holds a field) or `dependency`, with the calls made.
+- **Role** from the called names (`listen`/`bind`/`create_server`/`serve`... = listens, `connect*`/
+  `create_client`/`request` = connects, both = both), else from the type (servers listen, HTTP and
+  client types connect), else none. Default name: `_server · TCPServer (listens)`; give it your own
+  with a `hint` note on `node:<id>` like any node.
+- **Messages**: GDScript `@rpc` functions set `Member.rpc`; they are listed on the *class* (details
+  "Remote calls", text `rpc Class: f, g`), since an RPC belongs to the declaring class, not to a peer.
+  JS/TS event names read by the reader (`this.sock.on("message")`) are the comm node's `messages`.
+- **Switch**: `show.comm` (default on; CLI `--no-comm`, API `comm=0`, viewer "Communications"), apart
+  from Outside code. Text tags the node `[comm]` and adds `comm <node>: owner X, role, messages ...`.
+- **HTTP routes and clients** (`http_routes.py`, a text pass after the stack reader; literals only, no
+  data flow). Server routes: Python `path == "/x"`, `path.startswith("/x/")`, `ROUTES = (...)` tables,
+  method + path pairs, `"/x", lambda` / dict / tuple route tables, Flask/FastAPI `@app.get/route`,
+  aiohttp `add_get/add_route/web.get`; JS/TS `app|router.get/post/...("/x")`. Each owner class gets one
+  node `comm:<owner>@http.server` (role listens, messages = its routes; `:id`, `<id>`, `{id}` cut the
+  route there). Clients: `fetch(...)`, `fetch(wrapper("/x"))`, axios, `$.get`, XHR `open`, any JS call
+  whose first argument is a literal path (kept only if it matches a route), Python
+  `requests/httpx/session.get(...)`, `urlopen`, GDScript `.request("http://...")`; a template literal
+  keeps its static prefix. A client path matches the longest route that is the path or a segment prefix
+  of it (query and trailing slash ignored): the client gets a `dependency` edge to that server node
+  with each matched route as a call. A relative path with no match is dropped; an unmatched URL with a
+  literal host (or a non-local host) makes `comm:<owner>#<host>` (type `http.client`, role connects,
+  messages = the paths). Only a relative path or a localhost URL links to a server.
+- Left out: host/port values of servers, payload kinds, untyped calls, raw C `socket()`, route
+  regexes, routes built from variables.
+
 ## 9. Views and interface bindings
 
 **All types**: every node, interfaces included, `realization` edges drawn.
@@ -955,6 +1021,26 @@ drawn.
 - More than one, or none → listed in the viewer's "Needs binding" panel. You pick one or
   more implementations; that is saved to notes.
 - No DI analysis. If you want a different binding than the scanner's guess, set it.
+
+### 9b. Loaded-by links (classes loaded by name)
+
+Some classes nothing references in code: plugin registries load files by name, `__main__` is
+started by `python -m`, an engine or tool loads a file. Say so by hand: "A is loaded by B".
+- **Store**: notes fields on A: `loaded_by` (list of class ids) and `loaded_how` (short text, one
+  for all its loaders, e.g. "auto-loaded by the language registry"). Same author / AI-draft
+  rules as every note field. The planned interface `bindings` are another thing (interface to
+  implementations), so they are not reused.
+- **Pattern rule**: `settings.json` `loaded_by`: `[{"loaded_by": "<class id>", "files": "<glob>",
+  "how": "..."}]` gives every class in a matching file that link (same glob as warning rules, so
+  twenty language modules need one rule). Rules never rescan; `Notes.loaded_rules` carries them.
+- **View**: `Notes.loaders(graph)` merges both; the view engine draws a link of kind `loaded-by`
+  (B to A, dashed, own legend entry) that folds like any other line. Class JSON has `loaders`
+  (`from`, `name`, `how`, `source` note or rule, `by`, `ai`).
+- **Checks**: a class with a loader is not `unused`; notes are not part of a scan, so
+  `apply_note_warnings` re-decides `unused` on load.
+- **UI / CLI**: details panel "Loaded by" (links with author chip, Accept for AI drafts, Remove,
+  picker over `/api/find`); `coderstanding set <app> A loaded_by=B,C loaded_how=...`; `node` text
+  prints `loaded by: B (how)`.
 
 Per-class **singleton** flag: guessed (autoload, static `Instance`), editable in notes. The
 viewer marks singletons with a badge.
@@ -1060,7 +1146,7 @@ connection, no decoration. Rules:
     [kind] Llevel [status] #tags: hint`, `rules:`, `warn:`, `fns:` with ranges, up to 5 direct
     links, `ripple:` counts, `tests:` covering it (functions show their own call lines instead).
 - `view <app> [--level N] [--concrete] [--zoom A [B]] [--zoom-level N] [--expand X ...]
-  [--select X|A>B|X#f] [--tests] [--hide-type EXT] [--no-external]`: what the viewer shows. First
+  [--select X|A>B|X#f] [--tests] [--hide-type EXT] [--no-external] [--no-comm]`: what the viewer shows. First
   line is the command itself (`$ coderstanding view mygame --level 2 --zoom main.gd net --expand
   net --select net`), then the graph/zoom/node text, function lines per expanded class, and a
   `selected X:` block (node info, the line with all calls, or a function's notes and calls).
@@ -1182,7 +1268,7 @@ Built against the approved mock-up (`docs/mockups/tours.html`) and the tours JSO
   chips, highlight attached classes, edit and add specs.
 - Search box that also forces a matching hidden node visible.
 - Panels: Needs binding, Lost notes.
-- **Type toggles** in the toolbar: Outside code, Tests, Domains (scenes and any other file type: the types strip, 12d) (more types can join later).
+- **Type toggles** in the toolbar: Outside code, Communications, Tests, Domains (scenes and any other file type: the types strip, 12d) (more types can join later).
   A type switched off folds into its owners like a hidden level, so no connection is lost.
 - Edits save to `notes.jsonl` through the server right away.
 
@@ -1301,7 +1387,7 @@ User-declared dependency constraints, checked on every scan and shown as warning
   `why`.
 - **Built notes**: the pass is `checks.layer_warnings`; `check_graph(graph, layers, notes)` runs it,
   but settings and notes are not part of a scan, so loaders (CLI `open_app`, server `notes`) call
-  `apply_layers` again (`App.checked`), which makes rule changes live without a rescan. Edge kinds
+  `apply_note_warnings` again (`App.checked`), which makes rule changes live without a rescan. `unused` is re-decided there too (9b). Edge kinds
   are the model's plus `call` (line with calls) and `inheritance`. Tests count on the `from` side
   only when the `from` glob contains "test". Each line shows `edge.layer` in the view JSON; the
   viewer draws it in the warning colour with a warning sign in its label and lists the rule and
@@ -1439,6 +1525,14 @@ New warning kinds in `checks.py` for Godot apps, from reader data that exists or
   (repeatable), repeated in the command line, with a `hidden types:` line in the text.
   `view["types"]` counts the drawn classes plus the hidden types' allowed classes;
   `view["hidden_types"]` lists the hidden ones. The viewer keeps the choice per app in the browser.
+- **Line kinds in the legend**: each legend entry with a `data-kind` (composition, association,
+  dependency, signal, generalization, realization, and any kind added later) is a toggle like a
+  type chip: click hides that kind's lines (entry stays, dashed and struck through), hover lights
+  its lines. **Engine**: `show["hide_kinds"]` (`hide_lines` in `views.py`) drops a merged or derived
+  line only when ALL its kinds are hidden; classes never go. Server param `hide_kind` (repeats), CLI
+  `--hide-kind KIND` (repeatable, in the command line, with a `hidden kinds:` line in the text),
+  `view["hidden_kinds"]`. Saved per app like hidden types (`savedToggles` in `app.js`). The
+  non-kind entries (through hidden classes, outside the zoom, call inside the class) are plain.
 
 ## 12b. Hosting on your own server
 

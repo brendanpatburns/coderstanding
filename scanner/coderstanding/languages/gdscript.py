@@ -124,6 +124,18 @@ def has_annotation(node, name):
     return any(ts.text(ts.first_child_of_type(a, "identifier")) == name for a in found)
 
 
+def has_rpc_annotation(node):
+    """`@rpc(..)` on the function: in front of it on its own line, or on the same line."""
+    if has_annotation(node, "rpc"):
+        return True
+    before = node.prev_named_sibling
+    while before is not None and before.type == "annotation":
+        if ts.text(ts.first_child_of_type(before, "identifier")) == "rpc":
+            return True
+        before = before.prev_named_sibling
+    return False
+
+
 @dataclass
 class Var:
     """What a local name stands for: a field, a local / param, or a script (preload name)."""
@@ -211,7 +223,9 @@ class ClassReader:
             member_kind = {"signal_statement": "signal", "function_definition": "method",
                            "enum_definition": "enum"}[kind]
             self.decl.members.append(Member(name, member_kind, "", ts.line(node),
-                                            ts.end_line(node)))
+                                            ts.end_line(node),
+                                            rpc=kind == "function_definition"
+                                            and has_rpc_annotation(node)))
 
     def collect_field(self, node, name):
         type_node = node.child_by_field_name("type")
@@ -225,8 +239,9 @@ class ClassReader:
         if creation_target(value, self.res_dir):
             self.owned.add(name)
             self.skip_create.add(value.id)
-        self.decl.members.append(Member(name, "field", ts.text(type_node).lstrip(":= "),
-                                        ts.line(node)))
+        created = creation_target(value, self.res_dir)  # `var x := Foo.new()` has type Foo
+        field_type = ts.text(type_node).lstrip(":= ") or (created.name if created else "") or ""
+        self.decl.members.append(Member(name, "field", field_type, ts.line(node)))
 
     def collect_const(self, node, name):
         path = loader_path(node.child_by_field_name("value"))

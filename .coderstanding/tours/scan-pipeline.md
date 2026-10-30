@@ -9,7 +9,7 @@ steps:
     code: {at: cli#run_scan, lines: +0..+8, mark: [+6, +7], fp: d922a32a66, was: 28-36}
   - key: pipeline
     targets: [scan#scan_repo]
-    code: {at: scan#scan_repo, lines: +14..+22, mark: [+14, +15, +16, +17, +18, +19, +20, +21, +22], fp: 886db3161a, was: 94-102}
+    code: {at: scan#scan_repo, lines: +14..+22, mark: [+14, +15, +16, +17, +18, +19, +20, +21, +22], fp: ed8ddec072, was: 95-103}
   - key: files
     targets: [scan>filewalk, filewalk#assign_files]
     code: {at: filewalk#assign_files, lines: +0..+4, mark: [+2, +3, +4], fp: 313d076866, was: 57-61}
@@ -18,7 +18,7 @@ steps:
     code: {at: PythonModule, lines: +0..+5, mark: [+1, +2, +4, +5], fp: 50b676058e, was: 343-348}
   - key: resolve
     targets: [scan>resolver, resolver#build_graph, resolver>model]
-    code: {at: resolver#build_graph, lines: +0..+15, mark: [+5, +6, +11, +12], fp: 8ff2d5db2f, was: 205-220}
+    code: {at: resolver#build_graph, lines: +0..+15, mark: [+5, +6, +11, +12], fp: 96ccc38b22, was: 238-253}
   - key: levels
     targets: [scan>levels, levels#guess_levels]
     code: {at: levels#guess_levels, lines: +14..+28, mark: [+14, +15, +16, +17, +18, +19, +23, +24, +25, +26, +28], fp: 5f9869cfc3, was: 94-108}
@@ -34,7 +34,7 @@ steps:
 Everything begins with the scan command. [[cli#run_scan]] checks the folder and picks where graph.json goes; with `-o` the cache goes next to it, so the scanned repo stays untouched. The two marked lines are the whole job: [[scan#scan_repo]] builds the graph and [[graph_json#write_graph]] saves it.
 
 ## The pipeline in nine lines
-[[scan#scan_repo]] is the pipeline: parse every file (unchanged files come from the scan cache), read import path aliases (tsconfig), build the graph, read the tech stack, note why imports found no file, mark tests, guess levels, run the checks and take code fingerprints. The next steps follow these calls in order.
+[[scan#scan_repo]] is the pipeline: parse every file (unchanged files come from the scan cache), read import path aliases (tsconfig), build the graph, read the tech stack, link HTTP clients to server routes, note why imports found no file, mark tests, guess levels, run the checks and take code fingerprints. The next steps follow these calls in order.
 
 ## Which files, read by whom
 First the file walk. [[filewalk#assign_files]] lists the repo's files, from git when it can, else by walking the folders, and pairs each one with every language module whose patterns match. One file can be read by more than one module.

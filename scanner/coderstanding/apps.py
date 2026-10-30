@@ -11,14 +11,15 @@ import posixpath
 import re
 import shutil
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from . import userconfig
 from .cache import SCANNER_VERSION
-from .checks import apply_layers, check_layer_sides, parse_layer, parse_rule
+from .checks import apply_note_warnings, check_layer_sides, parse_layer, parse_rule
 from .graph_json import read_graph, write_graph
 from .layout import FILE_NAME as LAYOUT_FILE
-from .levels import AUTO, parse_hub_threshold
+from .levels import AUTO, DEFAULT_MAX_LEVEL, MAX_LEVELS, parse_hub_threshold, parse_max_level
 from .notes import DOMAIN_PREFIX, domain_id, load_notes, save_notes
 from .scan import scan_repo
 from .testcode import is_test
@@ -28,9 +29,19 @@ class AppError(Exception):
     pass
 
 
+def parse_setting(name, text):
+    """A scan setting's value from text, or AppError (unknown name, bad value)."""
+    if name not in SETTINGS:
+        raise AppError(f"unknown setting {name} (known: {', '.join(SETTINGS)})")
+    try:
+        return SETTINGS[name][0](text)
+    except ValueError as error:
+        raise AppError(str(error)) from error
+
+
 # Per-app scan settings, kept in `<data>/settings.json`: name -> (parser, default).
-SETTINGS = {"hub_threshold": (parse_hub_threshold, AUTO)}
-MAX_LEVELS = 12  # the depth ruler's most levels (not counting level 0)
+SETTINGS = {"hub_threshold": (parse_hub_threshold, AUTO), "max_level": (parse_max_level, DEFAULT_MAX_LEVEL)}
+RELEVEL_SCOPES = ("ai", "all")  # which per-class level notes `rescan --relevel` clears
 
 
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -116,10 +127,14 @@ class App:
         self.settings_path.write_text(
             json.dumps({**self.saved_settings(), **changes}, indent=1) + "\n", encoding="utf-8")
 
-    def scan_settings(self):
-        """Every setting, defaults filled in."""
+    def scan_settings(self, overrides=None):
+        """Every setting, defaults filled in. `overrides` ({name: text}, validated, never saved)
+        win for this call only."""
         saved = self.saved_settings()
-        return {name: saved.get(name, default) for name, (_, default) in SETTINGS.items()}
+        settings = {name: saved.get(name, default) for name, (_, default) in SETTINGS.items()}
+        for name, text in (overrides or {}).items():
+            settings[name] = parse_setting(name, text)
+        return settings
 
     def change_settings(self, changes):
         """Validate and save {name: text}; they apply at the next rescan."""
@@ -128,14 +143,7 @@ class App:
         if names is not None:
             names = [n.strip() for n in names.split(",")]
             self.set_levels(len(names) - 1, names)
-        settings = self.scan_settings()
-        for name, text in changes.items():
-            if name not in SETTINGS:
-                raise AppError(f"unknown setting {name} (known: {', '.join(SETTINGS)})")
-            try:
-                settings[name] = SETTINGS[name][0](text)
-            except ValueError as error:
-                raise AppError(str(error)) from error
+        settings = self.scan_settings(changes)
         self.write_settings(**settings)
         return settings
 
@@ -176,6 +184,11 @@ class App:
         self.write_settings(rules=[*self.warning_rules(), rule])
         return rule
 
+    def loaded_rules(self):
+        """"Loaded by" pattern rules (checks.parse_loaded_rule), e.g. every class in
+        `languages/*.py` is loaded by the registry; like warning rules, no rescan."""
+        return self.saved_settings().get("loaded_by", [])
+
     def layer_rules(self):
         """Architecture rules (checks.parse_layer); like warning rules, a change never rescans."""
         return self.saved_settings().get("layers", [])
@@ -208,11 +221,12 @@ class App:
         notes.rules = self.warning_rules()
         notes.layers = self.layer_rules()
         notes.levels = self.level_settings()
+        notes.loaded_rules = self.loaded_rules()
         return notes
 
     def checked(self, graph, notes):
         """Put the `layer` warnings on the graph (they need the notes' domains and tags)."""
-        apply_layers(graph, notes.layers, notes)
+        apply_note_warnings(graph, notes.layers, notes)
 
     def save_notes(self, notes):
         save_notes(notes, self.notes_path)
@@ -321,13 +335,33 @@ def rename_app(old, new):
     return new
 
 
-def rescan(app):
-    """Scan the repo now into the app's data folder (graph.json and cache, never the repo)."""
-    graph = scan_repo(app.root, cache_dir=app.cache_dir, **app.scan_settings())
+def rescan(app, overrides=None):
+    """Scan the repo now into the app's data folder (graph.json and cache, never the repo).
+    `overrides`: {setting: text} for this run only (never saved)."""
+    graph = scan_repo(app.root, cache_dir=app.cache_dir, **app.scan_settings(overrides))
     if not any(node.kind != "external" for node in graph.nodes.values()):
         raise AppError(f"no supported files found in {app.root}")
     write_graph(graph, app.graph_path)
     return graph
+
+
+def relevel(app, scope="ai", reset_names=False):
+    """Opt-in "guess the levels again" (after `rescan`): clear the per-class `level` notes (scope
+    "ai": AI drafts only; "all": human ones too) so the scan's fresh guess shows. The saved
+    level count and names stay unless `reset_names`. The cleared notes are first written to
+    `notes.levels-<time>.bak.jsonl` in the data folder. Returns {"cleared": n, "backup": path or None}."""
+    if scope not in RELEVEL_SCOPES:
+        raise AppError(f"relevel must be one of {', '.join(RELEVEL_SCOPES)}, got {scope}")
+    notes = app.load_notes()
+    removed = notes.clear_field("level", ai_only=scope == "ai")
+    backup = None
+    if removed:
+        backup = app.data / f"notes.levels-{datetime.now():%Y%m%d-%H%M%S}.bak.jsonl"
+        backup.write_text("".join(json.dumps(line) + "\n" for line in removed), encoding="utf-8")
+        app.save_notes(notes)
+    if reset_names:
+        app.reset_levels()
+    return {"cleared": len(removed), "backup": backup}
 
 
 def load_graph(app):

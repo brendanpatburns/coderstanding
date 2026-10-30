@@ -29,6 +29,12 @@ def external_to_json(edge):
     return {"to": edge.to, **_edge_body(edge)}
 
 
+def member_to_json(member):
+    """A member as a dict; `rpc` only when set, so graphs without RPCs stay as they were."""
+    data = vars(member)
+    return data if member.rpc else {k: v for k, v in data.items() if k != "rpc"}
+
+
 def node_to_json(node):
     data = {"id": node.id, "name": node.name, "kind": node.kind, "lang": node.lang,
             "file": node.file, "line": node.line, "flags": node.flags,
@@ -44,7 +50,9 @@ def node_to_json(node):
     if node.namespace:
         data["namespace"] = node.namespace
     if node.members:
-        data["members"] = [vars(m) for m in node.members]
+        data["members"] = [member_to_json(m) for m in node.members]
+    if node.comm:
+        data["comm"] = node.comm
     if node.external_refs:
         data["external_refs"] = [external_to_json(e)
                                  for _, e in sorted(node.external_refs.items())]
@@ -87,7 +95,7 @@ def node_from_json(data):
         doc=data.get("doc", ""),
         level=data.get("level", 0), lines=data.get("lines", 0), span=data.get("span", False),
         warnings=list(data.get("warnings", [])), hub_degree=data.get("hub_degree", 0),
-        members=[Member(**m) for m in data.get("members", [])],
+        members=[Member(**m) for m in data.get("members", [])], comm=data.get("comm", {}),
     )
     for ext in data.get("external_refs", []):
         node.add_external(edge_from_json(ext, from_id=node.id))

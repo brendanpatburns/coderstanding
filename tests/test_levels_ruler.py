@@ -61,7 +61,7 @@ def test_cli_settings_levels(desk):
     app, graph = desk
     app.change_settings({"levels": "Domains, Apps ,Systems"})
     assert app.level_settings() == {"count": 2, "names": ["Domains", "Apps", "Systems"]}
-    assert app.scan_settings() == {"hub_threshold": app.scan_settings()["hub_threshold"]}  # not a scan setting
+    assert app.scan_settings() == {"hub_threshold": app.scan_settings()["hub_threshold"], "max_level": app.scan_settings()["max_level"]}  # levels is not a scan setting
 
 
 def test_api_saves_levels(desk):

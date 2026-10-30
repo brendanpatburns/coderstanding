@@ -72,6 +72,24 @@
       "bad": "Scripts/Net/Impl",
       "max": 0,
       "code_check": false
+    },
+    "loaded_by": {
+      "what": "The classes that load or start this one by name (a registry, a plugin list, an engine setting), when no code reference shows it.",
+      "who": "Anyone wondering why this class looks unused.",
+      "not": "Normal code references (the scan finds those) or guesses; only loaders you checked.",
+      "good": "coderstanding.language",
+      "bad": "probably main",
+      "max": 0,
+      "code_check": false
+    },
+    "loaded_how": {
+      "what": "One short line on how the loaders find this class.",
+      "who": "Anyone following the loaded-by line.",
+      "not": "How the class works, or a list of loaders (those go in loaded by).",
+      "good": "Auto-loaded by the language registry from the languages folder",
+      "bad": "Loaded somehow at startup",
+      "max": 120,
+      "code_check": false
     }
   }
 }

@@ -1,6 +1,6 @@
 import pytest
 
-from coderstanding.checks import apply_layers, check_graph, ignore_reason, parse_layer, warning_text
+from coderstanding.checks import apply_note_warnings, check_graph, ignore_reason, parse_layer, warning_text
 from coderstanding.cli import main
 from coderstanding.model import Call, Edge, Graph, Location, Node
 from coderstanding.notes import Notes
@@ -69,7 +69,7 @@ def test_ignore_by_note_and_rule_and_reapply():
     assert ignore_reason("layer", graph.nodes["Hud"], ["layer"], []) == "note"
     assert ignore_reason("layer", graph.nodes["Hud"], [], [{"glob": "src/ui/**", "ignore": ["layer"]}]) \
         == "rule src/ui/** layer"
-    apply_layers(graph, [], None)  # new settings, no rescan
+    apply_note_warnings(graph, [], None)  # new settings, no rescan
     assert not any(w["kind"] == "layer" for n in graph.nodes.values() for w in n.warnings)
 
 

@@ -273,7 +273,7 @@ def add_godot_warnings(graph, ids):
 def check_graph(graph, layers=(), notes=None):
     """Set `warnings` on every node (tests and outside nodes get none). `layers` (architecture
     rules) need the notes' domains and tags; the settings are not part of a scan, so the
-    loaders call `apply_layers` again when they have both."""
+    loaders call `apply_note_warnings` again when they have both."""
     ids = checked_ids(graph)
     for node in graph.nodes.values():
         node.warnings = []
@@ -298,7 +298,7 @@ def check_graph(graph, layers=(), notes=None):
                             ("unresolved", count_unresolved(node))):
             if count:
                 node.warnings.append({"kind": kind, "count": count})
-    apply_layers(graph, layers, notes)
+    apply_note_warnings(graph, layers, notes)
 
 
 MAX_NAMES_SHOWN = 3
@@ -350,6 +350,14 @@ def glob_regex(glob):
             out += "[^/]*" if glob[i] == "*" else "[^/]" if glob[i] == "?" else re.escape(glob[i])
             i += 1
     return re.compile(out + "$")
+
+
+def parse_loaded_rule(loaded_by, files, how=""):
+    """An app-level "loaded by" rule as stored: {loaded_by: class id, files: glob, how?}. Every
+    class in a matching file is loaded by that class (a plugin registry). ValueError if bad."""
+    if not loaded_by or not files:
+        raise ValueError("a loaded-by rule needs a loader class id and a files glob")
+    return {"loaded_by": loaded_by, "files": files, **({"how": how} if how else {})}
 
 
 def rule_matches(rule, node):
@@ -497,8 +505,14 @@ def layer_warnings(graph, layers, notes):
     return found
 
 
-def apply_layers(graph, layers, notes):
-    """(Re)set the `layer` warnings on the graph's nodes; safe to call again with other rules."""
+def apply_note_warnings(graph, layers, notes):
+    """(Re)set the warnings that depend on the notes and settings, not on the scan: `layer`
+    (architecture rules) and `unused` (a class something loads by name is not unused). Safe to
+    call again with other rules."""
     found = layer_warnings(graph, layers, notes) if layers else {}
+    loaded = notes.loaders(graph) if notes else {}
+    unused = unused_ids(graph, checked_ids(graph)) - set(loaded)
     for node_id, node in graph.nodes.items():
-        node.warnings = [w for w in node.warnings if w["kind"] != "layer"] + found.get(node_id, [])
+        kept = [w for w in node.warnings if w["kind"] not in ("layer", "unused")]
+        first = [{"kind": "unused"}] if node_id in unused else []
+        node.warnings = first + kept + found.get(node_id, [])

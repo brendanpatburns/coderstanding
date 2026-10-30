@@ -8,7 +8,7 @@ import tree_sitter_python
 
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult,
                                     LanguageModule, Ref, Target, register)
-from coderstanding.model import Member, child_id, entry_flags
+from coderstanding.model import Member, add_unique, child_id, entry_flags
 
 from . import doc_text
 from .ts_util import children_of_type, descendants, first_child_of_type, end_line, line, make_parser, text
@@ -79,8 +79,13 @@ class PythonFile:
         module = Declaration(self.module_id, self.module_id.rpartition(".")[2], "module", 1,
                              namespace=self.module_id.rpartition(".")[0], file_node=True,
                              doc=docstring(root) or doc_text.file_doc(root, ()))
+        if self.ctx.rel_path.rpartition("/")[2] == "__main__.py":  # `python -m package` starts it
+            add_unique(module.flags, entry_flags("script-main"))
         self.result.declarations.append(module)
         self.find_classes(root, self.module_id)
+        for node in descendants(root):  # imports anywhere: functions, try/except, TYPE_CHECKING
+            if node.type in ("import_statement", "import_from_statement"):
+                self.read_import(node)
         for statement in root.children:
             self.read_statement(statement, module)
         self.read_scope(root, self.module_id, {})
@@ -91,16 +96,14 @@ class PythonFile:
     def read_statement(self, node, module):
         if node.type == "decorated_definition":
             node = node.child_by_field_name("definition")
-        if node.type in ("import_statement", "import_from_statement"):
-            self.read_import(node)
-        elif node.type == "function_definition":
+        if node.type == "function_definition":
             module.members.append(Member(text(node.child_by_field_name("name")), "function",
                                          line=line(node), end=end_line(node)))
             self.read_signature(node, self.module_id)
         elif node.type == "class_definition":
             self.read_class(node, self.module_id)
         elif node.type == "if_statement" and "__main__" in text(node):
-            module.flags.extend(entry_flags("script-main"))
+            add_unique(module.flags, entry_flags("script-main"))
 
     def find_classes(self, parent, parent_id):
         for node in descendants(parent, ("function_definition", "class_definition")):

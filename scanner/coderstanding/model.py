@@ -26,6 +26,13 @@ VARIABLE_HANDLER = "<callable>"  # a handler held in a variable: its function is
 ANY_SIGNAL = "*"  # signal name of an emit / connect whose name is not a literal
 
 
+COMM_NAMESPACE = "comm"  # an `external` node with this namespace is a socket / network endpoint
+
+
+def is_comm(node):
+    return node is not None and node.kind == "external" and node.namespace == COMM_NAMESPACE
+
+
 def entry_flags(mechanism):
     """Flags for an entry point started by `mechanism` (one of ENTRY_MECHANISMS)."""
     return [mechanism, "entry"]
@@ -78,6 +85,7 @@ class Member:
     type: str = ""  # type name as written
     line: int = 0
     end: int = 0  # last line of a function (0 = unknown)
+    rpc: bool = False  # a GDScript `@rpc` function: other peers may call it (DESIGN 8)
 
 
 @dataclass
@@ -161,6 +169,8 @@ class Node:
     hub_degree: int = 0  # levels.py: neighbour count, set with the `hub` flag on promoted classes
     warnings: list = field(default_factory=list)  # checks.py: [{"kind": ..., ...}]
     external_refs: dict = field(default_factory=dict)  # (name, kind) -> Edge without a target node
+    # A communications node's facts (stack.py): {"type", "role", "owner", "field", "messages", "at"}.
+    comm: dict = field(default_factory=dict)
     # The declaring files' imports (C# usings), so the stack reader can map outside names to
     # packages. Scan-time only: not written to graph.json.
     imports: list = field(default_factory=list, compare=False)
@@ -174,6 +184,7 @@ class Node:
         self.doc = self.doc or other.doc
         self.namespace = self.namespace or other.namespace
         self.members.extend(other.members)
+        self.comm = self.comm or other.comm
         self.lines += other.lines  # partial class: its parts add up
         self.span = self.span and other.span
         add_unique(self.imports, other.imports)

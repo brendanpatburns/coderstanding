@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 from . import assets, field_rules, userconfig
 from .checks import WARNING_HELP
-from .graph_json import external_to_json, write_graph
+from .graph_json import external_to_json, member_to_json, write_graph
 from .layout import read_layout, update_layout
 from .apps import AppError, load_graph
 from .hub import Hub
@@ -84,9 +84,10 @@ def view_args(params):
     """compute_view keyword arguments from /api/view query parameters (`expand` repeats)."""
     return {"level": int(params.get("level", ["1"])[0]),
             "view": params.get("view", ["all"])[0],
-            "show": {"external": _flag(params, "external"),
+            "show": {"external": _flag(params, "external"), "comm": _flag(params, "comm"),
                      "test": _flag(params, "test", default=False),
-                     "hide_types": hidden_types(params)},
+                     "hide_types": hidden_types(params),
+                     "hide_kinds": [k for k in params.get("hide_kind", []) if k]},
             "zoom": _zoom(params),
             "expand": [i for i in params.get("expand", []) if i],
             "focus": [i for i in params.get("focus", []) if i]}
@@ -171,7 +172,7 @@ class Api:
         return {"id": node.id, "name": node.name, "kind": node.kind, "lang": node.lang,
                 "file": node.file, "line": node.line, "flags": node.flags,
                 "base": node.base, "namespace": node.namespace, "level": node.level, "doc": node.doc,
-                "members": [vars(m) for m in node.members],
+                "members": [member_to_json(m) for m in node.members], "comm": node.comm,
                 "external_refs": [external_to_json(e)
                                   for _, e in sorted(node.external_refs.items())],
                 "out": [_edge_ref(self.graph, e, e.to) for e in edges if e.from_id == node_id],
@@ -617,7 +618,7 @@ class Handler(SimpleHTTPRequestHandler):
                          "/api/notes/accept", lambda body: self.api.accept_notes(body),
                          "/api/notes/still-true", lambda body: self.api.still_true(body),
                          "/api/apps", lambda body: self.hub.add_app(body),
-                         "/api/rescan", lambda body: self.hub.start_scan(self.app_name))
+                         "/api/rescan", lambda body: self.hub.start_scan(self.app_name, body))
 
     def do_DELETE(self):
         self.route_write("DELETE")

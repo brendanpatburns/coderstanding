@@ -13,9 +13,10 @@ from .diagnose import collect as collect_diagnostics
 from .filewalk import DEFAULT_SKIP_DIRS, assign_files
 from .fingerprints import compute_fingerprints
 from .language import FileContext, load_builtin_modules, track_dependencies
-from .levels import AUTO, guess_levels
+from .levels import AUTO, DEFAULT_MAX_LEVEL, guess_levels
 from .offline import install as install_offline_guard
 from .resolver import Parsed, build_graph
+from .http_routes import add_http_nodes
 from .stack import read_stack
 from .testcode import mark_tests
 
@@ -78,9 +79,10 @@ def read_path_maps(root, modules, skip_dirs):
 
 
 def scan_repo(root, modules=None, skip_dirs=DEFAULT_SKIP_DIRS, use_cache=True,
-              cache_dir=None, workers=None, parallel_min=PARALLEL_MIN_FILES, hub_threshold=AUTO):
+              cache_dir=None, workers=None, parallel_min=PARALLEL_MIN_FILES, hub_threshold=AUTO,
+              max_level=DEFAULT_MAX_LEVEL):
     """cache_dir: where the per-file cache lives (default: <root>/.coderstanding/cache).
-    hub_threshold: see levels.parse_hub_threshold."""
+    hub_threshold, max_level: see levels.parse_hub_threshold, parse_max_level."""
     root = Path(root).resolve()
     if modules is None:
         modules = load_builtin_modules()
@@ -95,9 +97,10 @@ def scan_repo(root, modules=None, skip_dirs=DEFAULT_SKIP_DIRS, use_cache=True,
     path_maps = read_path_maps(root, modules, skip_dirs)
     graph = build_graph(root, parsed, repo=root.name, path_maps=path_maps)
     read_stack(root, graph, skip_dirs)
+    add_http_nodes(root, graph, skip_dirs)
     graph.diagnostics = collect_diagnostics(root, graph, path_maps)
     mark_tests(graph)
-    guess_levels(graph, hub_threshold=hub_threshold)
+    guess_levels(graph, max_level=max_level, hub_threshold=hub_threshold)
     check_graph(graph)
     graph.fingerprints = compute_fingerprints(root, graph)
     graph.scanned_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

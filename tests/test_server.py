@@ -71,7 +71,7 @@ def test_view_args_parse_zoom_and_toggles():
                       "zoom_from": ["A"], "zoom_to": ["B"], "zoom_level": ["2"],
                       "via": ["X", "Y"]})
     assert args["level"] == 2 and args["view"] == "concrete"
-    assert args["show"] == {"external": True, "test": False, "hide_types": [".gd", ".tscn"]}
+    assert args["show"] == {"external": True, "comm": True, "test": False, "hide_types": [".gd", ".tscn"], "hide_kinds": []}
     assert args["zoom"] == {"from": "A", "to": "B", "level": 2, "via": ["X", "Y"]}
     assert view_args({})["zoom"] is None
 

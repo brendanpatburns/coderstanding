@@ -23,7 +23,7 @@ else:  # Python 3.10: the same reader under its old name
 
 from .filewalk import DEFAULT_SKIP_DIRS, list_files
 from .godot_files import autoloads, declared_class_name, main_scene, quoted_list, read_config, unquote
-from .model import Edge, Location, Node
+from .model import COMM_NAMESPACE, Call, Edge, Location, Node, merge_locations
 
 RENDERERS = {"Forward Plus": "forward_plus", "Mobile": "mobile",
              "GL Compatibility": "gl_compatibility"}
@@ -456,6 +456,174 @@ def is_unresolved(node, label):
     return not (is_engine_name(node, label) or is_standard_name(node, label))
 
 
+# --- communications nodes: sockets and network endpoints (DESIGN 8) ---
+
+GODOT_COMM = ("WebSocketPeer", "WebSocketMultiplayerPeer", "ENetMultiplayerPeer", "ENetConnection",
+              "StreamPeerTCP", "StreamPeerTLS", "TCPServer", "PacketPeerUDP", "UDPServer",
+              "HTTPClient", "HTTPRequest", "WebRTCPeerConnection", "WebRTCMultiplayerPeer")
+CSHARP_COMM = ("TcpListener", "TcpClient", "UdpClient", "Socket", "HttpClient", "ClientWebSocket",
+               "HttpListener")
+# Per language: a type name -> the endpoint's type name; or, for a module whose functions make the
+# endpoint, {called function: type name}. The one fixed list of what counts as a socket.
+COMM_TYPES = {
+    "gdscript": {name: name for name in GODOT_COMM},
+    "csharp": {name: name for name in GODOT_COMM + CSHARP_COMM},
+    "python": {
+        "socket": {"socket": "socket.socket"}, "socket.socket": "socket.socket",
+        "websockets": {"serve": "websockets.serve", "connect": "websockets.connect"},
+        "asyncio": {"start_server": "asyncio.start_server"},
+        "HTTPServer": "http.server.HTTPServer", "http.server.HTTPServer": "http.server.HTTPServer",
+        "aiohttp": {"ClientSession": "aiohttp.ClientSession"},
+        "aiohttp.ClientSession": "aiohttp.ClientSession",
+        "aiohttp.web": {"Application": "aiohttp.web.Application"},
+        "aiohttp.web.Application": "aiohttp.web.Application",
+        "discord": {"Client": "discord.Client"}, "discord.Client": "discord.Client",
+    },
+    "javascript": {
+        "WebSocket": "WebSocket", "net": {"createServer": "net.createServer"},
+        "http": {"createServer": "http.createServer"},
+        "https": {"createServer": "https.createServer"},
+    },
+}
+COMM_TYPES["typescript"] = COMM_TYPES["javascript"]
+MESSAGE_LANGS = ("javascript", "typescript")  # event names are literal first arguments there
+CSHARP_NAMESPACES = "System."  # `System.Net.Sockets.TcpListener` is looked up as `TcpListener`
+LISTENER_TYPES = {"TCPServer", "UDPServer", "TcpListener", "HttpListener", "http.server.HTTPServer",
+                  "websockets.serve", "asyncio.start_server", "net.createServer",
+                  "http.createServer", "https.createServer", "aiohttp.web.Application",
+                  "http.server"}
+CLIENT_TYPES = {"HTTPClient", "HTTPRequest", "HttpClient", "ClientWebSocket", "TcpClient",
+                "UdpClient", "aiohttp.ClientSession", "websockets.connect", "WebSocket",
+                "discord.Client", "http.client"}
+LISTEN_CALLS = {"listen", "bind", "create_server", "serve", "serve_forever", "start_server",
+                "createServer"}
+CONNECT_CALLS = {"create_client", "request", "open"}
+ROLE_LISTENS, ROLE_CONNECTS, ROLE_BOTH = "listens", "connects", "listens and connects"
+
+
+def comm_for(node, label, member=""):
+    """The communications type an outside name (a field's type, or a ref's label plus the
+    function called on it) stands for in this node's language, else None."""
+    table = COMM_TYPES.get(node.lang)
+    if table is None:
+        return None
+    if node.lang == "csharp" and label.startswith(CSHARP_NAMESPACES):
+        label = label.rsplit(".", 1)[-1]
+    entry = table.get(label)
+    if entry is None and "." in label:
+        label, _, member = label.rpartition(".")
+        entry = table.get(label)
+    return entry.get(member) if isinstance(entry, dict) else entry
+
+
+def is_constant_name(name):
+    """`STATUS_CONNECTED`, `METHOD_GET`: a constant read, not a use of the socket."""
+    return name.isupper()
+
+
+@dataclass
+class CommUse:
+    """What one class does with one communications type."""
+    details: set = field(default_factory=set)
+    calls: list = field(default_factory=list)
+    at: list = field(default_factory=list)
+    messages: list = field(default_factory=list)
+
+    @property
+    def real(self):
+        """Created, or called through: a type check (`is` / `as`, a bare local) is neither."""
+        return "create" in self.details or bool(self.calls)
+
+    def role(self, comm_type):
+        names = {c.member for c in self.calls}
+        listens = bool(names & LISTEN_CALLS)
+        connects = bool(names & CONNECT_CALLS) or any(n.lower().startswith("connect") for n in names)
+        if listens and connects:
+            return ROLE_BOTH
+        if listens or connects:
+            return ROLE_LISTENS if listens else ROLE_CONNECTS
+        if comm_type in LISTENER_TYPES:
+            return ROLE_LISTENS
+        return ROLE_CONNECTS if comm_type in CLIENT_TYPES else ""
+
+
+def comm_uses(node):
+    """comm type -> CommUse, from the node's outside refs (no field info here)."""
+    uses = {}
+    for edge in node.external_refs.values():
+        if edge.kind in ("generalization", "realization"):
+            continue
+        if edge.kind == "signal":
+            comm_type = comm_for(node, edge.to)
+            if comm_type and node.lang in MESSAGE_LANGS:
+                use = uses.setdefault(comm_type, CommUse())
+                use.messages += [d for d in edge.detail if d not in use.messages]  # the event name
+            continue
+        created = comm_for(node, edge.to)
+        if created and "create" in edge.detail:
+            use = uses.setdefault(created, CommUse())
+            use.details.add("create")
+            use.at = merge_locations(use.at, edge.at)
+        for call in edge.calls:
+            comm_type = comm_for(node, edge.to, call.member)
+            if comm_type and not is_constant_name(call.member):
+                use = uses.setdefault(comm_type, CommUse())
+                use.calls.append(Call(call.member, call.count, call.at, call.from_member))
+                use.at = merge_locations(use.at, call.at)
+    return {t: u for t, u in uses.items() if u.real}
+
+
+def comm_fields(node):
+    """comm type -> names of the node's fields of that type."""
+    found = {}
+    for member in node.members:
+        comm_type = comm_for(node, member.type) if member.kind == "field" and member.type else None
+        if comm_type:
+            found.setdefault(comm_type, []).append(member)
+    return found
+
+
+def comm_name(field_name, comm_type, role):
+    name = f"{field_name} · {comm_type}" if field_name else comm_type
+    return f"{name} ({role})" if role else name
+
+
+def comm_id(owner_id, comm_type, field_name=""):
+    """The one id scheme for communications nodes: `comm:<owner>#<field>` for a held socket,
+    else `comm:<owner>@<type>`."""
+    return f"comm:{owner_id}" + (f"#{field_name}" if field_name else f"@{comm_type}")
+
+
+def add_comm_node(graph, owner, comm_type, field_member, use, label=""):
+    """One node for a socket the owner holds (id `comm:<owner>#<field>`) or only makes and
+    calls (`comm:<owner>@<type>`), and the owner's edge to it. `label` names a node that is held
+    by no field (an outside HTTP host): it takes the field's place in the id and name."""
+    field_name = field_member.name if field_member else label
+    node_id = comm_id(owner.id, comm_type, field_name)
+    role = use.role(comm_type)
+    line = field_member.line if field_member else (use.at[0].line if use.at else owner.line)
+    at = Location(owner.file, line)
+    info = {"type": comm_type, "role": role, "owner": owner.id, "field": field_name,
+            "messages": sorted(use.messages), "at": at.to_json()}
+    graph.add_node(Node(id=node_id, name=comm_name(field_name, comm_type, role), kind="external",
+                        lang="", file="", line=at.line, namespace=COMM_NAMESPACE, comm=info))
+    detail = (["field"] if field_member else []) + sorted(use.details)
+    graph.add_edge(Edge(owner.id, node_id, "composition" if field_member else "dependency",
+                        detail=detail, at=merge_locations([at], use.at),
+                        calls=[Call(c.member, c.count, c.at, c.from_member) for c in use.calls]))
+
+
+def add_comm_nodes(graph, owner):
+    """Every communications node of one class: fields typed as a socket, and sockets made or
+    called in code. With several fields of one type they share the type's calls and role."""
+    uses = comm_uses(owner)
+    fields = comm_fields(owner)
+    for comm_type in sorted(fields.keys() | uses.keys()):
+        use = uses.get(comm_type, CommUse())
+        for member in fields.get(comm_type) or [None]:
+            add_comm_node(graph, owner, comm_type, member, use)
+
+
 def outside_node_id(graph, dep):
     if dep.node_id not in graph.nodes:
         graph.add_node(Node(id=dep.node_id, name=dep.name, kind="external", lang="",
@@ -473,6 +641,7 @@ class Usage:
 def map_outside_refs(graph, index):
     usage = Usage()
     for node in list(graph.nodes.values()):
+        add_comm_nodes(graph, node)
         for key, edge in list(node.external_refs.items()):
             dep = index.dep_for(node, edge.to)
             if dep:

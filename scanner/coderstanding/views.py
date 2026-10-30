@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 
 from .checks import split_ignored, warning_text
 from .fanout import EXPAND_ALL, FIELD_KINDS, class_parts, fanout_links
-from .model import (FUNCTION_KINDS, INIT_MEMBER, STRUCT_KINDS, called_function, calling_function)
+from .model import (FUNCTION_KINDS, INIT_MEMBER, STRUCT_KINDS, called_function, calling_function,
+                    is_comm)
 from .notes import (ARROW, FINGERPRINTED, FUNCTION_SEP, TEXT_FIELDS, Notes, domain_id, edge_key,
                     function_key, node_key)
 from .testcode import covering_tests, index_tests, is_test, retest_files
@@ -19,9 +20,11 @@ from .testcode import covering_tests, index_tests, is_test, retest_files
 ALL, CONCRETE = "all", "concrete"
 CODE_AUTHOR = "code"  # `description_by` of a description taken from the code
 OWNER_RANK = {"composition": 0, "association": 1, "dependency": 2}
-DEFAULT_SHOW = {"external": True, "test": False}
+LOADED_BY = "loaded-by"  # kind of the drawn line B -> A for "A is loaded by B" (notes, rules)
+DEFAULT_SHOW = {"external": True, "comm": True, "test": False}
 SCENE_TYPE = ".tscn"  # Godot scenes: hiding them is hiding this type
 HIDE_TYPES = "hide_types"  # `show` key: file extensions (`.gd`) whose classes are removed
+HIDE_KINDS = "hide_kinds"  # `show` key: line kinds (`signal`) whose lines are not drawn
 ABSTRACT_MEMBER_KINDS = ("abstract", "signal")  # members that are not real code
 
 
@@ -138,6 +141,7 @@ class ViewContext:
         self.removed = {i for i, n in graph.nodes.items() if self._removed(n)}
         self.allowed = [i for i in graph.nodes if i not in self.removed]
         self._impls = {}
+        self.loaders = notes.loaders(graph)  # class id -> the classes that load it by name
         self.links = list(self._make_links())
         self.incoming, self.outgoing, self.pair_calls = {}, {}, {}
         for link in self.links:
@@ -174,7 +178,7 @@ class ViewContext:
 
     def _removed(self, node, ignore_types=False):
         """Switched-off types; hidden tests are removed outright, never folded (DESIGN 12a)."""
-        if node.kind == "external" and not self.show.get("external", True):
+        if node.kind == "external" and not self.show.get("comm" if is_comm(node) else "external", True):
             return True
         if is_test(node) and not self.show.get("test"):
             return True
@@ -221,6 +225,10 @@ class ViewContext:
                 for impl in self.impls(edge.to):
                     if impl != edge.from_id:
                         yield Link(edge.from_id, impl, edge.kind, edge.calls, edge.to, held)
+        for target, loaders in self.loaders.items():
+            for loader in loaders:
+                if target not in self.removed and loader["from"] not in self.removed:
+                    yield Link(loader["from"], target, LOADED_BY, [], held=True)
 
     def owner(self, node_id):
         """Owner per DESIGN 5.1: composition, else association, else dependency source;
@@ -494,7 +502,7 @@ def node_json(ctx, node_id, faded):
         return {"id": node_id, "name": name, "kind": "domain", "level": 0, "flags": [],
                 "file": "", "line": 0, "faded": faded, "domain": name, "dep": None,
                 "lines": 0, "members": 0, "span": False, "functions": 0, "fields": 0,
-                "warnings": [], "ignored_warnings": [], "ignore_warnings": [], "tested_by": [],
+                "warnings": [], "ignored_warnings": [], "ignore_warnings": [], "tested_by": [], "loaders": [],
                 **note_json(notes, node_key(node_id))}
     node = ctx.graph.nodes[node_id]
     flags = [f for f in node.flags if f != "singleton"]
@@ -506,9 +514,12 @@ def node_json(ctx, node_id, faded):
             "flags": flags, "file": node.file, "line": node.line, "faded": faded,
             "hub_degree": node.hub_degree, "domain": ctx.domain(node_id),
             "dep": node.namespace if node.kind == "external" else None,
+            "comm": node.comm or None, "rpcs": [m.name for m in node.members if m.rpc],
             **size_json(node), "warnings": warnings_json(shown),
             "ignored_warnings": warnings_json(ignored), "ignore_warnings": ignore,
             "tested_by": ctx.covering_tests(node_id) if node.kind != "external" else [],
+            "loaders": [{**l, "name": ctx.graph.nodes[l["from"]].name}
+                        for l in ctx.loaders.get(node_id, [])],
             **with_code_doc(note_json(notes, node_key(node_id), graph=ctx.graph), node.doc)}
 
 
@@ -588,6 +599,7 @@ def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
         result = zoom_view(ctx, zoom)
     else:
         result = level_view(ctx, level)
+    hide_lines(ctx, result)
     focused = None
     if focus:
         result, focused = target_focus(result, graph, focus)
@@ -610,12 +622,20 @@ def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
             "counts": {"shown": len(result.shown), "total": len(ctx.allowed)},
             "types": type_counts(ctx, nodes),
             "hidden_types": sorted(ctx.show.get(HIDE_TYPES, ())),
+            "hidden_kinds": sorted(ctx.show.get(HIDE_KINDS, ())),
             "nodes": sorted(nodes, key=sort_key),
             "edges": edge_rows,
             "needs_binding": ctx.needs_binding(),
             "focus": focused,
             "expanded": {i: expanded_json(ctx, i) for i in sorted(open_ids)},
             "fanout": fanout_links(ctx, [e for _, e in edges], open_ids)}
+
+
+def hide_lines(ctx, result):
+    """Drop the lines whose kinds are all hidden (`show["hide_kinds"]`); classes stay."""
+    hidden = set(ctx.show.get(HIDE_KINDS, ()))
+    if hidden:
+        result.edges = {key: e for key, e in result.edges.items() if not e.kinds <= hidden}
 
 
 def type_counts(ctx, node_rows):

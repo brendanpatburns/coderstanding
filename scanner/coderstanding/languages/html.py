@@ -1,7 +1,8 @@
 """HTML reader (docs/DESIGN.md 4.4c): a module node per page, its scripts and stylesheets.
 
 `<script src>` and `<link href>` pointing at repo files become `dependency` refs (detail
-`import`); outside URLs and inline scripts are ignored.
+`import`); outside URLs and inline scripts are ignored. Scripts without `type="module"` are
+listed in `page_scripts`: classic scripts of one page share their top-level names.
 """
 
 import posixpath
@@ -35,6 +36,11 @@ def linked_path(tag):
     return attributes(tag).get(attribute, "") if attribute else ""
 
 
+def is_classic_script(tag):
+    name = text(first_child_of_type(tag, "tag_name")).lower()
+    return name == "script" and attributes(tag).get("type", "").lower() != "module"
+
+
 def repo_path(ctx, written):
     """Repo-relative path of a link written in this page, or "" when it is not a repo file."""
     written = written.split("?")[0].split("#")[0]
@@ -62,4 +68,6 @@ class HtmlModule(LanguageModule):
                 if rel:
                     result.refs.append(Ref(module_id, Target(path=rel), "dependency",
                                            line(tag), "import"))
+                    if is_classic_script(tag):
+                        result.page_scripts.append(rel)
         return result

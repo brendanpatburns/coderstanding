@@ -257,6 +257,35 @@ async function main() {
       }
     });
 
+    await step("Show: Communications switch is on and reloads the view (the fixture has no sockets)", async () => {
+      assert(await page.eval("document.getElementById('showComm').checked"), "on at first");
+      await page.clickOn("#showComm");
+      await settle();
+      assert(!(await page.eval("document.getElementById('showComm').checked")), "turned off");
+      await page.clickOn("#showComm");
+      await settle();
+      assert(await qa("node(\"requests\")"), "view still drawn after toggling");
+    });
+
+    await step("Legend: clicking a line kind hides its lines, again restores them, hover lights them", async () => {
+      const entry = (kind) => `.legend [data-kind="${kind}"]`;
+      const kind = await page.eval(`cy.edges().map((e) => e.data('raw').kinds[0])[0]`);
+      const lines = () => page.eval(`cy.edges().filter((e) => e.data('raw').kinds.includes('${kind}')).length`);
+      const before = await lines();
+      assert(before > 0, "fixture has lines of a kind");
+      const { x, y } = await page.centreOf(entry(kind));
+      await page.move(x, y);
+      assert(await page.eval("cy.edges('.kind-hit').length") === before, "hover lights that kind's lines");
+      await page.move(5, 5);
+      await page.clickOn(entry(kind));
+      await settle();
+      assert(await page.eval(`cy.edges().filter((e) => e.data('raw').kinds.every((k) => k === '${kind}')).length`) === 0, "clicking hides the kind's lines");
+      assert(await page.eval(`document.querySelector('${entry(kind)}').classList.contains('off')`), "the entry stays listed, marked off");
+      await page.clickOn(entry(kind));
+      await settle();
+      assert(await lines() === before, "clicking again brings them back");
+    });
+
     await step("Types strip: chips toggle a type's classes, hover lights them, names are never cut", async () => {
       const chip = (type) => `#typeStrip [data-type="${type}"]`;
       const count = (type) => page.eval(`cy.nodes().filter((n) => n.data('type') === '${type}').length`);
@@ -396,6 +425,20 @@ async function main() {
       await page.key("ArrowDown");
       await settle();
       assert(lastNote("node:Big", "status")?.status, "status saved");
+    });
+
+    await step("details: Loaded by adds a dashed line, Remove takes it away", async () => {
+      await page.clickOn("#loadedPick");
+      await page.type("bus");
+      await sleep(500);
+      await page.clickOn('#details [data-act="loaded-add"]');
+      await settle();
+      assert(JSON.stringify(lastNote("node:Big", "loaded_by")?.loaded_by) === JSON.stringify(["res://src/bus.gd"]), `loaded_by saved: ${JSON.stringify(lastNote("node:Big", "loaded_by"))}`);
+      assert(await page.eval("cy.edges('.k-loaded-by').length") === 1, "one loaded-by line drawn");
+      assert(await page.eval(`/bus/.test(document.querySelector('#details dd[data-field="loaded_by"]').textContent)`), "details list the loader");
+      await page.clickOn('#details [data-act="loaded-remove"]');
+      await settle();
+      assert(await page.eval("cy.edges('.k-loaded-by').length") === 0, "line gone after Remove");
     });
 
     await step("edit a field rule and see it in the ? popup", async () => {
@@ -1226,6 +1269,9 @@ async function main() {
       await press("third-repo", "Save name");
       await page.waitFor(`document.querySelector('${row("third")}')`, { what: "renamed row" });
       assert(registry().third && !registry()["third-repo"], "registry renamed");
+      await press("third", "Redo levels…");
+      assert(await page.eval(`/AI-drafted/.test(document.querySelector('${row("third")} [data-act="relevel-ai"]').textContent) && /yours too/.test(document.querySelector('${row("third")} [data-act="relevel-all"]').textContent) && !document.querySelector('${row("third")} .relevel-names').checked`), "redo levels: AI-only and all choices, names kept by default");
+      await press("third", "Cancel");
       await press("third", "Remove…");
       assert(await page.eval(`/keep its files/.test(document.querySelector('${row("third")} [data-act="remove-keep"]').textContent) && Boolean(document.querySelector('${row("third")} [data-act="remove-delete"]'))`), "two clear remove choices in the modal");
       await page.eval(`document.querySelector('${row("third")} [data-act="remove-keep"]').click()`);

@@ -9,6 +9,10 @@ A path tries the module's path map first (tsconfig aliases), then the path as wr
 with the module's path suffixes, then again without the written extension (`./x.js` is
 `./x.ts`). A member of a file node is its child, else a name the file exports (re-exports,
 default export, `export *`), followed through barrel files.
+
+Classic browser scripts loaded by one page share their top-level names: a `shared` ref (a
+bare name the reader could not place) resolves only to a `page_globals` name of another script
+on a page that loads this file, else it is dropped.
 """
 
 import posixpath
@@ -52,6 +56,8 @@ class Resolver:
     path_maps: dict = field(default_factory=dict)  # module name -> its read_path_map()
     file_parsed: dict = field(default_factory=dict)  # file node id -> Parsed (its exports)
     path_misses: dict = field(default_factory=dict)  # (module, written, from file) -> PathMiss
+    parsed_by_path: dict = field(default_factory=dict)  # rel_path -> Parsed
+    page_siblings: dict = field(default_factory=dict)  # script rel_path -> other scripts on its pages
     _following: set = field(default_factory=set)  # (node id, member) being followed
     _exported_cache: dict = field(default_factory=dict)  # (node id, member) -> id or None
 
@@ -62,6 +68,33 @@ class Resolver:
         if target.member and not target.path:  # an unresolved file keeps its path as label
             return Resolution(label=target.text)
         return resolution
+
+    def resolve_shared(self, target, parsed):
+        """A bare name as a global of a classic script sharing a page with `parsed`; the
+        Resolution, or None when no such script declares it."""
+        head, _, rest = target.name.partition(".")
+        found = []
+        for sibling in self.page_siblings.get(parsed.rel_path, ()):
+            owner = self.parsed_by_path.get(sibling)
+            declared = owner and owner.result.page_globals.get(head)
+            resolved = declared and self.resolve(declared, owner, use_aliases=False)
+            if resolved and resolved.id:
+                found.append(resolved.id)
+        if not found:
+            return None
+        node_id = found[0]
+        if rest:
+            node_id = self._member_of(node_id, rest) or node_id
+        return Resolution(node_id, unsure=len(set(found)) > 1)
+
+    def link_pages(self, parsed_files):
+        """Scripts loaded by the same page see each other's page globals."""
+        self.parsed_by_path = {p.rel_path: p for p in parsed_files}
+        for page in parsed_files:
+            scripts = list(dict.fromkeys(page.result.page_scripts))
+            for script in scripts:
+                siblings = self.page_siblings.setdefault(script, [])
+                siblings.extend(s for s in scripts if s != script and s not in siblings)
 
     def _resolve_base(self, target, parsed, scope, use_aliases):
         if target.id:
@@ -211,6 +244,7 @@ def build_graph(root, parsed_files, repo="", path_maps=None):
         add_declarations(graph, resolver, parsed)
         for name, target in parsed.result.global_aliases.items():
             resolver.global_aliases[name] = (target, parsed)
+    resolver.link_pages(parsed_files)
     for parsed in parsed_files:
         apply_marks(graph, resolver, parsed)
         for ref in parsed.result.refs:
@@ -262,7 +296,12 @@ def add_ref(graph, resolver, parsed, ref):
     owner = graph.nodes.get(ref.from_id)
     if owner is None:
         return
-    found = resolver.resolve(ref.to, parsed, ref.scope)
+    if ref.shared:
+        found = resolver.resolve_shared(ref.to, parsed)
+        if found is None or found.id == ref.from_id:
+            return
+    else:
+        found = resolver.resolve(ref.to, parsed, ref.scope)
     if found.id == ref.from_id and ref.kind in STRUCT_KINDS:
         return  # a class cannot extend itself; other self references are internal calls
     location = Location(parsed.rel_path, ref.line)

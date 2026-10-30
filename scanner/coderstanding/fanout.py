@@ -27,7 +27,9 @@ def class_parts(ctx, node_id):
     """{"functions": [{name, line}], "fields": [{name, kind, type}]} of one class."""
     node = ctx.graph.nodes[node_id]
     lines = {m.name: m.line for m in node.members if m.kind in FUNCTION_KINDS}
-    return {"functions": [{"name": n, "line": lines.get(n, 0)} for n in functions_of(ctx, node_id)],
+    rpcs = {m.name for m in node.members if m.rpc}
+    return {"functions": [{"name": n, "line": lines.get(n, 0), **({"rpc": True} if n in rpcs else {})}
+                          for n in functions_of(ctx, node_id)],
             "fields": [{"name": m.name, "kind": m.kind, "type": m.type}
                        for m in node.members if m.kind in FIELD_KINDS]}
 

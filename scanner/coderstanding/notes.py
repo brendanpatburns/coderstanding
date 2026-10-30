@@ -14,7 +14,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from .checks import DOMAIN_PREFIX, WARNING_KINDS
+from .checks import DOMAIN_PREFIX, WARNING_KINDS, glob_regex
 from .model import function_names
 from .offline import GIT_OFFLINE, GIT_OFFLINE_ENV
 from .procs import run_quiet
@@ -25,9 +25,12 @@ USER_ENV = "CODERSTANDING_USER"  # overrides the human's name (tests, shared mac
 FIELDS = {"hint": str, "description": str, "level": int, "domain": str,
           "bindings": list, "singleton": bool, "status": str, "tags": list, "rules": str,
           "review": str,
+          "loaded_by": list,  # ids of classes that load this one by name (a registry, a tool)
+          "loaded_how": str,  # short text for how: "auto-loaded by the language registry"
           "ignore_warnings": list,
           "fp": dict}  # field -> fingerprint of the code when that field was written
-TEXT_FIELDS = ("hint", "description", "status", "tags", "rules", "review")  # edited in the viewer
+TEXT_FIELDS = ("hint", "description", "status", "tags", "rules", "review", "loaded_by",
+               "loaded_how")  # edited in the viewer
 FINGERPRINTED = ("hint", "description", "rules", "review")  # fields that get a code fingerprint
 WRITABLE_FIELDS = (*TEXT_FIELDS, "ignore_warnings")  # the viewer may write these
 STATUSES = ("stable", "wip", "fragile", "deprecated")
@@ -68,6 +71,8 @@ def check_value(name, value):
         raise ValueError(f"status must be one of {', '.join(STATUSES)}, got {value!r}")
     if name == "tags" and not all(type(t) is str and t for t in value):
         raise ValueError(f"tags must be non-empty strings, got {value!r}")
+    if name == "loaded_by" and not all(type(t) is str and t for t in value):
+        raise ValueError(f"loaded_by must be class ids, got {value!r}")
     if name == "fp" and not all(k in FINGERPRINTED and type(v) is str for k, v in value.items()):
         raise ValueError(f"fp must map {', '.join(FINGERPRINTED)} to hashes, got {value!r}")
     if name == "ignore_warnings" and not all(k in WARNING_KINDS for k in value):
@@ -117,6 +122,7 @@ class Notes:
         self.rules = []  # the app's warning rules (apps.py sets them on load; not in notes.jsonl)
         self.layers = []  # the app's architecture rules (same)
         self.levels = None  # the app's saved {count, names} (same; views.level_scale)
+        self.loaded_rules = []  # the app's "loaded by" pattern rules (same; checks.parse_loaded_rule)
 
     def is_ai(self, key, by):
         return (key, by) in self.ai
@@ -141,6 +147,32 @@ class Notes:
     def value(self, key, name, default=None):
         value, _ = self.get(key, name)
         return default if value is None else value
+
+    def loaders(self, graph):
+        """class id -> [{from, how, source, by, ai, rule}] of the classes that load it by name
+        (DESIGN 9b): the `loaded_by` note field, then the app's pattern rules (`source` is
+        `note` or `rule`). Ends missing from the graph are skipped."""
+        found = {}
+
+        def add(target, loader, how, source, by=None, rule=None):
+            links = found.setdefault(target, [])
+            if loader != target and loader in graph.nodes and all(l["from"] != loader for l in links):
+                links.append({"from": loader, "how": how or "", "source": source, "by": by,
+                              "ai": by is not None and self.is_ai(node_key(target), by),
+                              "rule": rule})
+
+        for key in self.keys():
+            target = key[len(NODE_PREFIX):]
+            ids, by = self.get(key, "loaded_by") if key.startswith(NODE_PREFIX) else (None, None)
+            if ids and target in graph.nodes:
+                for loader in ids:
+                    add(target, loader, self.value(key, "loaded_how"), "note", by)
+        for rule in (r for r in self.loaded_rules if r.get("loaded_by") and r.get("files")):
+            matches = glob_regex(rule["files"]).match
+            for node in graph.nodes.values():
+                if node.kind != "external" and node.file and matches(node.file):
+                    add(node.id, rule["loaded_by"], rule.get("how"), "rule", rule=rule["files"])
+        return {target: links for target, links in found.items() if links}
 
     def ignored_warnings(self, node_id):
         """Warning kinds the node's notes say to ignore."""
@@ -232,6 +264,17 @@ class Notes:
             del self.entries[(key, by)]
             self.ai.discard((key, by))
             self._authors[key].discard(by)
+
+    def clear_field(self, name, ai_only=True):
+        """Remove a field from every author's entry (only AI drafts when ai_only). Returns the
+        removed as notes.jsonl lines
+        ({"key", name, "by", "ai"?}, sorted), so the caller can back them up."""
+        removed = [{"key": key, name: fields[name], "by": by, **({"ai": True} if self.is_ai(key, by) else {})}
+                   for (key, by), fields in sorted(self.entries.items())
+                   if name in fields and not (ai_only and not self.is_ai(key, by))]
+        for line in removed:
+            self.put(line["key"], line["by"], line.get("ai", False), {name: None})
+        return removed
 
     def keys(self):
         return sorted({key for key, _ in self.entries})

@@ -2,7 +2,7 @@
 "use strict";
 
 const CAP = 1500;  // most nodes the viewer draws at once
-const KIND_ORDER = ["generalization", "realization", "composition", "association", "signal", "dependency"];
+const KIND_ORDER = ["generalization", "realization", "composition", "association", "signal", "dependency", "loaded-by"];
 const THEMES = ["auto", "light", "dark"];
 // Auto layout, line bends and label spots live in layout.js (CoderLayout).
 const QUIET_EDGES = 25;  // above this many lines, call names show only on hover (hints always)
@@ -10,7 +10,7 @@ const ROUTE_CAP = 800;   // above this many lines, skip bending lines around box
 const EDGE_FONT = 10.5;
 
 const state = {
-  meta: null, level: 1, view: "all", show: { external: true, test: false, cards: true },
+  meta: null, level: 1, view: "all", show: { external: true, comm: true, test: false, cards: true },
   filter: "",            // "" | "status:<s>" | "tag:<t>": dims the classes that do not match
   crumbs: [],            // zoom path: [{label, zoom: {from, to, level, via}}]
   mode: "view",          // "view" | "edit"
@@ -28,6 +28,7 @@ const state = {
   edgeLabelRects: [],    // where class-line labels sit, so fan-out labels keep off them
   names: new Map(),      // id -> name shown on screen (with a path when two names clash)
   stackShown: false,
+  hiddenKinds: [],       // line kinds (`signal`) switched off in the legend; saved per app
   hiddenTypes: [],       // file types (`.gd`) switched off in the types strip; saved per app
 
   focus: null,           // targets the view highlights (a tour step, DESIGN 7c): the server's `focus`
@@ -125,6 +126,7 @@ function nodeStyles(t) {
     { selector: "node.k-interface", style: { "border-style": "dashed", "font-style": "italic" } },
     { selector: "node.abstract", style: { "font-style": "italic" } },
     { selector: "node.k-external", style: { "background-color": t.ext, "border-color": t.muted, "corner-radius": 16 } },
+    { selector: "node.comm", style: { shape: "cut-rectangle", "corner-radius": 0, "border-color": t.accent, "border-width": 1.8 } },
     { selector: "node.k-scene", style: { "background-color": t.scene, "border-color": t.accent, "corner-radius": 2 } },
     { selector: "node.warn", style: { "border-color": t.warn } },
     { selector: "node.pinned", style: { "border-width": 2.8 } },
@@ -133,6 +135,7 @@ function nodeStyles(t) {
     { selector: "node.sel", style: { "border-color": t.accent, "border-width": 2.4 } },
     { selector: "node.dim", style: { opacity: 0.25 } },
     { selector: "node.type-hit", style: { "border-color": t.accent, "border-width": 3 } },
+    { selector: "edge.kind-hit", style: { "line-color": t.accent, "target-arrow-color": t.accent, width: 4, "z-index": 9 } },
     { selector: "node.focus", style: { "border-color": t.hl, "border-width": 2.6 } },
   ];
 }
@@ -153,6 +156,7 @@ function edgeStyles(t) {
     { selector: "edge.k-composition", style: {
       "source-arrow-shape": "diamond", "source-arrow-fill": "filled", "target-arrow-shape": "none" } },
     { selector: "edge.k-dependency", style: { "line-style": "dashed", "line-dash-pattern": [6, 4] } },
+    { selector: "edge.k-loaded-by", style: { "line-style": "dashed", "line-dash-pattern": [10, 3, 2, 3] } },
     { selector: "edge.k-signal", style: { "line-style": "dotted", width: 2.6 } },
     { selector: "edge.k-generalization, edge.k-realization", style: {
       "line-color": t.muted, "target-arrow-color": t.muted, "target-arrow-shape": "triangle",
@@ -193,6 +197,7 @@ const HIDDEN_FLAGS = ["partial", "singleton", HUB_FLAG];  // singleton shows as 
 
 /** The name on a box: the shown name, `*` for a singleton (as in the mock-up). */
 function boxName(node) {
+  if (node.comm) return `⇄ ${state.names.get(node.id) || node.name}`;
   return `${state.names.get(node.id) || node.name}${node.flags.includes("singleton") ? "*" : ""}`;
 }
 
@@ -210,7 +215,7 @@ function nodeElement(node) {
   const font = `500 12px ${token("f-mono")}`;
   const width = Math.max(...lines.map((line) => textWidth(line, font))) + 24;
   const data = fanNodeData(node, { id: node.id, name, marks, label, type: fileType(node.file), w: width, h: lines.length * 15 + 14, raw: node });
-  const classes = [`k-${node.kind}`, node.faded && "faded", node.flags.includes("abstract") && "abstract",
+  const classes = [`k-${node.kind}`, node.comm && "comm", node.faded && "faded", node.flags.includes("abstract") && "abstract",
     node.warnings?.length && "warn", state.saved.get(node.id)?.pinned && "pinned",
     isExpandable(node) && "expandable", data.open && "open", inFocus("nodes", node.id) && "focus"];
   return { group: "nodes", data, classes: classes.filter(Boolean).join(" ") };
@@ -548,8 +553,9 @@ function currentZoom() {
 
 function viewParams() {
   const params = new URLSearchParams({ level: state.level, view: state.view,
-    external: state.show.external ? 1 : 0, test: state.show.test ? 1 : 0 });
+    external: state.show.external ? 1 : 0, comm: state.show.comm ? 1 : 0, test: state.show.test ? 1 : 0 });
   state.hiddenTypes.forEach((type) => params.append("hide", type));
+  state.hiddenKinds.forEach((kind) => params.append("hide_kind", kind));
   if (state.show.cards) params.set("badges", "1");  // spec/note counts on classes and lines
   const zoom = currentZoom();
   if (zoom) {
@@ -586,6 +592,7 @@ async function loadView({ inPlace = false } = {}) {
   keepExpanded(view);
   updateCounts(view);
   renderTypeStrip(view);
+  renderLegend(view);
   renderCrumbs();
   if (view.nodes.length > CAP) {
     cy.elements().remove();
@@ -839,6 +846,7 @@ const NOTE_FIELDS = [
   { name: "status", label: "Status", tag: "select", nodeOnly: true },
   { name: "tags", label: "Tags", tag: "input", nodeOnly: true, placeholder: "net, audio (comma separated)" },
   { name: "rules", label: "Rules", tag: "textarea", nodeOnly: true, fnToo: true, placeholder: "Never do X here… (one rule per line)" },
+  { name: "loaded_how", label: "Loaded how", tag: "input", nodeOnly: true, hideEmpty: true, placeholder: "How the loader starts it: auto-loaded by the language registry" },
   { name: "review", label: "Review", tag: "textarea", fnToo: true, hideEmpty: true, placeholder: "Code-review findings: smells, risks, suggested splits (not the description)" },
 ];
 
@@ -890,6 +898,40 @@ function noteFields(item) {
     .map((spec) => field(spec.name, spec.label, noteInput(spec, item) + noteStatus(spec, item))).join("");
 }
 
+/** The "Loaded by" field: classes that load this one by name (a registry, a tool), from notes or an app rule. */
+function loadedByHtml(node) {
+  const links = (node.loaders || []).map((l) => {
+    const fromNote = l.source === "note";
+    const how = l.how ? ` <span class="count">${esc(l.how)}</span>` : "";
+    const origin = fromNote ? "" : ` <span class="chip quiet" title="The app's loaded-by rule ${esc(l.rule)}">rule ${esc(l.rule)}</span>`;
+    const remove = fromNote ? ` <button class="btn link" data-act="loaded-remove" data-id="${esc(l.from)}">Remove</button>` : "";
+    return `<li><code>${esc(l.name)}</code>${how}${origin}${remove}</li>`;
+  });
+  const list = links.length ? `<ul class="warn-list">${links.join("")}</ul>` : "";
+  const picker = node.faded ? "" : `<input class="loaded-pick" id="loadedPick" type="search" placeholder="Find the class that loads it…" aria-label="Find the class that loads this one" autocomplete="off">
+    <ul class="spec-picks" id="loadedPicks" hidden></ul>`;
+  return list + picker + noteStatus({ name: "loaded_by" }, node);
+}
+
+let loadedPickTimer = 0;
+function findLoaders(query) {
+  clearTimeout(loadedPickTimer);
+  loadedPickTimer = setTimeout(async () => {
+    const box = $("loadedPicks");
+    if (!box) return;
+    let found = [];
+    try {
+      found = query.trim() ? (await api(`/api/find?q=${encodeURIComponent(query)}`)).classes.slice(0, 8) : [];
+    } catch { /* no results */ }
+    box.innerHTML = found.map((c) => `<li><button type="button" data-act="loaded-add" data-id="${esc(c.id)}" title="${esc(c.file)}">${esc(c.name)} <span class="muted small">${esc(c.file)}</span></button></li>`).join("");
+    box.hidden = !found.length;
+  }, 180);
+}
+
+function setLoadedBy(node, ids) {
+  sendNote("/api/notes", "PUT", { key: `node:${node.id}`, fields: { loaded_by: ids } }, "loaded_by");
+}
+
 function growTextarea(box) {
   box.style.height = "auto";
   box.style.height = `${box.scrollHeight}px`;
@@ -900,7 +942,8 @@ function growAllNotes() {
 }
 
 function editingNote() {
-  return document.activeElement?.classList?.contains("note-input") && $("details").contains(document.activeElement);
+  const active = document.activeElement;
+  return (active?.classList?.contains("note-input") || active?.id === "loadedPick") && $("details").contains(active);
 }
 
 function noteStatusOf(name) {
@@ -956,6 +999,7 @@ function onNoteKey(event) {
 }
 
 function onNoteInput(event) {
+  if (event.target.id === "loadedPick") findLoaders(event.target.value);
   if (event.target.tagName === "TEXTAREA") growTextarea(event.target);
 }
 
@@ -1018,6 +1062,18 @@ function linkList(links) {
 function foldList(items, render) {
   if (!items.length) return "";
   return `<details><summary>${items.length}</summary><ul>${items.map(render).join("")}</ul></details>`;
+}
+
+/** A communications node's facts, or a class's remote-call (@rpc) functions. */
+function commFields(node) {
+  const comm = node.comm;
+  const items = (names) => `<ul>${names.map((n) => `<li><code>${esc(n)}</code></li>`).join("")}</ul>`;
+  return comm
+    ? [field("comm_type", "Endpoint", `<code>${esc(comm.type)}</code>`),
+      field("comm_role", "Role", esc(comm.role)),
+      field("comm_owner", "Held by", `<code>${esc(comm.owner)}${comm.field ? "#" + esc(comm.field) : ""}</code> <span class="count">${esc(comm.at.file)}:${comm.at.line}</span>`),
+      field("comm_messages", "Messages", comm.messages.length ? items(comm.messages) : "")].join("")
+    : field("rpcs", `Remote calls (@rpc, ${node.rpcs?.length || 0})`, node.rpcs?.length ? foldList(node.rpcs, (n) => `<li><code>${esc(n)}</code></li>`) : "");
 }
 
 function nodeInfoFields(info) {
@@ -1085,10 +1141,12 @@ function renderNode(node) {
     <div class="sub">${esc(node.kind)}${node.faded ? " · outside the zoom" : ""}</div>
     <dl>
       ${noteFields(node)}
+      ${field("loaded_by", "Loaded by", loadedByHtml(node))}
       ${field("warnings", "Warnings", warningList(node.warnings))}
       ${field("ignored", "Ignored warnings", ignoredList(node))}
-      ${field("file", "File", `<code>${esc(node.file)}:${node.line}</code> <span class="count">${esc(sizeText(node))}</span>`)}
+      ${field("file", "File", node.file ? `<code>${esc(node.file)}:${node.line}</code> <span class="count">${esc(sizeText(node))}</span>` : "")}
       ${field("level", "Level", String(node.level))}
+      ${commFields(node)}
       ${field("flags", startBadges(node).length ? "Starts as" : "Flags", badgeList(node))}
       ${field("tested_by", "Tested by", testedBy(node.tested_by))}
       ${field("cards", "Specs & notes", SpecView.linkedHtml(node.id))}
@@ -1158,6 +1216,8 @@ function onDetailsClick(event) {
   if (!act || !item) return;
   if (act === "help") { event.target.closest(".help").classList.toggle("open"); return; }
   if (act === "open-card") { const b = event.target.closest("[data-act]"); SpecView.open(b.dataset.id, b.dataset.folder); return; }
+  if (act === "loaded-add") setLoadedBy(item.raw, [...new Set([...(item.raw.loaded_by || []), button.dataset.id])]);
+  if (act === "loaded-remove") setLoadedBy(item.raw, (item.raw.loaded_by || []).filter((id) => id !== button.dataset.id));
   if (act === "accept") acceptNote(item, event.target.dataset.name);
   if (act === "still-true") stillTrueNote(item, event.target.dataset.name);
   if (act === "zoom-edge") zoomIntoEdge(item.raw);
@@ -1247,26 +1307,31 @@ function setView(view, load = true) {
 }
 
 function onShow() {
-  state.show = { external: $("showExternal").checked, test: $("showTest").checked,
+  state.show = { external: $("showExternal").checked, comm: $("showComm").checked, test: $("showTest").checked,
     cards: $("showCards").checked };
   loadView();
 }
 
 // ---------- types strip: the code types in this view, each a toggle that hides its classes ----------
 
-const hiddenTypesKey = () => `coderstanding-hidden-types:${CoderApps.current || ""}`;
-
-function loadHiddenTypes() {
-  try { state.hiddenTypes = JSON.parse(localStorage.getItem(hiddenTypesKey()) || "[]"); } catch { state.hiddenTypes = []; }
+/** A per-app saved list (hidden types, hidden line kinds): [load, toggle]; both use localStorage. */
+function savedToggles(prefix, stateKey) {
+  const key = () => `${prefix}:${CoderApps.current || ""}`;
+  const load = () => {
+    try { state[stateKey] = JSON.parse(localStorage.getItem(key()) || "[]"); } catch { state[stateKey] = []; }
+  };
+  const toggle = (item) => {
+    const hidden = new Set(state[stateKey]);
+    if (!hidden.delete(item)) hidden.add(item);
+    state[stateKey] = [...hidden];
+    try { localStorage.setItem(key(), JSON.stringify(state[stateKey])); } catch { /* private window */ }
+    loadView();
+  };
+  return [load, toggle];
 }
 
-function toggleType(type) {
-  const hidden = new Set(state.hiddenTypes);
-  if (!hidden.delete(type)) hidden.add(type);
-  state.hiddenTypes = [...hidden];
-  try { localStorage.setItem(hiddenTypesKey(), JSON.stringify(state.hiddenTypes)); } catch { /* private window */ }
-  loadView();
-}
+const [loadHiddenTypes, toggleType] = savedToggles("coderstanding-hidden-types", "hiddenTypes");
+const [loadHiddenKinds, toggleKind] = savedToggles("coderstanding-hidden-kinds", "hiddenKinds");
 
 /** Light the boxes of one type while its chip is hovered (`null` clears). */
 function highlightType(type) {
@@ -1293,6 +1358,33 @@ function renderTypeStrip(view) {
     button.innerHTML = `<b>${esc(type)}</b> ${count}`;
     return button;
   }));
+}
+
+/** Light the lines of one kind while its legend entry is hovered (`null` clears). */
+function highlightKind(kind) {
+  cy.edges().removeClass("kind-hit");
+  if (kind) cy.edges().filter((e) => e.data("raw").kinds.includes(kind)).addClass("kind-hit");
+}
+
+/** Legend entries with a data-kind are toggles; the ones the view hides look off. */
+function renderLegend(view) {
+  const hidden = new Set(view.hidden_kinds || []);
+  document.querySelectorAll(".legend [data-kind]").forEach((entry) => {
+    const off = hidden.has(entry.dataset.kind);
+    entry.classList.toggle("off", off);
+    entry.setAttribute("aria-pressed", String(!off));
+    entry.title = `${off ? "Hidden: click to show" : "Click to hide"} ${entry.dataset.kind} lines`;
+  });
+}
+
+function bindLegend() {
+  const legend = document.querySelector(".legend");
+  legend.addEventListener("click", (event) => {
+    const entry = event.target.closest("[data-kind]");
+    if (entry) toggleKind(entry.dataset.kind);
+  });
+  legend.addEventListener("mouseover", (event) => highlightKind(event.target.closest("[data-kind]")?.dataset.kind || null));
+  legend.addEventListener("mouseleave", () => highlightKind(null));
 }
 
 function bindTypeStrip() {
@@ -1360,6 +1452,7 @@ function toggleSide(force) {
 
 function bindControls() {
   bindTypeStrip();
+  bindLegend();
   $("rulerCols").addEventListener("click", (event) => {
     const column = event.target.closest("[data-level]");
     if (column && !column.disabled) setLevel(Number(column.dataset.level));
@@ -1376,6 +1469,7 @@ function bindControls() {
   $("viewAll").addEventListener("click", () => setView("all"));
   $("viewConcrete").addEventListener("click", () => setView("concrete"));
   $("showExternal").addEventListener("change", onShow);
+  $("showComm").addEventListener("change", onShow);
   $("showTest").addEventListener("change", onShow);
   $("showCards").addEventListener("change", onShow);
   $("filter").addEventListener("change", onFilter);
@@ -1574,6 +1668,7 @@ async function init() {
     $("scanned").textContent = `scanned ${meta.scannedAt}`;
     state.level = Math.max(meta.domains ? 0 : 1, Math.min(state.level, meta.max_level));
     loadHiddenTypes();
+    loadHiddenKinds();
     const params = applyUrlOptions();
     const back = params.get("level") ? null : CoderApps.takeState();  // returning to an app
     if (back) restoreAppState(back);

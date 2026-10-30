@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from . import userconfig
-from .apps import (AppError, old_scanner, app_details, clean_name, default_data_dir, find_app, load_registry,
+from .apps import (AppError, RELEVEL_SCOPES, old_scanner, parse_setting, app_details, clean_name, default_data_dir, find_app, load_registry,
                    register, remove_app, rename_app)
 from .filewalk import assign_files
 from .graph_json import graph_summary
@@ -22,9 +22,32 @@ BELOW_NORMAL_PRIORITY_CLASS = 0x00004000  # Windows creation flag
 PACKAGE_PARENT = str(Path(__file__).resolve().parents[1])  # so `-m coderstanding` finds us
 
 
-def scan_command(app):
-    """The low-priority child process that rescans `app` into its data folder."""
+def scan_options(body):
+    """Checked one-run scan options from the page: {"settings": {name: text}, "relevel": "ai"|"all",
+    "resetLevelNames": bool}; all optional. Bad input raises AppError."""
+    body = body or {}
+    settings = {str(k): str(v) for k, v in (body.get("settings") or {}).items()}
+    scope = body.get("relevel") or None
+    reset = bool(body.get("resetLevelNames"))
+    if scope and scope not in RELEVEL_SCOPES:
+        raise AppError(f"relevel must be one of {', '.join(RELEVEL_SCOPES)}")
+    if reset and not scope:
+        raise AppError("resetLevelNames only goes with relevel")
+    for name, text in settings.items():
+        parse_setting(name, text)
+    return {"settings": settings, "relevel": scope, "resetLevelNames": reset}
+
+
+def scan_command(app, options=None):
+    """The low-priority child process that rescans `app` into its data folder (`options`: scan_options)."""
+    options = options or {}
     command = [sys.executable, "-m", "coderstanding", "rescan", str(app.root), "--data", str(app.data)]
+    for name, text in options.get("settings", {}).items():
+        command += ["--setting", f"{name}={text}"]
+    if options.get("relevel"):
+        command += ["--relevel", options["relevel"]]
+    if options.get("resetLevelNames"):
+        command.append("--reset-level-names")
     return command if userconfig.windows() else ["nice", "-n", "19", *command]
 
 
@@ -33,10 +56,10 @@ def scan_priority_flags():
     return BELOW_NORMAL_PRIORITY_CLASS if userconfig.windows() else 0
 
 
-def scan_in_child(app):
+def scan_in_child(app, options=None):
     """Run the low-priority rescan child and wait: {"state": "done"} or {"state": "error", "error"}.
     The one way to scan in the background (the page's Refresh/Add project and `coderstanding add`)."""
-    done = run_quiet(scan_command(app), flags=scan_priority_flags(), capture_output=True, text=True,
+    done = run_quiet(scan_command(app, options), flags=scan_priority_flags(), capture_output=True, text=True,
                      env={**os.environ, "PYTHONPATH": PACKAGE_PARENT})
     if done.returncode == 0:
         return {"state": "done"}
@@ -142,19 +165,21 @@ class Hub:
         self.forget(name)
         return {"renamed": [name, new], **self.listing(details=True)}
 
-    def start_scan(self, name):
-        """Rescan in the background; the listing shows progress and any error."""
+    def start_scan(self, name, body=None):
+        """Rescan in the background; the listing shows progress and any error. `body`: optional
+        one-run scan_options (settings, relevel)."""
         app = self.app(name)
+        options = scan_options(body)
         with self.lock:
             if self.scans.get(app.name, {}).get("state") == "running":
                 raise AppError(f"{app.name} is already being scanned")
             self.scans[app.name] = {"state": "running"}
-        threading.Thread(target=self.run_scan, args=(app,), daemon=True).start()
+        threading.Thread(target=self.run_scan, args=(app, options), daemon=True).start()
         return self.listing()
 
-    def run_scan(self, app):
+    def run_scan(self, app, options=None):
         try:
-            result = scan_in_child(app)
+            result = scan_in_child(app, options)
         except OSError as error:
             result = {"state": "error", "error": str(error)}
         self.scans[app.name] = result

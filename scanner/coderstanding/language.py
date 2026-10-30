@@ -55,6 +55,9 @@ class Ref:
     scope: str = ""  # dotted enclosing scope for name lookup (C#: "NS.Outer"), "" = global
     auto: str = ""  # auto text for the edge ("signal hit -> _on_hit")
     from_member: str = None  # enclosing function/method name, INIT_MEMBER, FIELD_MEMBER; None = n/a
+    # Only a guess that the name is a page global (classic browser script): resolves through
+    # the scripts sharing a page with this file, else the ref is dropped (no external ref).
+    shared: bool = False
 
 
 @dataclass
@@ -93,6 +96,12 @@ class FileResult:
     # exported name -> Target, resolved in this file; `Target(path=..., member=name)` asks for them.
     exports: dict = field(default_factory=dict)
     star_exports: list = field(default_factory=list)  # paths whose names this file re-exports
+    # Browser pages (HTML reader): repo paths of the classic scripts the page loads, in order.
+    # Those scripts share one global scope.
+    page_scripts: list = field(default_factory=list)
+    # A classic script's top-level names (functions, classes, vars, `window.X =`) -> Target in
+    # this file; other scripts loaded by the same page find them as bare names (Ref.shared).
+    page_globals: dict = field(default_factory=dict)
 
 
 @dataclass

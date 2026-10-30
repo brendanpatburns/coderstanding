@@ -210,10 +210,10 @@ def test_view_command_matches_shared_text_and_sets_function_notes(app, capsys):
 
 
 def test_settings_round_trip_and_stale(app, capsys):
-    assert run(capsys, "settings", "game") == ["game settings hub_threshold=auto"]
-    assert run(capsys, "settings", "game", "hub_threshold=1") == ["game settings hub_threshold=1"]
+    assert run(capsys, "settings", "game") == ["game settings hub_threshold=auto max_level=5"]
+    assert run(capsys, "settings", "game", "hub_threshold=1") == ["game settings hub_threshold=1 max_level=5"]
     run(capsys, "rescan", "game")
-    assert run(capsys, "settings", "game") == ["game settings hub_threshold=1"]
+    assert run(capsys, "settings", "game") == ["game settings hub_threshold=1 max_level=5"]
     header = run(capsys, "graph", "game")[0]
     assert "(hubs ≥ 1: " in header and "[hub " in header
     run(capsys, "rescan", "game", "--data", str(app / "other"))
@@ -235,7 +235,7 @@ def test_hub_in_node_line_and_notes_level_wins(app, capsys):
 def test_hub_threshold_parsing(app, capsys, tmp_path):
     main(["add", "g2", str(app), "--data", str(tmp_path / "d2"), "--hub-threshold", "30"])
     capsys.readouterr()
-    assert run(capsys, "settings", "g2") == ["g2 settings hub_threshold=30"]
+    assert run(capsys, "settings", "g2") == ["g2 settings hub_threshold=30 max_level=5"]
     with pytest.raises(SystemExit):
         main(["add", "g3", str(app), "--hub-threshold", "lots"])
     with pytest.raises(SystemExit):
@@ -275,7 +275,7 @@ def test_rules_add_list_remove_and_apply(app, capsys, tmp_path):
         main(["rules", "game", "remove", "9"])
     with pytest.raises(SystemExit):
         main(["rules", "game", "add", "x/**", "ignore=bogus"])
-    assert run(capsys, "settings", "game") == ["game settings hub_threshold=auto"]  # rules not a scan setting
+    assert run(capsys, "settings", "game") == ["game settings hub_threshold=auto max_level=5"]  # rules not a scan setting
 
 
 def test_scan_with_output_keeps_cache_out_of_repo(tmp_path, capsys):

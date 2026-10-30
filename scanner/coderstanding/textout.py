@@ -143,7 +143,28 @@ def format_graph(app, view, all_calls=False, short_name=str, graph=None):
     header = f"{app} {level_label(view.get('scale'), view['level'])} {view['view']} {counts['shown']}/{counts['total']}"
     header += hubs_text(graph, short_name) if graph else ""
     return "\n".join([header, *edge_lines(view, all_calls, short_name),
-                      *alone_line(view, labels(view))])
+                      *alone_line(view, labels(view)), *comm_lines(view, labels(view))])
+
+
+MAX_RPCS_SHOWN = 8
+
+
+def comm_lines(view, names):
+    """`comm <endpoint>: owner Net, listens, messages a, b` per communications node on screen,
+    and `rpc <class>: f, g +N` per class with `@rpc` functions."""
+    lines = []
+    for node in view["nodes"]:
+        comm = node.get("comm")
+        if comm:
+            parts = [f"owner {comm['owner']}", comm["role"], *(["messages " + ", ".join(comm["messages"])]
+                                                              if comm["messages"] else [])]
+            lines.append(f"comm {names[node['id']]}: " + ", ".join(p for p in parts if p))
+        rpcs = node.get("rpcs") or []
+        if rpcs:
+            more = len(rpcs) - MAX_RPCS_SHOWN
+            lines.append(f"rpc {names[node['id']]}: " + ", ".join(rpcs[:MAX_RPCS_SHOWN])
+                         + (f" +{more}" if more > 0 else ""))
+    return lines
 
 
 def rules_lines(label, rules):
@@ -199,6 +220,9 @@ def node_detail(node):
         lines.append("tests: " + ", ".join(node["tested_by"][:MAX_TESTS_SHOWN])
                      + (f" +{len(node['tested_by']) - MAX_TESTS_SHOWN} more"
                         if len(node["tested_by"]) > MAX_TESTS_SHOWN else ""))
+    if node.get("loaders"):
+        lines.append("loaded by: " + ", ".join(
+            l["name"] + (f" ({l['how']})" if l["how"] else "") for l in node["loaders"]))
     lines += rules_lines("rules" + stale_mark(node, "rules"), node.get("rules"))
     lines += review_line(node, "")
     description = node.get("description")
@@ -314,7 +338,10 @@ def view_command(app, level=1, concrete=False, show=None, zoom=None, expand=(), 
         parts += ["--select", select]
     for hidden in show.get("hide_types") or []:
         parts += ["--hide-type", hidden]
-    flags = [("--tests", show.get("test")), ("--no-external", show.get("external") is False)]
+    for hidden in show.get("hide_kinds") or []:
+        parts += ["--hide-kind", hidden]
+    flags = [("--tests", show.get("test")), ("--no-external", show.get("external") is False),
+             ("--no-comm", show.get("comm") is False)]
     parts += [flag for flag, on in flags if on]
     return "$ " + " ".join(shlex.quote(p) for p in parts)
 
@@ -357,9 +384,10 @@ def format_view(app, view, command, select=None, short_name=str):
         body = format_graph(app, view, short_name=short_name)
     names = labels(view)
     lines = [command, body]
-    hidden = view.get("hidden_types", [])
-    if hidden:
-        lines.insert(1, "hidden types: " + " ".join(hidden))
+    for name in ("kinds", "types"):  # inserted at 1, so "hidden types:" ends up first
+        hidden = view.get("hidden_" + name, [])
+        if hidden:
+            lines.insert(1, f"hidden {name}: " + " ".join(hidden))
     for node_id in view["expanded"]:
         lines += function_lines(view, node_id, names, short_name)
     if select:

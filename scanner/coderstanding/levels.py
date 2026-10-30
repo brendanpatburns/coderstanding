@@ -9,6 +9,7 @@ from .testcode import is_test
 TOP_FLAGS = ("singleton",) + APP_START_FLAGS
 TOOL_DISTANCE = 1  # with an app start, tools start one step down: level 2, their parts below
 DEFAULT_MAX_LEVEL = 5
+MAX_LEVELS = 12  # the depth ruler's most levels (not counting level 0)
 AUTO = "auto"  # hub threshold: same as the god-class threshold
 OFF = 0  # hub threshold: no hubs
 
@@ -26,6 +27,17 @@ def parse_hub_threshold(value):
         raise ValueError(f"hub_threshold must be a number, auto or off, got {value}") from None
     if number < 0:
         raise ValueError(f"hub_threshold must not be negative, got {value}")
+    return number
+
+
+def parse_max_level(value):
+    """The deepest level the guess uses (1..MAX_LEVELS, text or number) -> int."""
+    try:
+        number = int(str(value).strip())
+    except ValueError:
+        raise ValueError(f"max_level must be a number, got {value}") from None
+    if not 1 <= number <= MAX_LEVELS:
+        raise ValueError(f"max_level must be 1-{MAX_LEVELS}, got {value}")
     return number
 
 
