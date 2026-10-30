@@ -38,11 +38,11 @@ coderstanding graph myapp 1          # top level as slim text (scans on first us
 coderstanding node myapp Simulation  # one class: neighbours, file, tests, rules
 coderstanding zoom myapp A B         # what runs between A and B
 coderstanding serve [myapp]          # viewer at http://127.0.0.1:8517/ for every registered app (opens on myapp)
-coderstanding rescan myapp           # scan now into its data folder (what the viewer's Rescan runs, niced)
+coderstanding rescan myapp           # scan now into its data folder (what the viewer's Refresh runs, niced)
 ```
 
-The viewer's app picker (toolbar, or `[` / `]`) switches between registered apps, rescans one, and
-"Scan a folder…" registers and scans a new repo (data in `~/.local/share/coderstanding/<name>`).
+The viewer's app picker (toolbar, or `[` / `]`) switches between registered projects, refreshes one, and
+"Projects… → Add project…" registers and scans a new repo (data in `~/.local/share/coderstanding/<name>`).
 
 `--data` keeps graph, notes and layout out of the repo; leave it out to use `<repo>/.coderstanding/`.
 Registered apps live in `~/.config/coderstanding/apps.json`. The scan reruns by itself when files
@@ -59,7 +59,7 @@ change. `coderstanding <command> --help` lists every option.
 | `curate <app>` / `set <app> ...` | fill in levels, domains, hints, rules |
 | `rules <app> [add "<glob>" ignore=.. \| remove N]` | ignore warning kinds by folder (and lang/kind), no rescan |
 | `settings <app>` | scan settings (hub threshold) |
-| `rename <old> <new>` / `remove <app> [--delete-data] [--delete-notes]` | registry upkeep (also the viewer's Apps… modal) |
+| `rename <old> <new>` / `remove <app> [--delete-data] [--delete-notes]` | registry upkeep (also the viewer's Projects… modal) |
 
 ## Hosted page (optional)
 

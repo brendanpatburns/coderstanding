@@ -17,7 +17,7 @@ test("ago words", () => {
 test("option text shows name, last scan and size", () => {
   const now = Date.parse("2026-10-29T12:00:00Z");
   assert.equal(apps.optionText({ name: "mygame", scannedAt: "2026-10-29T11:48:00Z", nodes: 340 }, now), "mygame · 12 min ago · 340 classes");
-  assert.equal(apps.optionText({ name: "x", scanning: true, nodes: null }, now), "x · scanning…");
+  assert.equal(apps.optionText({ name: "x", scanning: true, nodes: null }, now), "x · refreshing…");
 });
 
 test("chooseApp: hash, then serve's app, then last used, then first", () => {
@@ -59,7 +59,7 @@ test("empty page: start-the-helper how-to on the hosted page, else how to add an
   assert.match(html, /systemctl --user start coderstanding-helper/);
   assert.match(html, /scripts\/install-helper\.sh/);
   Object.assign(apps, { hosted: false });
-  assert.match(apps.emptyHtml(), /No apps registered.*&lt;name&gt;/);
+  assert.match(apps.emptyHtml(), /No projects registered.*&lt;name&gt;/);
 });
 
 test("app manager: sizes and the facts line", () => {
@@ -68,6 +68,6 @@ test("app manager: sizes and the facts line", () => {
   assert.equal(apps.bytesText(null), "");
   const now = Date.parse("2026-10-29T12:00:00Z");
   assert.equal(apps.factsText({ scannedAt: "2026-10-29T11:48:00Z", scannerVersion: 7, staleScanner: true, nodes: 3, edges: 4,
-    graphBytes: 12_000, notes: 2, tours: 1 }, now), "12 min ago · scanner 7 (old, rescan) · 3 classes, 4 connections · graph.json 12 kB · 2 notes · 1 tours");
+    graphBytes: 12_000, notes: 2, tours: 1 }, now), "12 min ago · scanner 7 (old, refresh) · 3 classes, 4 connections · graph.json 12 kB · 2 notes · 1 tours");
   assert.equal(apps.factsText({ scannedAt: null, nodes: null, notes: 0, tours: 0 }, now), "never scanned · 0 notes · 0 tours");
 });

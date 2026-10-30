@@ -23,10 +23,9 @@
     <header class="top">
       <h1 id="repoName">Coderstanding</h1>
       <div class="appbar">
-        <select id="appPick" class="select" aria-label="App" title="Switch app ([ and ] flick through them)"></select>
-        <button class="btn small" id="appsBtn" title="Every app: scan facts, open, rescan, rename, remove">Apps…</button>
-        <button class="btn small" id="rescanBtn" title="Scan this app again (runs niced in the background)">Rescan</button>
-        <button class="btn small" id="scanFolderBtn" title="Register and scan a repo folder on this computer">Scan a folder…</button>
+        <select id="appPick" class="select" aria-label="Project" title="Switch project ([ and ] flick through them)"></select>
+        <button class="btn small" id="appsBtn" title="Every project: facts, open, refresh, rename, remove, add">Projects…</button>
+        <button class="btn small" id="rescanBtn" title="Read the project's code again (runs niced in the background)">Refresh</button>
         <span class="appmsg" id="appMsg" role="status"></span>
         <span class="readonly-label" id="readOnlyLabel" hidden></span>
       </div>
@@ -41,14 +40,14 @@
     </header>
 
     <dialog class="apps-dialog" id="appsDialog" aria-labelledby="appsTitle">
-      <header><h2 id="appsTitle">Apps on this PC</h2><button class="btn small" id="appsClose" aria-label="Close">Close</button></header>
+      <header><h2 id="appsTitle">Projects on this PC</h2><button class="btn small" id="appsClose" aria-label="Close">Close</button></header>
       <ul class="apps-list" id="appsList"></ul>
-      <footer><span class="appmsg" id="appsMsg" role="status"></span><span class="grow"></span><button class="btn small" id="appsScanFolder">Scan a folder…</button></footer>
+      <footer><span class="appmsg" id="appsMsg" role="status"></span><span class="grow"></span><button class="btn small" id="appsScanFolder" title="Register a repo folder on this computer and read its code">Add project…</button></footer>
     </dialog>
     <form class="scanform" id="scanForm" hidden>
-      <label>Folder <input class="note-input" id="scanPath" placeholder="/home/me/code/my-app" size="42" required></label>
+      <label>Folder <input class="note-input" id="scanPath" placeholder="/home/me/code/my-project" size="42" required></label>
       <label>Name <input class="note-input" id="scanName" size="18" required></label>
-      <button class="btn small" id="scanGo" type="submit">Scan</button>
+      <button class="btn small" id="scanGo" type="submit">Add project</button>
       <button class="btn small" id="scanCancel" type="button">Cancel</button>
     </form>
 

@@ -1192,14 +1192,14 @@ was left in place for the user to clear.
 
 ### App manager (built 2026-10-30)
 
-Toolbar "Apps…" opens a modal listing every app the helper knows: name, repo and data folders,
-last scan, scanner version (old ones flagged "rescan"), classes/connections, graph.json size,
-notes and tours counts, scan errors. Per app: Open, Rescan, Rename (registry name only; files
+Toolbar "Projects…" opens a modal listing every project the helper knows: name, repo and data folders,
+last scan, scanner version (old ones flagged "refresh"), classes/connections, graph.json size,
+notes and tours counts, scan errors. Per app: Open, Refresh, Rename (registry name only; files
 stay put), Remove. Remove asks inside the modal: "Remove from the list (keep its files)" or
 "Remove and delete its scan data" (graph.json, cache/, layout.json, an old tour_code.json); an
 extra box, listing them by name, also deletes notes.jsonl, specs/, tours/, settings.json in the
 data folder. Nothing outside the data folder is ever deleted, and a data folder that is (or holds)
-the repo, or sits in the repo anywhere but `<repo>/.coderstanding`, is refused. "Scan a folder…"
+the repo, or sits in the repo anywhere but `<repo>/.coderstanding`, is refused. "Add project…"
 sits at the bottom. API (helper only, the usual write guards): `GET /api/apps?details=1`,
 `DELETE /api/apps/<name>?data=0|1&notes=0|1`, `PATCH /api/apps/<name>` `{"name"}`; CLI
 `coderstanding remove <app> [--delete-data [--delete-notes]]`, `coderstanding rename <old> <new>`;
@@ -1223,8 +1223,8 @@ Replaced by v3: reads and writes all go to the helper, nothing is pushed.
 - **Public behind a login** (2026-10-29; was LAN-only earlier that day): the reverse proxy
   sends the host to the login proxy, which passes only allowed emails; own TLS certificate,
   Force SSL + HSTS. The maintainer's setup: `docs/private/LAB.md`.
-- **Scanning never happens on the lab**; it happens on the PC that opens the page (Rescan and
-  Scan a folder go to the helper). A browser-only scanner (Pyodide) could come later.
+- **Scanning never happens on the lab**; it happens on the PC that opens the page (Refresh and
+  Add project go to the helper). A browser-only scanner (Pyodide) could come later.
 
 ## 13. Testing
 

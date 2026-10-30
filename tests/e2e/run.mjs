@@ -819,7 +819,7 @@ async function main() {
       }
     }
 
-    await step("app picker: switch apps and back, rescan, scan a folder", async () => {
+    await step("app picker: switch apps and back, refresh, Projects… → Add project…", async () => {
       const second = join(data, "second-repo");
       mkdirSync(second, { recursive: true });
       const withMain = (name) => `class ${name}:\n    pass\n\nif __name__ == "__main__":\n    ${name}()\n`;  // a start, so level 1 shows it
@@ -863,7 +863,9 @@ async function main() {
       const third = join(data, "third-repo");
       mkdirSync(third, { recursive: true });
       writeFileSync(join(third, "delta.py"), withMain("Delta"));
-      await page.clickOn("#scanFolderBtn");
+      await page.clickOn("#appsBtn");  // Projects…
+      await page.waitFor("document.getElementById('appsDialog').open", { what: "Projects… modal open" });
+      await page.clickOn("#appsScanFolder");  // Add project…
       await page.eval(`(() => { const p = document.getElementById('scanPath'); p.value = ${JSON.stringify(third)}; p.dispatchEvent(new Event('input')); })()`);
       assert(await page.eval("document.getElementById('scanName').value") === "third-repo", "name suggested from the folder");
       await page.clickOn("#scanGo");
@@ -909,7 +911,7 @@ async function main() {
         const label = await page.eval("({ shown: !document.getElementById('readOnlyLabel').hidden, text: document.getElementById('readOnlyLabel').textContent })");
         assert(label.shown && label.text === "Running on this PC", `label: ${JSON.stringify(label)}`);
         assert(await page.eval(`CoderApps.url("/api/view") === "${helper}/api/view?app=" + encodeURIComponent(CoderApps.current)`), "reads go to the helper");
-        assert(await page.eval("!document.getElementById('rescanBtn').hidden && !document.getElementById('rescanBtn').disabled && !document.getElementById('scanFolderBtn').hidden"), "Rescan / Scan a folder shown");
+        assert(await page.eval("!document.getElementById('rescanBtn').hidden && !document.getElementById('rescanBtn').disabled"), "Refresh shown");
         assert(!await page.eval("document.getElementById('modeEdit').disabled"), "Edit layout enabled");
         const main = await qa('node("main.gd")');
         await page.click(main.x + 20, main.y + 4);

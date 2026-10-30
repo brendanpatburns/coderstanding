@@ -43,7 +43,7 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   to push to the server; deploying the hosted page only copies the viewer, when asked.
 - Registry upkeep: `coderstanding rename <old> <new>`; `coderstanding remove <app>` (files stay),
   `--delete-data` (graph, cache, layout), `--delete-notes` (also notes, specs, tours, settings:
-  only when the user asks). The viewer's "Apps…" modal does the same.
+  only when the user asks). The viewer's "Projects…" modal does the same.
 - Before opening a file: `coderstanding outline <app> Net` lists its functions with
   `file:first-last` lines, so you read only that range (`Net#join` = one function).
 - Looking for something by name or topic: `coderstanding find <app> word [word...]` (all words

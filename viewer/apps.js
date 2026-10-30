@@ -1,4 +1,4 @@
-// App picker: which registered app the viewer shows, Rescan, and "Scan a folder…".
+// Project picker (the UI says "project"; code, API and #hash keep "app"): which registered project the viewer shows, Refresh, and "Add project…".
 // One server serves every app; each API call carries ?app=<name>. Switching saves the camera,
 // level and zoom of the app you leave (sessionStorage, used once) and reloads cleanly on #<name>.
 // The hosted page is only a shell: its hosted.json names the local helper
@@ -15,7 +15,7 @@ const NO_HELPER_HTML = "<strong>Open this page on your PC with Coderstanding run
   + "<code>systemctl --user start coderstanding-helper</code> (or the tray icon), then reload. "
   + "If the browser asks to reach local devices, allow it.<br>"
   + "Not installed yet? Run <code>scripts/install-helper.sh</code> once in the Coderstanding repo.";
-const NO_APPS_HTML = "No apps registered. Use “Scan a folder…” above, or "
+const NO_APPS_HTML = "No projects registered. Use “Projects… → Add project…” above, or "
   + "<code>coderstanding add &lt;name&gt; &lt;folder&gt;</code>.";
 
 const store = (kind) => { try { return window[kind]; } catch { return null; } };
@@ -37,7 +37,7 @@ function ago(iso, now = Date.now()) {
 
 function optionText(app, now) {
   const size = app.nodes == null ? "" : ` · ${app.nodes} classes`;
-  return `${app.name} · ${app.scanning ? "scanning…" : ago(app.scannedAt, now)}${size}`;
+  return `${app.name} · ${app.scanning ? "refreshing…" : ago(app.scannedAt, now)}${size}`;
 }
 
 /** Which app to open: #hash, else the app serve was given, else the last one used, else the first. */
@@ -135,7 +135,7 @@ function fillPicker() {
   const here = CoderApps.list.find((app) => app.name === CoderApps.current);
   $("appPick").title = here ? `${here.path}\ndata: ${here.data}` : "";
   $("rescanBtn").disabled = !here || here.scanning;
-  $("rescanBtn").textContent = here?.scanning ? "Scanning…" : "Rescan";
+  $("rescanBtn").textContent = here?.scanning ? "Refreshing…" : "Refresh";
 }
 
 /** Poll until `name` stops scanning; resolves to its final listing entry. */
@@ -156,9 +156,9 @@ const send = (path, body) => CoderApps.request(path, { method: "POST",
 /** Wait for a scan to end, then show the result:
  * error line, or reload (`switchTo`: open that app). */
 async function finishScan(name, switchTo) {
-  message(`Scanning ${name}…`);
+  message(`Refreshing ${name}…`);
   const app = await untilScanned(name);
-  if (app?.error) { message(`Scan failed: ${app.error}`, true); return; }
+  if (app?.error) { message(`Refresh failed: ${app.error}`, true); return; }
   message("");
   if (switchTo) open(name, false); else open(name);
 }
@@ -169,7 +169,7 @@ async function rescan() {
   try {
     await send("/api/rescan", {});
     await finishScan(CoderApps.current, false);
-  } catch (error) { message(`Rescan failed: ${error.message}`, true); fillPicker(); }
+  } catch (error) { message(`Refresh failed: ${error.message}`, true); fillPicker(); }
 }
 
 async function scanFolder(event) {
@@ -216,10 +216,10 @@ function bytesText(bytes) {
 
 /** The facts line of one app in the manager. */
 function factsText(app, now) {
-  const scanner = app.scannerVersion == null ? "" : ` · scanner ${app.scannerVersion}${app.staleScanner ? " (old, rescan)" : ""}`;
+  const scanner = app.scannerVersion == null ? "" : ` · scanner ${app.scannerVersion}${app.staleScanner ? " (old, refresh)" : ""}`;
   const counts = app.nodes == null ? "" : ` · ${app.nodes} classes, ${app.edges} connections`;
   const graph = app.graphBytes == null ? "" : ` · graph.json ${bytesText(app.graphBytes)}`;
-  return `${app.scanning ? "scanning…" : ago(app.scannedAt, now)}${scanner}${counts}${graph}`
+  return `${app.scanning ? "refreshing…" : ago(app.scannedAt, now)}${scanner}${counts}${graph}`
     + ` · ${app.notes} notes · ${app.tours} tours`;
 }
 
@@ -279,9 +279,9 @@ async function rescanApp(app) {
     app.scanning = true;
     renderManager();
     const done = await untilScanned(app.name);
-    appsMessage(done?.error ? `Scan failed: ${done.error}` : `Rescanned ${app.name}`, Boolean(done?.error));
+    appsMessage(done?.error ? `Refresh failed: ${done.error}` : `Refreshed ${app.name}`, Boolean(done?.error));
     await loadManager();
-  } catch (error) { appsMessage(`Rescan failed: ${error.message}`, true); }
+  } catch (error) { appsMessage(`Refresh failed: ${error.message}`, true); }
 }
 
 function renameRow(app) {
@@ -322,7 +322,7 @@ function appRow(app, now) {
     app.error && el("div", { className: "app-error" }, `Scan error: ${app.error}`),
     busy && manager.mode === "rename" ? renameRow(app) : el("div", { className: "app-actions" },
       el("button", { className: "btn small", disabled: here, onclick: () => open(app.name) }, "Open"),
-      el("button", { className: "btn small", disabled: app.scanning, onclick: () => rescanApp(app) }, app.scanning ? "Scanning…" : "Rescan"),
+      el("button", { className: "btn small", disabled: app.scanning, onclick: () => rescanApp(app) }, app.scanning ? "Refreshing…" : "Refresh"),
       el("button", { className: "btn small", onclick: act("rename") }, "Rename"),
       el("button", { className: "btn small", onclick: act("remove") }, "Remove…")),
     busy && manager.mode === "remove" && removeRow(app));
@@ -331,7 +331,7 @@ function appRow(app, now) {
 function renderManager() {
   const now = Date.now();
   $("appsList").replaceChildren(...manager.apps.map((app) => appRow(app, now)));
-  if (!manager.apps.length) $("appsList").append(el("li", { className: "muted" }, "No apps registered yet."));
+  if (!manager.apps.length) $("appsList").append(el("li", { className: "muted" }, "No projects registered yet."));
 }
 
 async function openManager() {
@@ -376,7 +376,6 @@ CoderApps.start = async () => {
   $("appPick").addEventListener("change", () => open($("appPick").value));
   $("rescanBtn").addEventListener("click", rescan);
   bindManager();
-  $("scanFolderBtn").addEventListener("click", () => toggleScanForm());
   $("scanCancel").addEventListener("click", () => toggleScanForm(false));
   $("scanForm").addEventListener("submit", scanFolder);
   $("scanPath").addEventListener("input", suggestName);
