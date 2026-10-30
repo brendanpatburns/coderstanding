@@ -1,5 +1,5 @@
 // Source of truth for what each note field means: the "?" tips in the details panel and the
-// "Note fields" block of the help text read this map. docs/FOR_CLAUDE.md and docs/DESIGN.md
+// "Note fields" block of the help text read this map. docs/AI_GUIDE.md and docs/DESIGN.md
 // repeat the same wording (tests/js/test_field_help.mjs checks they stay in sync).
 (function () {
 const FIELD_HELP = {

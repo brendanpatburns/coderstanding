@@ -1,13 +1,37 @@
-# Coderstanding for Claude and agents
+# Coderstanding: guide for AI coding agents
 
-`coderstanding` is on PATH (see README). The `coderstanding` Claude skill
-(`~/.claude/skills/coderstanding/SKILL.md`, installed by `coderstanding skill install`) points here.
-Keep it short; it is meant to be pasted into briefs or loaded by a skill.
-Registered apps: `~/.config/coderstanding/apps.json`.
+Coderstanding prints a repo's structure (classes, connections, functions, notes, specs, tours) as
+short text, so you read the map instead of grepping and opening files. It works with any agent
+that can run shell commands (Claude Code, GitHub Copilot, Cursor, others). Everything is local and
+offline: no code leaves the machine. `coderstanding guide` prints this file from the installed
+package; `coderstanding <command> --help` lists every option.
 
-## When to use it
-- Before reading files in a registered repo (`coderstanding add <app> <path>` registers one),
-  run `coderstanding graph <app> 1` to see the top level.
+## Quick start
+1. Find the app name: the repo's agent instructions name it. Not registered yet?
+   `coderstanding add <app> <repo folder>` (add `--data DIR` to keep the map out of the repo).
+   Registered apps are in `apps.json` in the per-user config folder (`~/.config/coderstanding/`,
+   `%APPDATA%\coderstanding\` on Windows).
+2. `coderstanding graph <app> 1` is the top level. Then `node`, `zoom`, `outline`, `find`,
+   `impact` as below; open real files only for what they point at.
+3. Cheat sheet:
+
+| You want | Run |
+|---|---|
+| the big picture | `graph <app> 1` (`0` = domains, higher = more detail) |
+| one class | `node <app> <name>`; who calls what inside: `--functions` |
+| one connection | `zoom <app> <from> <to>` |
+| a name or topic | `find <app> <words...>` |
+| a class's functions with line ranges | `outline <app> <name>` |
+| who breaks if I change it, tests to rerun | `impact <app> <name[#function]>`, `tests <app> <name>` |
+| context to paste into another agent | `brief <app> <targets...>` |
+| what the user sees in the viewer | `view <app> --level N [--focus A A>B A#f]` |
+| the plan, the user's notes | `specs <app>`, `memos <app>` |
+| how a flow works | `tours <app>`, `tour <app> <id>` |
+| problems | `warnings <app>` |
+| proof that it is offline | `privacy` |
+
+## Commands in detail
+- Before reading files in a registered repo, run `coderstanding graph <app> 1` to see the top level.
 - To understand one connection, `coderstanding zoom <app> <from> <to> [--level L]`; one class,
   `coderstanding node <app> <name> [level]`. `graph <app> 0` shows domains.
 - Names: full id or a unique short name (`Net`, `net.gd`, `src/net.gd`); ambiguous names
@@ -36,7 +60,6 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   drafts the user accepts in the viewer; a field the user filled in is kept (`kept your stage`):
   tell the user instead. `--by NAME` writes as that person (only when asked). When you finish a
   feature, move its spec to `review` (or `implemented` when the user said so).
-- To see packages/addons and who uses them, `coderstanding deps <app>`.
 - After changing a class, `coderstanding tests <app> <name>` lists the test files to run
   (`--deep` adds the tests of its direct users). Tests are hidden in graph/zoom/node unless
   `--tests`.
@@ -92,10 +115,29 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   (`[id] step 2 Title path:line author: text`, replies indented; `--all` adds resolved threads);
   the lean `tour` text shows `(2 open comments)` on a step's title line. Comment with
   `coderstanding comment <app> tour:<id>[#<step N>] "text" [--line N] [--quote "words"]`
-  (Markdown and `[[links]]` work; you write as `claude`, marked AI). **After acting on a comment,
+  (Markdown and `[[links]]` work; your comments are marked AI). **After acting on a comment,
   reply or resolve it**: `comment <app> --reply ID "Done: ..."`, `comment <app> --resolve ID`
   (`--reopen ID` undoes). Comments on a deleted step are listed as lost in `warnings`.
 - Open real files only for the classes and calls the output points at.
+
+## Token-saving workflow
+1. `graph <app> 1`, then `find` for the topic: names and one-line hints, no file reads.
+2. `outline <app> Name`, then read only the `file:first-last` range you need.
+3. Before editing: `impact` (dependents) and `tests` (what to rerun). After: rerun just those tests.
+4. Hand work to another agent with `brief`, not a pasted file dump.
+5. Prefer these over grep: the graph knows calls and types, grep matches text.
+6. The map is a guide, not proof: dynamic code (`get_node("...")`, untyped vars, reflection)
+   can hide links, so check the code before acting on `warnings`.
+
+## Etiquette
+Your `set`, `spec`, `memo`, `tour --draft` and `comment` writes are AI drafts: the user accepts
+them in the viewer, and any value the user wrote is kept. Do not overwrite or argue with human
+values; tell the user instead. Check a tour's open comments before editing it.
+
+## Privacy
+Coderstanding makes no outside network calls (a guard refuses every non-loopback connection);
+`coderstanding privacy` prints its state. Safe on company code. Do not paste its output anywhere
+the code should not go.
 
 ## Reading the slim text
 - `A > B` direct, `A ~> B (via n)` runs through n hidden classes.
@@ -125,7 +167,7 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   - `domain`: The broad area it belongs to.
 - Also `status=stable|wip|fragile|deprecated`, `tags=net,audio`, `rules="no X\nno Y"`
   (`\n` = new line). Test classes are left out of `curate`.
-- `set` writes AI drafts (`by: claude`, `ai: true`); human values (any other author) are
+- `set` writes AI drafts (author `claude`, `ai: true`, whichever agent you are); human values (any other author) are
   never overwritten. `--by NAME` writes as that person, only when the user asks. Function
   notes: `set <app> 'Net#join_room' hint="..."`.
 - Stale notes: each hint/description/review/rules value stores a fingerprint of the code it
@@ -135,7 +177,6 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   stale note: read the code, then rewrite it, or if it is still right
   `coderstanding set <app> --still-true A 'A#f' A>B`. Notes written before this feature have no
   fingerprint and are never marked stale.
-- The graph is a map, not proof: dynamic code (`get_node("...")`, untyped vars) can hide links.
 
 ## Flags and code descriptions
 - Entry flags name the mechanism: `godot-main` (root script of `run/main_scene`),
@@ -147,20 +188,19 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   unsaid. GDScript scripts without `class_name` are named by file (`main.gd`).
 - Calls from a class to itself are internal calls: they show when the class is opened.
 
-## Hook: nudge Claude Code toward the graph
-The hook (`coderstanding hook-run`, stdlib-light, never blocks or errors) adds context on SessionStart
+## Claude Code only: the hook
+Other agents skip this. The hook (`coderstanding hook-run`, stdlib-light, never blocks or errors) adds context on SessionStart
 (cwd in a registered app) and on PreToolUse for Grep/Glob/Read and Bash `grep|rg|find|cat`
 inside a registered repo or its worktrees: once per session per app, it suggests
 `coderstanding find|outline|impact|brief|graph|node`. `coderstanding hook` prints the JSON to merge
 into `~/.claude/settings.json` (it calls the installed `coderstanding`, no repo path).
 State: `$XDG_RUNTIME_DIR/coderstanding-hook-<session_id>.json` (temp folder when unset).
 
-## Line for agent briefs
-"This repo is registered in Coderstanding: start with `coderstanding graph <app> 1`, then
-zoom/node/specs instead of broad grepping."
+## Line for agent briefs and instructions
+`coderstanding guide --snippet --app <app>` prints a ready block for a repo's agent instructions
+(`AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, a Cursor rule); `guide --write FILE`
+adds it. In a one-off brief to another agent: "This repo is registered in Coderstanding: start with
+`coderstanding graph <app> 1`, then zoom/node/specs instead of broad grepping." Paste any
+`rules X:` lines for classes that agent touches.
 
-## Planned: diagrams and links
-- `[[...]]` in hints/descriptions/specs links a class, `A→B` connection, `spec:id` or
-  `diagram:id`. Follow a diagram link with `coderstanding diagram <app> <id>` (Mermaid text).
-
-Viewer for the user: `coderstanding serve [app]` serves every registered app on one port; the user switches apps, rescans and adds repos from the toolbar.
+Viewer for the user (you do not need it): `coderstanding serve [app]` serves every registered app on one port; the user switches apps, rescans and adds repos from the toolbar.

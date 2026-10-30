@@ -673,11 +673,12 @@ def serve(app=None, port=DEFAULT_PORT, allow_origin=None):
     allow_origin (or env CODERSTANDING_ALLOW_ORIGIN): the hosted page origin let in cross-origin;
     default: userconfig.hosted_origin() (env CODERSTANDING_ALLOW_ORIGIN, then hosted.json)."""
     hub = Hub(Api, initial=app)
-    if not hub.known_apps():
-        raise AppError("no apps registered: `coderstanding add <name> <folder>` first")
-    first = hub.api()  # scans it now if stale, so a bad repo fails here
-    print(f"{len(hub.known_apps())} apps; {first.app.name}: {len(first.graph.nodes)} nodes, "
-          f"{len(first.graph.edges)} edges ({first.app.data})")
+    if hub.known_apps():
+        first = hub.api()  # scans it now if stale, so a bad repo fails here
+        print(f"{len(hub.known_apps())} apps; {first.app.name}: {len(first.graph.nodes)} nodes, "
+              f"{len(first.graph.edges)} edges ({first.app.data})")
+    else:  # the page shows its empty state: Projects... -> Add project...
+        print("no projects yet: add one with `coderstanding add <name> <folder>` or in the viewer")
     allow_origin = allow_origin or hosted_origin()
     server = make_server(hub, port, allow_origin=allow_origin)
     print(f"Coderstanding: http://{HOST}:{server.server_port}/  (Ctrl+C to stop)", flush=True)

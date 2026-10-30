@@ -22,7 +22,7 @@ def viewer_dir():
 
 
 def docs_dir():
-    """Holds FOR_CLAUDE.md and skill/SKILL.md."""
+    """Holds AI_GUIDE.md and skill/SKILL.md."""
     return _shipped("docs")
 
 

@@ -34,6 +34,5 @@ instead of grepping files.
    start with `coderstanding graph <app> 1`, then zoom/node/specs instead of broad grepping."
    Paste any `rules X:` lines it prints for classes the agent touches.
 
-Full reference (how to read the text, curating with `set`): read `FOR_CLAUDE.md` in this
-skill's folder (`coderstanding skill install` puts it there; in a checkout where this folder is
-linked into `~/.claude/skills`, it is `../FOR_CLAUDE.md`).
+Full reference (how to read the text, curating with `set`): run `coderstanding guide` (the same
+text is `AI_GUIDE.md` in this skill's folder).

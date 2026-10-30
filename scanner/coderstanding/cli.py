@@ -829,10 +829,15 @@ def run_serve(args):
         app = find_app(args.app, args.data) if args.app else None
     except AppError as error:
         sys.exit(str(error))
-    if args.service:
-        from .helper import enter_service_mode
-        enter_service_mode()
-    serve(app, args.port, allow_origin=args.allow_origin)
+    if not args.service:
+        return serve(app, args.port, allow_origin=args.allow_origin)
+    from .helper import enter_service_mode, report_service_failure
+    console = enter_service_mode()
+    try:
+        serve(app, args.port, allow_origin=args.allow_origin)
+    except Exception as error:  # nobody watches the log: say why, then fail
+        report_service_failure(error, console)
+        sys.exit(1)
 
 
 def add_serve(commands):

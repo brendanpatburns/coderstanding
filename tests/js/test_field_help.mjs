@@ -18,8 +18,8 @@ test("every viewer note field and every text field of the store has help", () =>
   assert.equal(helpButton("nope"), "");
 });
 
-test("docs/FOR_CLAUDE.md repeats the help wording", () => {
-  const docs = read("docs/FOR_CLAUDE.md");
+test("docs/AI_GUIDE.md repeats the help wording", () => {
+  const docs = read("docs/AI_GUIDE.md");
   for (const [name, help] of Object.entries(FIELD_HELP)) assert.ok(docs.includes(help.text), `docs text for ${name}`);
 });
 

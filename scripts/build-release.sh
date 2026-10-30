@@ -41,7 +41,7 @@ assert "site-packages" in coderstanding.__file__, coderstanding.__file__
 assert assets.is_installed(), "viewer is not inside the package"
 for name in ("index.html", "vendor/cytoscape.min.js", "vendor/cytoscape.LICENSE"):
     assert (assets.viewer_dir() / name).is_file(), name
-assert (assets.docs_dir() / "FOR_CLAUDE.md").is_file() and (assets.docs_dir() / "skill" / "SKILL.md").is_file()
+assert (assets.docs_dir() / "AI_GUIDE.md").is_file() and (assets.docs_dir() / "skill" / "SKILL.md").is_file()
 PY
 
 fixture="$work/fixture"
@@ -76,6 +76,7 @@ kill "$server_pid"; server_pid=""
 
 "$cs" helper install --dry-run --no-tray
 "$cs" hook >/dev/null
+"$cs" guide | grep -q "guide for AI coding agents"
 "$cs" skill install --dest "$work/skill" --yes
-test -f "$work/skill/SKILL.md" -a -f "$work/skill/FOR_CLAUDE.md"
+test -f "$work/skill/SKILL.md" -a -f "$work/skill/AI_GUIDE.md"
 echo "--- release smoke test passed: $repo/$wheel"

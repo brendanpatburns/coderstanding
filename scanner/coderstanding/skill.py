@@ -1,4 +1,4 @@
-"""Install the Coderstanding skill for Claude Code: SKILL.md plus FOR_CLAUDE.md, copied from the
+"""Install the Coderstanding skill for Claude Code: SKILL.md plus AI_GUIDE.md, copied from the
 package to `~/.claude/skills/coderstanding` (asking before it replaces anything)."""
 
 import shutil
@@ -17,7 +17,7 @@ def default_destination():
 def skill_files():
     """{file name in the skill folder: source file}."""
     docs = assets.docs_dir()
-    return {"SKILL.md": docs / "skill" / "SKILL.md", "FOR_CLAUDE.md": docs / "FOR_CLAUDE.md"}
+    return {"SKILL.md": docs / "skill" / "SKILL.md", "AI_GUIDE.md": docs / "AI_GUIDE.md"}
 
 
 def confirmed(question, yes):

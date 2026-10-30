@@ -23,7 +23,7 @@ SCANNER = ROOT / "scanner"
 
 def test_checkout_uses_repo_folders():
     assert assets.viewer_dir() == ROOT / "viewer" and (assets.viewer_dir() / "index.html").is_file()
-    assert (assets.docs_dir() / "FOR_CLAUDE.md").is_file() and not assets.is_installed()
+    assert (assets.docs_dir() / "AI_GUIDE.md").is_file() and not assets.is_installed()
 
 
 def installed_layout(tmp_path):
@@ -32,7 +32,7 @@ def installed_layout(tmp_path):
     shutil.copytree(SCANNER / "coderstanding", package, ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(ROOT / "viewer", package / "viewer")
     (package / "docs").mkdir()
-    shutil.copy(ROOT / "docs" / "FOR_CLAUDE.md", package / "docs")
+    shutil.copy(ROOT / "docs" / "AI_GUIDE.md", package / "docs")
     return tmp_path / "site"
 
 
@@ -50,6 +50,12 @@ def test_installed_layout_uses_package_data(tmp_path):
                        "assets.is_installed())", tmp_path)
     assert out == f"{site / 'coderstanding' / 'viewer'} {site / 'coderstanding' / 'docs'} True"
     assert (site / "coderstanding" / "viewer" / "vendor" / "cytoscape.LICENSE").is_file()
+    guide = run_in(site, "from coderstanding import guide; print(guide.guide_text()[:60])", tmp_path)
+    assert "guide for AI coding agents" in guide
+
+
+def test_wheel_package_data_lists_the_ai_guide():
+    assert '"coderstanding.docs" = ["AI_GUIDE.md"]' in (ROOT / "pyproject.toml").read_text()
 
 
 def test_server_serves_the_resolved_viewer(tmp_path):
@@ -169,7 +175,7 @@ def test_hook_finds_windows_drive_paths(monkeypatch):
 def test_skill_install_asks_before_overwriting(tmp_path):
     dest = tmp_path / "skills" / "coderstanding"
     assert skill.install(dest) == dest
-    assert (dest / "SKILL.md").is_file() and (dest / "FOR_CLAUDE.md").is_file()
+    assert (dest / "SKILL.md").is_file() and (dest / "AI_GUIDE.md").is_file()
     (dest / "SKILL.md").write_text("mine")
     assert skill.install(dest) is None  # no tty, no --yes: left alone
     assert (dest / "SKILL.md").read_text() == "mine"

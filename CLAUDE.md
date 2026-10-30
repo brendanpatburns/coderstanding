@@ -14,6 +14,7 @@ user-written text on connections.
   Godot, Python, JS/TS)
 - `scanner/coderstanding/views.py` view engine: collapse, concrete view, zoom (the only place for it)
 - `scanner/coderstanding/textout.py` slim text format for Claude
+- `scanner/coderstanding/guide.py` + `docs/AI_GUIDE.md` the tool-neutral AI guide (`coderstanding guide`) and the snippet for agent instruction files
 - `scanner/coderstanding/stack.py` stack reader: tech stack + external deps
 - `scanner/coderstanding/cards.py` card store: specs and memos (the viewer's Notes) in the app's data folder, `specs/` and `memos/` (the repo's `.coderstanding/` unless the app keeps its data elsewhere)
 - `scanner/coderstanding/items.py` shared Markdown item store; `tours.py` tours in `.coderstanding/tours/` (DESIGN 7c)

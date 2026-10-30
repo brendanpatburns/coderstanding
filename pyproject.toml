@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderstanding"
-version = "0.2.0"
+version = "0.2.1"
 description = "Scan a code base and show its classes and connections as a graph"
 readme = "README.md"
 license = "MIT"
@@ -44,7 +44,7 @@ packages = ["coderstanding", "coderstanding.languages", "coderstanding.viewer",
 [tool.setuptools.package-data]
 "coderstanding.viewer" = ["*.html", "*.js", "*.css", "*.json"]
 "coderstanding.viewer.vendor" = ["*"]
-"coderstanding.docs" = ["FOR_CLAUDE.md"]
+"coderstanding.docs" = ["AI_GUIDE.md"]
 "coderstanding.docs.skill" = ["SKILL.md"]
 
 [tool.pytest.ini_options]

@@ -1142,7 +1142,7 @@ Built by the view engine (it is view data, not scan data); text output prints
     Python standard library. Static reading misses dynamic loads, so `unused` is a hint.
   - Note fields have one wording each, kept in `viewer/field_help.js` (the "?" tips beside
     every field in the details panel and the "Note fields" help block) and repeated in
-    docs/FOR_CLAUDE.md. Meaning in short: `hint` = one line, what it is or does; `description` =
+    docs/AI_GUIDE.md. Meaning in short: `hint` = one line, what it is or does; `description` =
     what the class is and what its functions do (a connection: what it represents and why it
     exists), never problems; `review` = code-review findings (smells, risks, suggested splits,
     with concrete targets; classes, connections and functions; `node` prints one short
@@ -1345,7 +1345,11 @@ was left in place for the user to clear.
   audio). Requests whose Host is not 127.0.0.1/localhost are refused (DNS rebinding).
 - **Run at login**: the helper runs as the systemd user unit `coderstanding-helper.service`;
   `coderstanding-tray.service` shows a tray icon polling `/api/apps` (green up, amber scanning,
-  grey down; tooltip: app count, scans, scan errors), installed by `scripts/install-helper.sh`.
+  grey down; tooltip: app count, scans, scan errors), installed by `coderstanding helper install` (`scripts/install-helper.sh`), which also starts the helper and
+  verifies it (polls `/api/apps` through the no-proxy opener for ~8 s; on failure prints the last 10 log
+  lines and the log path; `helper start` verifies the same way, `--no-start` skips). `serve` starts with
+  zero projects (empty state, `/api/apps` lists none); `serve --service` startup errors go to the log and
+  to a console's stderr, exit code 1.
 
 ### App manager (built 2026-10-30)
 
@@ -1434,7 +1438,7 @@ Replaced by v3: reads and writes all go to the helper, nothing is pushed.
 - Scenes are nodes; type toggles switch scenes / outside code / domains on and off.
 - Claude sets levels, domains and drafts hints through `curate`/`set`; your values win.
 - Making it part of Claude's normal flow comes later; what an agent needs is collected in
-  `docs/FOR_CLAUDE.md`.
+  `docs/AI_GUIDE.md`.
 
 ## 17. Open questions
 

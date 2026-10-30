@@ -26,7 +26,7 @@ Needs Python 3.10 or newer (Linux, macOS or Windows). No source checkout is need
 ### From a release
 
 ```bash
-pipx install coderstanding-0.2.0-py3-none-any.whl      # or: pip install --user coderstanding-0.2.0-py3-none-any.whl
+pipx install coderstanding-0.2.1-py3-none-any.whl      # or: pip install --user coderstanding-0.2.1-py3-none-any.whl
 coderstanding --version
 ```
 
@@ -34,10 +34,13 @@ On Windows, install pipx first, then the wheel:
 
 ```powershell
 py -m pip install --user pipx
-py -m pipx ensurepath          # then open a new terminal
-pipx install coderstanding-0.2.0-py3-none-any.whl
-coderstanding helper install
+py -m pipx ensurepath          # then open a NEW terminal, or `pipx` is not found
+pipx install coderstanding-0.2.1-py3-none-any.whl
+coderstanding helper install   # starts the helper now and checks it answers
 ```
+
+If `pipx` is still not found, `py -m pipx install coderstanding-0.2.1-py3-none-any.whl` works without
+any PATH change.
 
 Installing downloads the tree-sitter grammar wheels from PyPI once (the only network use, at install
 time; Coderstanding itself never sends your code anywhere). To install on a machine without access to
@@ -45,11 +48,11 @@ PyPI, download everything on another machine with the same OS and Python version
 and install from it:
 
 ```bash
-pip download coderstanding-0.2.0-py3-none-any.whl -d wheels/     # on a machine with internet
-pip install --no-index --find-links wheels/ coderstanding-0.2.0-py3-none-any.whl   # on the target
+pip download coderstanding-0.2.1-py3-none-any.whl -d wheels/     # on a machine with internet
+pip install --no-index --find-links wheels/ coderstanding-0.2.1-py3-none-any.whl   # on the target
 ```
 
-(`pipx install --pip-args="--no-index --find-links wheels/" coderstanding-0.2.0-py3-none-any.whl` for pipx.)
+(`pipx install --pip-args="--no-index --find-links wheels/" coderstanding-0.2.1-py3-none-any.whl` for pipx.)
 
 ### Helper at login and tray icon
 
@@ -57,22 +60,18 @@ The viewer is served by a small local helper. To start it at every login:
 
 ```bash
 coderstanding helper install     # Linux: systemd user units. Windows: Startup entries (no admin needed)
-coderstanding helper start       # start now; also: stop, restart, status, log, uninstall
+coderstanding helper start       # start again later; also: stop, restart, status, log, uninstall
+coderstanding add <name> <folder>   # register a project (or use Projects... -> Add project... in the viewer)
 ```
 
+`helper install` also starts the helper (`--no-start` to skip) and `helper install`/`helper start` check
+that it answers on http://127.0.0.1:8517/, printing the last log lines and the log path if not. The
+helper starts fine with no project registered; the page then shows how to add one.
 Add `--dry-run` to see what it would write. The optional tray icon (green = up, amber = scanning,
-grey = down; start/stop/log menu) needs Qt: `pipx install "coderstanding-0.2.0-py3-none-any.whl[tray]"` or
-`pip install --user PySide6`, then `coderstanding helper install` again. On Windows the log is
+grey = down; start/stop/log menu) needs Qt: `pipx install "coderstanding-0.2.1-py3-none-any.whl[tray]"` or
+`pipx inject coderstanding PySide6` (pipx) or `python -m pip install "coderstanding[tray]"`, then
+`coderstanding helper install` again. On Windows the log is
 `%LOCALAPPDATA%\coderstanding\helper.log`; on Linux use `journalctl --user -u coderstanding-helper`.
-
-### AI tools (Claude Code)
-
-```bash
-coderstanding skill install      # copies the skill to ~/.claude/skills/coderstanding (asks before replacing)
-coderstanding hook               # prints the hooks JSON: merge it into ~/.claude/settings.json
-```
-
-The hook only adds a short hint when a session works inside a registered repo; it never blocks.
 
 ### From source (development)
 
@@ -113,6 +112,37 @@ change. `coderstanding <command> --help` lists every option.
 | `rules <app> [add "<glob>" ignore=.. \| remove N]` | ignore warning kinds by folder (and lang/kind), no rescan |
 | `settings <app>` | scan settings (hub threshold) |
 | `rename <old> <new>` / `remove <app> [--delete-data] [--delete-notes]` | registry upkeep (also the viewer's Projects… modal) |
+
+## Using it with AI coding agents
+
+Any agent that can run shell commands can use Coderstanding (Claude Code, GitHub Copilot, Cursor,
+others). Everything runs locally and offline.
+
+1. Install it (above), then register the repo: `coderstanding add myapp "C:\code\myapp"`
+2. Tell the agent about it. Run `coderstanding guide --snippet --app myapp` to see the block, or write
+   it into the file your tool reads (re-running replaces the block, never duplicates it):
+
+| Tool | Command |
+|---|---|
+| Claude Code | `coderstanding skill install` and `coderstanding hook` (merge the JSON into `~/.claude/settings.json`); or `coderstanding guide --write CLAUDE.md --app myapp` |
+| GitHub Copilot | `coderstanding guide --write .github/copilot-instructions.md --app myapp` |
+| Cursor | `coderstanding guide --write .cursor/rules/coderstanding.mdc --app myapp` (or `.cursorrules`) |
+| Others (Codex, Aider, ...) | `coderstanding guide --write AGENTS.md --app myapp` |
+
+3. The agent can learn the whole tool with `coderstanding guide` (the full reference, shipped in the
+   package). An example session:
+
+```bash
+coderstanding graph myapp 1                 # the top level, as short text
+coderstanding find myapp checkout           # where does checkout live?
+coderstanding outline myapp Cart            # its functions with file:first-last lines
+coderstanding impact myapp Cart#add         # who depends on it, tests to rerun
+coderstanding tour myapp checkout-flow      # a guided walk through a flow
+coderstanding warnings myapp                # unused classes, cycles, unsure lines
+```
+
+Privacy: Coderstanding makes no outside network calls and sends no code anywhere; see
+[Privacy](#privacy-works-fully-offline). The agent's own tool still talks to its vendor as usual.
 
 ## Hosted page (optional)
 
@@ -155,7 +185,7 @@ Coderstanding makes no outside network calls, so it is safe to point at company 
 
 ## More
 
-- For Claude and agents: `docs/FOR_CLAUDE.md` (how to read the slim text, curating)
+- For AI agents: `coderstanding guide` (source: `docs/AI_GUIDE.md`; how to read the slim text, curating)
 - Design: `docs/DESIGN.md` · components: `docs/COMPONENTS.md` · small planned items: `docs/TODO.md`
 
 ## License

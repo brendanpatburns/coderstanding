@@ -16,6 +16,7 @@ import os
 import shutil
 import subprocess
 import sys
+import time
 import urllib.request
 from pathlib import Path
 
@@ -31,6 +32,9 @@ LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 SERVE_ARGS = ["serve", "--port", str(PORT)]
 WINDOWS_SERVE_ARGS = [*SERVE_ARGS, "--service"]  # --service: log to the log file, write the pid file
 LOG_BYTES, LOG_FILES = 1_000_000, 3
+VERIFY_TRIES = 8  # one try per second
+NEXT_STEPS = (f"Add a project: coderstanding add <name> <folder>, or open {LOCAL_URL} "
+              "-> Projects... -> Add project...")
 
 
 # --- how to run this installation --------------------------------------------------------------
@@ -53,6 +57,21 @@ def launch_command(windowless=False):
 def launch_env():
     """Only a source checkout (nothing installed) needs help to find the package."""
     return {} if assets.is_installed() else {"PYTHONPATH": str(Path(__file__).resolve().parents[1])}
+
+
+def pipx_managed(prefix=None):
+    """True when this install lives in a pipx-managed venv (pipx_metadata.json inside it, or the
+    venv sits in a `pipx/venvs` folder)."""
+    prefix = Path(prefix or sys.prefix)
+    in_pipx_venvs = prefix.parent.name == "venvs" and prefix.parent.parent.name.lower() == "pipx"
+    return in_pipx_venvs or (prefix / "pipx_metadata.json").exists()
+
+
+def tray_install_hint(prefix=None, python=None):
+    """The command that adds Qt to the environment this install actually runs in."""
+    if pipx_managed(prefix):
+        return "pipx inject coderstanding PySide6"
+    return f'"{python or sys.executable}" -m pip install "coderstanding[tray]"'
 
 
 def qt_available():
@@ -126,6 +145,12 @@ class SystemdUser:
     def control(self, action):
         subprocess.run(self._ctl(action, HELPER), check=False)
 
+    def recent_log(self, lines):
+        """(last log lines, where the whole log is)"""
+        done = subprocess.run(["journalctl", "--user", "-u", HELPER, "-n", str(lines), "--no-pager"],
+                              capture_output=True, text=True, check=False)
+        return done.stdout.strip(), f"journalctl --user -u {HELPER}"
+
     def show_log(self):
         follow = f"journalctl --user -u {HELPER} -f"
         for terminal, flag in (("konsole", ["-e"]), ("gnome-terminal", ["--"]), ("xterm", ["-e"])):
@@ -191,6 +216,13 @@ class WindowsStartup:
                              env={**os.environ, **launch_env()}, close_fds=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
+    def recent_log(self, lines):
+        try:
+            text = self.log_file().read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            text = ""
+        return "\n".join(text.splitlines()[-lines:]), str(self.log_file())
+
     def _stop(self):
         try:
             pid = int(self.pid_file().read_text(encoding="utf-8").strip())
@@ -217,8 +249,10 @@ def _run(commands, dry_run):
             subprocess.run(command, check=False)
 
 
-def install(tray=None, dry_run=False, platform=None):
-    """Write the login entries and enable them. `tray` None = with tray when Qt is importable."""
+def install(tray=None, dry_run=False, platform=None, start=True):
+    """Write the login entries and enable them, then start the helper and check it answers
+    (`start` False: leave it stopped). `tray` None = with tray when Qt is importable.
+    Returns False when the helper was started but did not answer."""
     platform = platform or backend()
     with_tray = qt_available() if tray is None else tray
     for path, text in platform.files(with_tray).items():
@@ -230,8 +264,17 @@ def install(tray=None, dry_run=False, platform=None):
             path.write_text(text, encoding="utf-8", newline="")
     _run(platform.after_install(with_tray), dry_run)
     if not with_tray:
-        print('No tray icon set up (needs Qt: pip install "coderstanding[tray]", then run this again).')
-    print("Start now with: coderstanding helper start")
+        print(f"No tray icon set up (needs Qt: {tray_install_hint()}, then run this again).")
+    if dry_run:
+        return True
+    if not start:
+        print("Not started. Start now with: coderstanding helper start")
+        return True
+    platform.control("start")
+    running = verify_running()
+    if running:
+        print(NEXT_STEPS)
+    return running
 
 
 def uninstall(dry_run=False, platform=None):
@@ -245,13 +288,31 @@ def uninstall(dry_run=False, platform=None):
     _run(platform.after_uninstall(), dry_run)
 
 
-def fetch_listing():
+def fetch_listing(opener=None):
     """The helper's parsed /api/apps, or None when it does not answer."""
     try:
-        with LOCAL_OPENER.open(LOCAL_URL + "api/apps", timeout=2) as response:
+        with (opener or LOCAL_OPENER).open(LOCAL_URL + "api/apps", timeout=2) as response:
             return json.load(response)
     except (OSError, ValueError):
         return None
+
+
+def verify_running(fetch=None, pause=time.sleep, tries=VERIFY_TRIES, platform=None):
+    """Wait a few seconds for the helper to answer; print the result. On failure show the last
+    log lines and the log's location. Returns True when it answered."""
+    fetch = fetch or fetch_listing
+    for attempt in range(tries):
+        if fetch() is not None:
+            print(f"helper running on {LOCAL_URL}")
+            return True
+        if attempt < tries - 1:
+            pause(1)
+    lines, where = (platform or backend()).recent_log(10)
+    print(f"helper did not start: nothing answers on {LOCAL_URL}")
+    if lines:
+        print("last log lines:\n" + "".join(f"    {line}\n" for line in lines.splitlines()), end="")
+    print(f"log: {where}")
+    return False
 
 
 def status():
@@ -259,9 +320,11 @@ def status():
     print("\n".join([*backend().status_lines(), tooltip(fetch_listing())]))
 
 
-def control(action):
-    """action: start, stop or restart the helper."""
+def control(action, verify=False):
+    """action: start, stop or restart the helper. `verify` (the CLI): after start/restart check it
+    answers and report; returns False when it did not."""
     backend().control(action)
+    return verify_running() if verify and action in ("start", "restart") else True
 
 
 def show_log():
@@ -295,10 +358,21 @@ class LogStream:
 
 
 def enter_service_mode():
-    """Send stdout/stderr to the rotating log file and record our pid (so `helper stop` finds us)."""
+    """Send stdout/stderr to the rotating log file and record our pid (so `helper stop` finds us).
+    Returns the console's stderr it replaced, or None when there is no console (pythonw)."""
+    console = sys.stderr
     log = WindowsStartup()
     sys.stdout = sys.stderr = LogStream(log.log_file())
     pid_file = log.pid_file()
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
     atexit.register(lambda: pid_file.unlink(missing_ok=True))
+    return console
+
+
+def report_service_failure(error, console):
+    """A startup error in service mode: into the log, and onto the console when there is one."""
+    message = f"error: {error}"
+    print(message)  # stdout/stderr are the log file here
+    if console is not None:
+        print(message, file=console, flush=True)
