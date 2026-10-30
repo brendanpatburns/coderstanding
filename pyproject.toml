@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderstanding"
-version = "0.2.3"
+version = "0.2.4"
 description = "Scan a code base and show its classes and connections as a graph"
 readme = "README.md"
 license = "MIT"

@@ -181,9 +181,9 @@ async function main() {
     await page.waitFor("window.__qa && __qa.settled()", { what: "view settled" });
   }
   const qa = (expr) => page.eval(`__qa.${expr}`);
-  async function setLevel(key) {
-    await page.clickOn("#level");
-    await page.key(key);
+  async function setLevel(key) {  // "Home" = the lowest ruler column, "End" = the deepest
+    const levels = await page.eval("[...document.querySelectorAll('#rulerCols .rcol:not(:disabled)')].map((c) => c.dataset.level)");
+    await page.clickOn(`#rulerCols .rcol[data-level="${key === "Home" ? levels[0] : levels.at(-1)}"]`);
     await settle();
   }
   async function step(name, fn) {
@@ -205,14 +205,33 @@ async function main() {
   try {
     await open();
 
-    await step("level slider", async () => {
+    await step("depth ruler: columns, click a level, arrow keys, Levels… saves a name", async () => {
       const count = () => page.eval("cy.nodes().length");
+      const text = () => page.eval("document.getElementById('rulerCols').textContent");
+      assert(await page.eval("!document.getElementById('level') && !document.getElementById('specFollow')"), "old slider and follow checkbox gone");
+      assert(await page.eval("document.querySelectorAll('#rulerCols .rcol').length >= 2"), "ruler shows a column per level");
       await setLevel("Home");
       const low = await count();
-      const label = await page.eval("document.getElementById('levelOut').textContent");
+      const label = await page.eval("document.getElementById('rulerCount').textContent");
+      assert(/^\d+ of \d+ classes$/.test(label), `count text: ${label}`);
+      assert(await page.eval("document.querySelectorAll('#rulerCols .rcol.here').length === 1"), "one lit column");
       await setLevel("End");
-      assert(await count() > low, "more classes at the highest level");
-      assert(await page.eval("document.getElementById('levelOut').textContent") !== label, "level label changes");
+      assert(await count() > low, "more classes at the deepest level");
+      assert(await page.eval("document.getElementById('rulerCount').textContent") !== label, "count changes");
+      await page.key("ArrowLeft");
+      await settle();
+      assert(await page.eval("state.level") < await page.eval("Number(document.querySelector('#rulerCols .rcol:last-child').dataset.level)"), "left arrow steps up");
+      await page.clickOn("#levelsBtn");
+      await page.eval(`(() => { const i = document.querySelector('#levelsNames input[data-name="1"]'); i.value = "Zebra"; })()`);
+      await page.clickOn("#levelsSave");
+      await settle();
+      await page.waitFor("document.getElementById('rulerCols').textContent.includes('Zebra')", { what: "saved name shows" });
+      assert((await text()).includes("1 Zebra"), "level 1 is named");
+      await page.screenshot(join(shots, "depth-ruler.png"));
+      await page.clickOn("#levels" + "Btn");
+      await page.clickOn("#levelsReset");  // later steps add deeper classes: no saved count may clamp them
+      await page.waitFor("!document.getElementById('rulerCols').textContent.includes('Zebra')", { what: "names reset" });
+      await setLevel("End");  // the steps after this one expect the deepest level
     });
 
     await step("All types / Concrete", async () => {
@@ -224,11 +243,11 @@ async function main() {
       assert(await page.eval("document.getElementById('viewAll').getAttribute('aria-pressed')") === "true", "All types pressed");
     });
 
-    await step("Show toggles: Scenes, Outside code, Tests", async () => {
+    await step("Show toggles: Outside code, Tests; the .tscn chip hides scenes", async () => {
       const has = (name) => qa(`node(${JSON.stringify(name)})`).then(Boolean);
       assert(await has("main.tscn") && await has("requests"), "scene and outside code shown at first");
       assert(!(await has("test_player.gd")), "tests hidden at first");
-      for (const [box, name, shown] of [["#showScene", "main.tscn", false], ["#showExternal", "requests", false], ["#showTest", "test_player.gd", true]]) {
+      for (const [box, name, shown] of [["#typeStrip [data-type=\".tscn\"]", "main.tscn", false], ["#showExternal", "requests", false], ["#showTest", "test_player.gd", true]]) {
         await page.clickOn(box);
         await settle();
         assert(await has(name) === shown, `${box} ${shown ? "shows" : "hides"} ${name}`);
@@ -236,6 +255,56 @@ async function main() {
         await settle();
         assert(await has(name) === !shown, `${box} back`);
       }
+    });
+
+    await step("Types strip: chips toggle a type's classes, hover lights them, names are never cut", async () => {
+      const chip = (type) => `#typeStrip [data-type="${type}"]`;
+      const count = (type) => page.eval(`cy.nodes().filter((n) => n.data('type') === '${type}').length`);
+      const gd = await count(".gd");
+      assert(gd > 0, "fixture has .gd classes");
+      assert(await page.eval(`document.querySelector('${chip(".gd")}').textContent.includes('${gd}')`), "chip shows the count");
+      const { x, y } = await page.centreOf(chip(".gd"));
+      await page.move(x, y);
+      assert(await page.eval("cy.nodes('.type-hit').length") === gd, "hover lights that type's boxes");
+      await page.move(5, 5);
+      await sleep(50);
+      assert(await page.eval("cy.nodes('.type-hit').length") === 0, "mouse leave clears the light");
+      await page.clickOn(chip(".gd"));
+      await settle();
+      assert(await count(".gd") === 0, "clicking hides the type's classes");
+      assert(await page.eval(`document.querySelector('${chip(".gd")}').classList.contains('off')`), "the chip stays listed, marked off");
+      await page.clickOn(chip(".gd"));
+      await settle();
+      assert(await count(".gd") === gd, "clicking again brings them back");
+      const clipped = await page.eval(`[...document.querySelectorAll('.face')].filter((face) => {
+        const frame = face.querySelector('.cls-head')?.getBoundingClientRect();
+        return [...face.querySelectorAll('.cls-name, .cls-sub')].some((t) => t.getBoundingClientRect().right > frame.right + 0.5);
+      }).length`);
+      assert(clipped === 0, `${clipped} box texts run past their box`);
+      assert(!(await page.eval("document.querySelector('#fanFront').textContent.includes('…')")), "no ellipsis in box labels");
+      mkdirSync(shots, { recursive: true });
+      await page.screenshot(join(shots, "type-chips.png"));
+    });
+
+    await step("Long class and function names wrap, in the header and in open rows", async () => {
+      await page.clickOn("#expandAllBtn");
+      await settle();
+      const long = await page.eval(`(() => {
+        const n = cy.nodes().filter((x) => x.data('name').startsWith('VeryLong'))[0];
+        return n && { lines: n.data('nameLines'), name: n.data('name'), fn: Object.values(n.data('fnLines'))[0] };
+      })()`);
+      assert(long, "the long class is shown");
+      assert(long.lines.length > 1 && long.lines.join("") === long.name, "its name wraps onto lines, nothing lost");
+      assert(long.fn.length > 1 && long.fn.join("").endsWith("()"), "its long function name wraps too");
+      const past = await page.eval(`[...document.querySelectorAll('.face')].filter((face) => {
+        const head = face.querySelector('.cls-head');
+        const frame = head && head.getBoundingClientRect();
+        return frame && [...face.querySelectorAll('.cls-name, .cls-sub, .fn-name, .fld')].some((t) => t.getBoundingClientRect().right > frame.right + 0.5);
+      }).length`);
+      assert(past === 0, `${past} boxes have text past their frame`);
+      assert(!(await page.eval("document.querySelector('#fanFront').textContent.includes('…')")), "no ellipsis anywhere in boxes");
+      await page.clickOn("#collapseAllBtn");
+      await settle();
     });
 
     await step("Highlight menu", async () => {
@@ -354,6 +423,7 @@ async function main() {
       await page.dblclick(line.x, line.y);
       await settle();
       assert(await page.eval("state.crumbs.length") === 1, "one breadcrumb");
+      assert(await page.eval("Number(document.querySelector('#rulerCols .rcol.here').dataset.level) === Math.min(state.current.level, state.current.scale.count)"), "ruler lights the level shown");
       await page.clickOn('#crumbs [data-crumb="-1"]');
       await settle();
       assert(await page.eval("state.crumbs.length") === 0, "back to the whole app");
@@ -558,6 +628,7 @@ async function main() {
 
     await step("ignore a warning, then undo", async () => {
       await setLevel("End");
+      await page.eval("void cy.fit(undefined, 40)");  // the taller ruler row leaves less canvas: bring Unused into view
       const unused = await qa('node("Unused")');
       assert(unused, "Unused shown");
       await page.click(unused.x + 20, unused.y + 4);

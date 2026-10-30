@@ -159,10 +159,10 @@ def test_view_text_command_expand_and_function_selection():
 
 
 def test_view_command_zoom_and_flags():
-    command = textout.view_command("mygame", 2, True, {"test": True, "scene": False},
+    command = textout.view_command("mygame", 2, True, {"test": True, "hide_types": [".tscn"]},
                                    {"from": "main.gd", "to": "a b", "level": 3}, ["*"], "a b→x")
     assert command == ("$ coderstanding view mygame --level 2 --concrete --zoom main.gd 'a b' "
-                       "--zoom-level 3 --expand '*' --select 'a b→x' --tests --no-scenes")
+                       "--zoom-level 3 --expand '*' --select 'a b→x' --hide-type .tscn --tests")
 
 
 def test_node_detail_tests_capped_at_eight():

@@ -9,7 +9,7 @@ you can read at different levels of detail.
 
 - A **scanner** script reads a repo and writes a graph file.
 - A **viewer** (local web page) draws the graph.
-- A **granularity slider** hides detail classes. When a class is hidden, connections that
+- A **depth ruler** (one column per level) hides detail classes. When a class is hidden, connections that
   pass through it still show, as one connection between the visible classes on each end.
 - Every connection is **directional** and can carry **your own text** explaining what it is.
   This matters most for the high-level connections.
@@ -71,8 +71,12 @@ count and code locations. Many calls are still one line; the line shows the firs
 and the details panel lists them all. Each edge keeps its source locations (file:line) so the viewer can show
 "where in the code".
 
-**Level**: an integer per node, 1 = top level. The slider shows nodes with
-`level <= slider`. The scanner guesses levels; you override them.
+**Level**: an integer per node, 1 = top level. The depth ruler shows nodes with
+`level <= chosen level`. The scanner guesses levels; you override them. Each app can name its
+levels and set how many there are (`levels: {count, names}` in its `settings.json`, edited with
+the viewer's "Levels…" panel or `coderstanding settings levels=Domains,App,Systems`; saving never
+rescans). Classes deeper than the last level count as the last level (one clamp, in the view
+engine's level lookup). Text headers print the name next to the number (`L2 Systems`).
 
 **Note**: your additions: per node and per edge a short **hint** (shown on the line) and an
 optional long **description** (shown in the details panel), plus level overrides, interface
@@ -102,7 +106,7 @@ repo ──scan──> graph.json ─┐                 ┌─> server ──JS
   the visible nodes, direct and derived edges, faded outside edges, and hints. This is the
   only place that logic lives.
 - **Server**: `coderstanding serve <app> [--port 8517] [--data DIR]` scans, then serves the
-  viewer on 127.0.0.1. Routes: `GET /api/view?level=&view=&scene=&external=&test=&zoom_from=&zoom_to=&zoom_level=&via=&expand=`
+  viewer on 127.0.0.1. Routes: `GET /api/view?level=&view=&hide=&external=&test=&zoom_from=&zoom_to=&zoom_level=&via=&expand=`
   (engine output as JSON; `via` and `expand` repeat; `expand` opens classes into functions, `*` = all, adds
   `expanded` and `fanout`, section 12c; `test=1` shows test code, default 0), `GET /api/text?<same>&select=<id|A→B|id#fn>`
   (plain slim text of that view, first line the `coderstanding view` command, section 11), `GET /api/node/<id>`, `GET /api/stack`,
@@ -270,7 +274,7 @@ modules (see `docs/COMPONENTS.md` once built).
   - `[connection signal=... from=... to=... method=...]` → `signal` edge between the two
     nodes' scripts (auto-text "signal `hit` → `_on_hit`").
   - Scenes take part in levels and folding like classes; the main scene is a level-1 hint.
-- Scenes can be switched off with the type toggles (section 12); then they fold into their
+- Scenes can be switched off by hiding the `.tscn` type in the types strip (section 12d); then
   owners like any hidden node.
 
 ### 4.4b Python and JavaScript/TypeScript
@@ -457,8 +461,11 @@ Zoom drills into one connection `A → B` seen at level `L`.
   The viewer keeps a breadcrumb trail (`GameEngine→VFX › Viewport→VFX`) to step back.
 - **Node zoom**: zooming on a single node shows it, its direct neighbours at level `L + 1`,
   and faded edges beyond them.
-- If a path between `A` and `B` only has nodes deeper than `L + 1`, the zoom shows the
-  derived edge with its hop count and you drill again.
+- **Skipping levels**: if every hidden class on the line is deeper than `L + 1`, the zoom jumps
+  to `L'`, the smallest level among them, and shows `A`, `B` and every via class of level at
+  most `L'` (deeper ones still fold into lines between them). A jump of more than one level
+  hides the extras: no faded outside lines, and `A` and `B` are terminations (only the lines
+  between the shown classes). The level meter shows `L'`, and the next drill starts from it.
 
 ## 6b. Domains
 
@@ -471,7 +478,7 @@ folder tree.
   domains by hand and drag classes into them. Stored in notes.
 - One domain per class. A class with none is fine.
 - **Drawn as cards** behind their classes, with the domain name on the card.
-- **Domain level**: an extra step at the top of the slider (level 0). Each domain becomes one
+- **Domain level**: an extra step at the top of the ruler (level 0; its column is disabled until domains exist). Each domain becomes one
   card and lines between domains merge all the calls between their classes, by the same fold
   rule as section 5 (a class folds into its domain). Zoom into a domain-to-domain line to see
   the classes on each side.
@@ -517,8 +524,8 @@ sidebar is a full editor. Decisions from the build:
 
 - **Levels like the graph**: every spec has a level, 1 = a broad area ("Rendering"), up to
   the finest ("Player has a turret"). Default is parent + 1; you can set it deeper to skip
-  levels, never shallower than its parent. The sidebar has its own detail slider, or a
-  "follow graph" switch that ties it to the graph slider.
+  levels, never shallower than its parent. The sidebar has its own detail slider; spec
+  levels and graph levels are different things, so it never follows the graph.
 - **Folding**: specs finer than the slider fold into their visible parent. The parent box shows
   "+N finer" and the classes of the folded specs as outlined chips (outline = hidden, same as
   the graph). Selecting the parent highlights its own and its folded specs' classes.
@@ -1053,7 +1060,7 @@ connection, no decoration. Rules:
     [kind] Llevel [status] #tags: hint`, `rules:`, `warn:`, `fns:` with ranges, up to 5 direct
     links, `ripple:` counts, `tests:` covering it (functions show their own call lines instead).
 - `view <app> [--level N] [--concrete] [--zoom A [B]] [--zoom-level N] [--expand X ...]
-  [--select X|A>B|X#f] [--tests] [--no-scenes] [--no-external]`: what the viewer shows. First
+  [--select X|A>B|X#f] [--tests] [--hide-type EXT] [--no-external]`: what the viewer shows. First
   line is the command itself (`$ coderstanding view mygame --level 2 --zoom main.gd net --expand
   net --select net`), then the graph/zoom/node text, function lines per expanded class, and a
   `selected X:` block (node info, the line with all calls, or a function's notes and calls).
@@ -1098,7 +1105,13 @@ selected item. "Copy command only" copies just that first line, which Claude can
 
 ## 12. Viewer (first version)
 
-- Slider: levels 1..max, with node counts per level.
+- **Depth ruler** (replaces the old Detail slider and the crumbs row): row 1 is the zoom crumbs
+  (levels by name, `2 · Systems › A→B`), the help hint, "86 of 394 classes" and a "Levels…" button;
+  row 2 is one column per level 0..last, a bar as tall as the classes at that level (the view's
+  `scale.counts`, following the Show toggles) and the label `N Name · count`. The level shown is
+  lit with ◂, shallower levels mid grey, deeper ones light, and levels a zoom skipped (section 6)
+  are hatched. Clicking a column sets the level (and leaves a zoom); ←/→ step it outside text
+  fields; level 0 is disabled without domains. `?level=` still works.
 - View toggle: All types / Concrete.
 - Edge style rules, one meaning each:
   - **Outline (hollow line)** = the connection runs through hidden classes. Outside-the-zoom
@@ -1169,7 +1182,7 @@ Built against the approved mock-up (`docs/mockups/tours.html`) and the tours JSO
   chips, highlight attached classes, edit and add specs.
 - Search box that also forces a matching hidden node visible.
 - Panels: Needs binding, Lost notes.
-- **Type toggles** in the toolbar: Scenes, Outside code, Domains (more types can join later).
+- **Type toggles** in the toolbar: Outside code, Tests, Domains (scenes and any other file type: the types strip, 12d) (more types can join later).
   A type switched off folds into its owners like a hidden level, so no connection is lost.
 - Edits save to `notes.jsonl` through the server right away.
 
@@ -1209,7 +1222,7 @@ Built by the view engine (it is view data, not scan data); text output prints
 
 - **Tests**: test code is marked (flag `test`: `tests/`/`test/` folders, `test_*.py`,
   `*_test.*`, `*.test.ts`/`*.spec.ts`, GUT `test_*.gd`, C# test projects) and **hidden by
-  default** (a "Tests" type toggle shows them, like Scenes/Outside code; hidden tests are
+  default** (a "Tests" type toggle shows them, like Outside code; hidden tests are
   removed, not folded, so they never distort the graph). Every class lists **"Tested by"**: the
   test files with lines to it. `coderstanding tests <app> <name>` prints which test files to
   run after changing it (direct, `--deep` adds tests of its direct users).
@@ -1403,6 +1416,30 @@ New warning kinds in `checks.py` for Godot apps, from reader data that exists or
   1500 classes. Own code instead of Cytoscape `cose` (cannot pin fixed spots) or `fcose` (three
   vendored libraries) so it stays pure and tested.
 
+## 12d. Code-type chips and the types strip (mock-up approved 2026-10-30, built 2026-10-30)
+
+- **Box chip**: every class box shows its file type (`.gd`, `.cs`, `.tscn`, ...) as a small
+  coloured chip in front of its sub-line, plus a coloured top edge so the type reads when zoomed
+  far out. `viewer/typechips.js` holds the one type -> colour map (light and dark palettes that
+  differ in lightness too; ink picked per colour for contrast >= 4.5; unknown types grey).
+  The old Scenes checkbox and the engine's `scene` option are gone: hiding scenes = hiding `.tscn`
+  (`?scene=0` and `--no-scenes` still work, mapped onto `hide_types`).
+  Not built: a second chip for a script's scene (the data does not give it cheaply).
+- **Names never cut off**: a box grows to fit its name and sub-line up to a cap width, then
+  wraps at camelCase, `_` and `.` boundaries (sub-line at ` · `); a single long word is cut by
+  characters. No ellipsis anywhere in a box, open rows included: function and field rows wrap
+  with the same helper (`wrapName`); each list's rows stay uniform, as tall as its longest
+  wrapped row, so scrolling and line anchors keep their arithmetic, and the box and layout use
+  the real heights.
+- **Types strip**: a slim row above the graph with the types in the view and their counts, each
+  a chip in its colour. Clicking a chip HIDES that type's classes (it stays listed, outlined and
+  struck through, so it can be shown again); hovering lights that type's boxes. Chosen in the
+  **engine**: `show["hide_types"]` in `views.py` removes the classes like the Tests
+  toggle (lines through them go too, never folded), and the CLI has `--hide-type EXT`
+  (repeatable), repeated in the command line, with a `hidden types:` line in the text.
+  `view["types"]` counts the drawn classes plus the hidden types' allowed classes;
+  `view["hidden_types"]` lists the hidden ones. The viewer keeps the choice per app in the browser.
+
 ## 12b. Hosting on your own server
 
 The hosted page on your server (here "the lab") is a thin front door: a container
@@ -1539,7 +1576,7 @@ Replaced by v3: reads and writes all go to the helper, nothing is pushed.
 - Notes and layout are one item per line, sorted (merge-friendly).
 - Selecting a spec shows its classes plus one faded layer out, like zoom.
 - Abstract classes with real code stay as nodes in Concrete view.
-- Scenes are nodes; type toggles switch scenes / outside code / domains on and off.
+- Scenes are nodes; type toggles switch outside code / domains on and off, the types strip hides scenes (`.tscn`).
 - Claude sets levels, domains and drafts hints through `curate`/`set`; your values win.
 - Making it part of Claude's normal flow comes later; what an agent needs is collected in
   `docs/AI_GUIDE.md`.

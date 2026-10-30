@@ -6,12 +6,14 @@
 "use strict";
 
 // Sizes from the mock-up: header 46, function row 24, field row 18.
-const FAN = { head: 46, row: 24, fieldRow: 18, fieldGap: 10, pad: 8, maxWidth: 380, labelMax: 46,
+const FAN = { head: 46, row: 24, fieldRow: 18, rowLine: 15, fieldLine: 14, fieldGap: 10, pad: 8, maxWidth: 380, labelMax: 46,
   junction: 56, visibleRows: 20, visibleFields: 12, filterAt: 20, filterRow: 28, wheelRows: 3,
   bundleMin: 4,     // this many lines between one pair of classes share a trunk
   quietLabels: 10, quietLinks: 16,  // a busier view shows names only on hover (counts stay)
   curve: 50, bulge: 34 };
-const FACE = { left: 28, right: 14, badge: 7, name: "600 13.5px", sub: "11px" };
+const FACE = { left: 28, right: 14, badge: 7, name: "600 13.5px", sub: "11px", nameLine: 17, subLine: 14,
+  wrapAt: 320,   // a box grows to fit its name up to this width, then the name wraps (never cut off)
+  chip: "700 10px", chipPad: 10, chipGap: 6 };
 const EXPAND_CAP = 30;  // "Expand all" opens at most this many classes
 const NOT_EXPANDABLE = ["external", "domain"];
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -92,11 +94,11 @@ function listsOf(box) {
   const fnRows = listRows(parts.total, FAN.visibleRows);
   const fnTop = box.y1 + box.head;
   const fields = listRows(parts.totalFields, FAN.visibleFields);
-  const fieldTop = fnTop + fnRows * FAN.row + FAN.fieldGap / 2;
+  const fieldTop = fnTop + fnRows * box.fnRow + FAN.fieldGap / 2;
   return {
-    fn: { key: `${box.id}#fn`, items: parts.functions, top: fnTop, row: FAN.row, rows: fnRows,
+    fn: { key: `${box.id}#fn`, items: parts.functions, top: fnTop, row: box.fnRow, rows: fnRows,
       offset: scrollOf(`${box.id}#fn`, parts.functions.length, fnRows) },
-    field: { key: `${box.id}#field`, items: parts.fields, top: fieldTop, row: FAN.fieldRow, rows: fields,
+    field: { key: `${box.id}#field`, items: parts.fields, top: fieldTop, row: box.fieldRow, rows: fields,
       offset: scrollOf(`${box.id}#field`, parts.fields.length, fields) },
   };
 }
@@ -123,12 +125,25 @@ function monoFont(size) {
   return `${size} ${token("f-mono")}`;
 }
 
-/** `text` cut with an ellipsis so it fits `width` in `font`. */
-function fitText(text, font, width) {
-  if (textWidth(text, font) <= width) return text;
-  let cut = text.length;
-  while (cut > 1 && textWidth(`${text.slice(0, cut)}…`, font) > width) cut--;
-  return `${text.slice(0, cut)}…`;
+function chipWidth(type) {
+  return type ? textWidth(type, monoFont(FACE.chip)) + FACE.chipPad : 0;
+}
+
+/** The face's text: name and sub-line on as many lines as they need, the type chip, header height. */
+function faceLayout(node, base, sub) {
+  const nameFont = monoFont(FACE.name);
+  const subFont = monoFont(FACE.sub);
+  const type = fileType(node.file);
+  const chipW = chipWidth(type);
+  const subGap = chipW ? chipW + FACE.chipGap : 0;
+  const textMax = FACE.wrapAt - FACE.left - FACE.right;
+  const nameLines = wrapName(base.name, (t) => textWidth(t, nameFont), textMax);
+  const subLines = sub ? wrapSub(sub, (t) => textWidth(t, subFont), textMax - subGap) : [];
+  const widest = Math.max(...nameLines.map((t) => textWidth(t, nameFont)),
+    ...subLines.map((t) => textWidth(t, subFont) + subGap), chipW);
+  const subRows = Math.max(subLines.length, type ? 1 : 0);
+  const headH = FAN.head + (nameLines.length - 1) * FACE.nameLine + Math.max(0, subRows - 1) * FACE.subLine;
+  return { type, chipW, nameLines, subLines, headH, w: widest + FACE.left + FACE.right };
 }
 
 /** Width of the open rows: the longest function or field. */
@@ -138,10 +153,26 @@ function rowsWidth(id) {
     ...parts.fields.map((f) => textWidth(fieldText(f), monoFont("11.5px")) + 32));
 }
 
-function rowsHeight(id) {
+/**
+ * The open rows wrapped to the box width. Every row of a list is as tall as its longest wrapped
+ * row (rows stay uniform so scrolling and line anchors keep their arithmetic).
+ */
+function rowLayout(id, boxW) {
   const parts = openParts(id);
-  const fields = parts.fields.length ? FAN.fieldGap + listRows(parts.fields.length, FAN.visibleFields) * FAN.fieldRow : 0;
-  return listRows(parts.functions.length, FAN.visibleRows) * FAN.row + fields + FAN.pad;
+  const fnFont = monoFont("12.5px");
+  const fldFont = monoFont("11.5px");
+  const wrap = (text, font, width) => wrapName(text, (t) => textWidth(t, font), width);
+  const fnLines = Object.fromEntries(parts.functions.map((f) => [f.name, wrap(`${f.name}()`, fnFont, boxW - 44)]));
+  const fieldLines = Object.fromEntries(parts.fields.map((f) => [fieldText(f), wrap(fieldText(f), fldFont, boxW - 26)]));
+  const most = (lines) => Math.max(1, ...Object.values(lines).map((l) => l.length));
+  return { fnLines, fieldLines, fnRow: FAN.row + (most(fnLines) - 1) * FAN.rowLine,
+    fieldRow: FAN.fieldRow + (most(fieldLines) - 1) * FAN.fieldLine };
+}
+
+function rowsHeight(id, rows) {
+  const parts = openParts(id);
+  const fields = parts.fields.length ? FAN.fieldGap + listRows(parts.fields.length, FAN.visibleFields) * rows.fieldRow : 0;
+  return listRows(parts.functions.length, FAN.visibleRows) * rows.fnRow + fields + FAN.pad;
 }
 
 /**
@@ -152,15 +183,15 @@ function fanNodeData(node, base) {
   if (!isExpandable(node)) return base;
   const sub = faceSub(node, base.marks);
   const top = boxBadges(node).length ? FACE.badge : 0;
-  const nameW = textWidth(base.name, monoFont(FACE.name));
-  const w = Math.min(FAN.maxWidth, Math.max(nameW, textWidth(sub, monoFont(FACE.sub))) + FACE.left + FACE.right);
-  const closedH = top + FAN.head;
-  const data = { ...base, label: "", sub, top, w, h: closedH, head: closedH };
+  const { w, ...face } = faceLayout(node, base, sub);
+  const closedH = top + face.headH;
+  const data = { ...base, ...face, label: "", sub, top, w, h: closedH, head: closedH };
   if (!openParts(node.id)) return data;
   const head = closedH + (openParts(node.id).functions.length > FAN.filterAt ? FAN.filterRow : 0);
-  const h = head + rowsHeight(node.id);
-  const openW = Math.min(FAN.maxWidth, Math.max(w, rowsWidth(node.id)));
-  return { ...data, w: openW, h, head, grow: (h - closedH) / 2, widen: (openW - w) / 2, open: true };
+  const openW = Math.max(w, Math.min(FAN.maxWidth, rowsWidth(node.id)));
+  const rows = rowLayout(node.id, openW);
+  const h = head + rowsHeight(node.id, rows);
+  return { ...data, ...rows, w: openW, h, head, grow: (h - closedH) / 2, widen: (openW - w) / 2, open: true };
 }
 
 /** Where a class is drawn: an open box grows right and down from its closed box's top-left
@@ -199,14 +230,15 @@ function boxOf(id) {
   const w = node.data("w");
   const h = node.data("h");
   return { id, x1: x - w / 2, x2: x + w / 2, y1: y - h / 2, y2: y + h / 2, cx: x, cy: y, w, h,
-    head: node.data("head") || h, top: node.data("top") || 0, open: Boolean(node.data("open")) };
+    head: node.data("head") || h, headH: node.data("headH") || FAN.head, fnRow: node.data("fnRow"), fieldRow: node.data("fieldRow"),
+    fnLines: node.data("fnLines"), fieldLines: node.data("fieldLines"), top: node.data("top") || 0, open: Boolean(node.data("open")) };
 }
 
 /** Where a link leaves or reaches a class: its function row, the list edge when that row is
  * scrolled out of view (or filtered out), else the header. */
 function anchorOf(box, fn, side) {
   const x = side === "right" ? box.x2 : box.x1;
-  const header = box.y1 + box.top + FAN.head / 2;
+  const header = box.y1 + box.top + box.headH / 2;
   if (!fn || !box.open || !openParts(box.id)?.functions.some((f) => f.name === fn)) return { x, y: header };
   const list = listsOf(box).fn;
   const index = list.items.findIndex((f) => f.name === fn) - list.offset;
@@ -557,14 +589,41 @@ function drawFace(layer, node) {
   if (!isExpandable(raw)) return;
   const open = box.open;
   const top = box.y1 + box.top;
-  svgEl("rect", { x: box.x1 + 1, y: top + 1, width: box.w - 2, height: FAN.head - 2, rx: 6, class: "cls-head" }, group);
-  const textW = box.w - FACE.left - FACE.right;
-  const name = svgEl("text", { x: box.x1 + FACE.left, y: top + 21, class: "cls-name" }, group);
-  name.textContent = fitText(node.data("name"), monoFont(FACE.name), textW);
-  const sub = node.data("sub");
-  if (sub) svgEl("text", { x: box.x1 + FACE.left, y: top + 37, class: "cls-sub" }, group).textContent = fitText(sub, monoFont(FACE.sub), textW);
+  svgEl("rect", { x: box.x1 + 1, y: top + 1, width: box.w - 2, height: box.headH - 2, rx: 6, class: "cls-head" }, group);
+  drawTypeEdge(group, box, raw);
+  drawFaceText(group, box, node, top);
   drawToggle(group, box, raw, open, top + 16.5);  // centred on the name line
   if (open) drawRows(group, box, raw);
+}
+
+/** The coloured top edge (reads when zoomed far out) in the class's type colour. */
+function drawTypeEdge(group, box, raw) {
+  const type = fileType(raw.file);
+  if (!type) return;
+  const { bg } = typeColors(type, themeName());
+  svgEl("line", { x1: box.x1 + 8, x2: box.x2 - 8, y1: box.y1 + box.top + 1.5, y2: box.y1 + box.top + 1.5,
+    stroke: bg, "stroke-width": 3, "stroke-linecap": "round", class: "type-edge" }, group);
+}
+
+/** Name lines, then the sub-line rows with the type chip in front. */
+function drawFaceText(group, box, node, top) {
+  const nameLines = node.data("nameLines");
+  nameLines.forEach((line, i) => {
+    svgEl("text", { x: box.x1 + FACE.left, y: top + 21 + i * FACE.nameLine, class: "cls-name" }, group).textContent = line;
+  });
+  const subTop = top + 37 + (nameLines.length - 1) * FACE.nameLine;
+  const type = node.data("type");
+  const gap = type ? node.data("chipW") + FACE.chipGap : 0;
+  if (type) drawChip(group, box.x1 + FACE.left, subTop - 11, type, node.data("chipW"));
+  node.data("subLines").forEach((line, i) => {
+    svgEl("text", { x: box.x1 + FACE.left + gap, y: subTop + i * FACE.subLine, class: "cls-sub" }, group).textContent = line;
+  });
+}
+
+function drawChip(group, x, y, type, width) {
+  const { bg, ink } = typeColors(type, themeName());
+  svgEl("rect", { x, y, width, height: 14, rx: 4, fill: bg, class: "type-chip" }, group);
+  svgEl("text", { x: x + width / 2, y: y + 10.5, "text-anchor": "middle", fill: ink, class: "type-chip-text" }, group).textContent = type;
 }
 
 function drawToggle(group, box, raw, open, y) {
@@ -611,7 +670,7 @@ function drawRows(group, box, raw) {
   const fnList = svgEl("g", { class: "fn-list" }, group);
   drawListBack(fnList, box, lists.fn);
   lists.fn.items.slice(lists.fn.offset, lists.fn.offset + lists.fn.rows).forEach((f, i) => {
-    drawFnRow(fnList, box, raw, f, lists.fn.top + i * FAN.row);
+    drawFnRow(fnList, box, raw, f, lists.fn.top + i * box.fnRow);
   });
   drawScroll(fnList, box, lists.fn, offLines(raw.id, lists.fn));
   if (openParts(raw.id).functions.length > FAN.filterAt) drawFilter(group, box, raw.id);
@@ -621,10 +680,10 @@ function drawRows(group, box, raw) {
   const fields = svgEl("g", { class: "field-list" }, group);
   const fieldList = { ...lists.field, top: sepY };
   drawListBack(fields, box, fieldList);
-  const fontW = box.w - 26;
   lists.field.items.slice(fieldList.offset, fieldList.offset + fieldList.rows).forEach((f, i) => {
-    svgEl("text", { x: box.x1 + 16, y: sepY + 16 + i * FAN.fieldRow, class: "fld" }, fields)
-      .textContent = fitText(fieldText(f), monoFont("11.5px"), fontW);
+    box.fieldLines[fieldText(f)].forEach((line, n) => {
+      svgEl("text", { x: box.x1 + 16, y: sepY + 16 + i * box.fieldRow + n * FAN.fieldLine, class: "fld" }, fields).textContent = line;
+    });
   });
   drawScroll(fields, box, fieldList, null);
 }
@@ -632,11 +691,15 @@ function drawRows(group, box, raw) {
 function drawFnRow(layer, box, raw, f, y) {
   const active = state.activeFn?.cls === raw.id && state.activeFn?.fn === f.name;
   const row = svgEl("g", { class: `fn${active ? " active" : ""}` }, layer);
-  const hit = svgEl("rect", { x: box.x1 + 1, y, width: box.w - 2, height: FAN.row, class: "fn-row",
+  const hit = svgEl("rect", { x: box.x1 + 1, y, width: box.w - 2, height: box.fnRow, class: "fn-row",
     tabindex: 0, role: "button", "aria-label": `${raw.name}.${f.name}` }, row);
-  const text = svgEl("text", { x: box.x1 + 16, y: y + 16, class: "fn-name" }, row);
-  text.textContent = fitText(f.name, monoFont("12.5px"), box.w - 44);
-  svgEl("tspan", { class: "paren" }, text).textContent = "()";
+  const lines = box.fnLines[f.name];
+  lines.forEach((line, n) => {
+    const text = svgEl("text", { x: box.x1 + 16, y: y + 16 + n * FAN.rowLine, class: "fn-name" }, row);
+    const last = n === lines.length - 1 && line.endsWith("()");
+    text.textContent = last ? line.slice(0, -2) : line;
+    if (last) svgEl("tspan", { class: "paren" }, text).textContent = "()";
+  });
   const item = fnItem(raw.id, f);
   hit.addEventListener("mouseenter", () => hoverFn(item));
   hit.addEventListener("focus", () => hoverFn(item));
@@ -690,7 +753,7 @@ function drawScroll(layer, box, list, off) {
 
 /** A filter box under the header of a class with many functions. */
 function drawFilter(group, box, id) {
-  const fo = svgEl("foreignObject", { x: box.x1 + 10, y: box.y1 + box.top + FAN.head - 2, width: box.w - 20, height: 24 }, group);
+  const fo = svgEl("foreignObject", { x: box.x1 + 10, y: box.y1 + box.top + box.headH - 2, width: box.w - 20, height: 24 }, group);
   const input = document.createElement("input");
   input.className = "fn-filter";
   input.type = "search";

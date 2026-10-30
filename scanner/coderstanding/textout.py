@@ -8,7 +8,7 @@ import shlex
 from .checks import STALE_KIND, layer_label
 from .items import plain_links
 from .notes import ARROW, FUNCTION_SEP
-from .views import compute_view
+from .views import compute_view, level_label
 
 FEW_CALLS = 3
 DESCRIPTION_MAX = 200  # longest edge description printed under a zoom line
@@ -140,7 +140,7 @@ def hubs_text(graph, short_name=str, shown=6):
 
 def format_graph(app, view, all_calls=False, short_name=str, graph=None):
     counts = view["counts"]
-    header = f"{app} L{view['level']} {view['view']} {counts['shown']}/{counts['total']}"
+    header = f"{app} {level_label(view.get('scale'), view['level'])} {view['view']} {counts['shown']}/{counts['total']}"
     header += hubs_text(graph, short_name) if graph else ""
     return "\n".join([header, *edge_lines(view, all_calls, short_name),
                       *alone_line(view, labels(view))])
@@ -156,7 +156,7 @@ def rules_lines(label, rules):
 
 def format_zoom(app, view, all_calls=False, short_name=str):
     zoom, names = view["zoom"], labels(view)
-    header = f"{app} zoom {names[zoom['from']]}>{names[zoom['to']]} L{view['level']} {view['view']}"
+    header = f"{app} zoom {names[zoom['from']]}>{names[zoom['to']]} {level_label(view.get('scale'), view['level'])} {view['view']}"
     by_id = {n["id"]: n for n in view["nodes"]}
     rules = [line for end in dict.fromkeys((zoom["from"], zoom["to"])) if end in by_id
              for line in rules_lines(f"rules {names[end]}", by_id[end].get("rules"))]
@@ -207,7 +207,7 @@ def node_detail(node):
 
 def node_head(app, view, node_id, names, suffix=""):
     node = next(n for n in view["nodes"] if n["id"] == node_id)
-    return [f"{app} node {names[node_id]} L{view['level']} {view['view']}{suffix}",
+    return [f"{app} node {names[node_id]} {level_label(view.get('scale'), view['level'])} {view['view']}{suffix}",
             *node_detail(node)]
 
 
@@ -312,8 +312,9 @@ def view_command(app, level=1, concrete=False, show=None, zoom=None, expand=(), 
         parts += ["--expand", node_id]
     if select:
         parts += ["--select", select]
-    flags = [("--tests", show.get("test")), ("--no-scenes", show.get("scene") is False),
-             ("--no-external", show.get("external") is False)]
+    for hidden in show.get("hide_types") or []:
+        parts += ["--hide-type", hidden]
+    flags = [("--tests", show.get("test")), ("--no-external", show.get("external") is False)]
     parts += [flag for flag, on in flags if on]
     return "$ " + " ".join(shlex.quote(p) for p in parts)
 
@@ -356,6 +357,9 @@ def format_view(app, view, command, select=None, short_name=str):
         body = format_graph(app, view, short_name=short_name)
     names = labels(view)
     lines = [command, body]
+    hidden = view.get("hidden_types", [])
+    if hidden:
+        lines.insert(1, "hidden types: " + " ".join(hidden))
     for node_id in view["expanded"]:
         lines += function_lines(view, node_id, names, short_name)
     if select:

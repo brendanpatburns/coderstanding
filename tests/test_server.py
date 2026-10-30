@@ -67,11 +67,11 @@ def test_view_follows_level(server):
 
 
 def test_view_args_parse_zoom_and_toggles():
-    args = view_args({"level": ["2"], "view": ["concrete"], "scene": ["0"],
+    args = view_args({"level": ["2"], "view": ["concrete"], "scene": ["0"], "hide": [".gd"],
                       "zoom_from": ["A"], "zoom_to": ["B"], "zoom_level": ["2"],
                       "via": ["X", "Y"]})
     assert args["level"] == 2 and args["view"] == "concrete"
-    assert args["show"] == {"scene": False, "external": True, "test": False}
+    assert args["show"] == {"external": True, "test": False, "hide_types": [".gd", ".tscn"]}
     assert args["zoom"] == {"from": "A", "to": "B", "level": 2, "via": ["X", "Y"]}
     assert view_args({})["zoom"] is None
 

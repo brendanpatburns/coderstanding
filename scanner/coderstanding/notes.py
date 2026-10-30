@@ -116,6 +116,7 @@ class Notes:
         self._authors = {}  # key -> set of authors with an entry
         self.rules = []  # the app's warning rules (apps.py sets them on load; not in notes.jsonl)
         self.layers = []  # the app's architecture rules (same)
+        self.levels = None  # the app's saved {count, names} (same; views.level_scale)
 
     def is_ai(self, key, by):
         return (key, by) in self.ai

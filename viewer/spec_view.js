@@ -1,6 +1,5 @@
 // Specs | Notes sidebar (DESIGN 7, 7d): one component for both card kinds (specs and memos, which
-// the UI calls Notes). Nested boxes with stage and priority chips, a level slider (or "follow
-// graph"), folding with "+N finer", zoom with breadcrumbs, search, stage/priority filters and
+// the UI calls Notes). Nested boxes with stage and priority chips, a level slider of its own, folding with "+N finer", zoom with breadcrumbs, search, stage/priority filters and
 // sorting, and editing (add, sub-item, title, stage, priorities, level, text, links, move, delete,
 // Accept). The server folds, searches, filters and checks (cards.py); selecting an item asks the
 // server's view with its links as `focus`. The tab's folder (`specs` | `memos`) is the API path.
@@ -11,7 +10,6 @@ const FOLDERS = ["specs", "memos"];
 const blank = () => ({
   data: null,          // last GET /api/<folder> answer
   level: null,         // the sidebar's own slider (null = every level)
-  follow: false,       // tie the level to the graph slider
   zoom: null,          // id zoomed into
   query: "", stage: "", priority: "", importance: "", sort: "",
   selected: null,      // id
@@ -37,7 +35,7 @@ const sendJson = (path, method, body) => api(path, { method, headers: { "Content
 // ---------- loading ----------
 
 function shownLevel() {
-  return v().follow ? state.level : v().level;
+  return v().level;  // spec levels are not graph levels
 }
 
 async function load() {
@@ -239,7 +237,6 @@ function renderTools() {
   $("specImportanceFilter").innerHTML = `<option value="">Imp.: any</option>${options(data.priorities, t.importance, (x) => `imp: ${x}`)}`;
   $("specSort").value = t.sort;
   if (document.activeElement !== $("specSearch")) $("specSearch").value = t.query;
-  $("specFollow").checked = t.follow;
   $("specHint").innerHTML = `One Markdown file per ${oneWord()} in <code>${data.folder}/</code> of the app's data folder. The AI reads them with <code>coderstanding ${data.folder}</code> and <code>coderstanding ${data.kind}</code>.`;
 }
 
@@ -248,7 +245,6 @@ function renderLevel() {
   const slider = $("specLevel");
   slider.max = String(max);
   slider.value = String(Math.min(shownLevel() ?? max, max));
-  slider.disabled = v().follow;
   $("specLevelOut").textContent = shownLevel() == null || shownLevel() >= max ? "All levels" : `Level ${shownLevel()}`;
 }
 
@@ -500,8 +496,6 @@ function bind() {
     if (crumb) { v().zoom = crumb.dataset.crumb || null; load(); }
   });
   $("specLevel").addEventListener("input", () => { v().level = Number($("specLevel").value); load(); });
-  $("specFollow").addEventListener("change", () => { v().follow = $("specFollow").checked; load(); });
-  $("level").addEventListener("input", () => { if (v().follow) load(); });
   document.addEventListener("coder:select", () => { if (v().selected && !v().editing) render(); });
 }
 

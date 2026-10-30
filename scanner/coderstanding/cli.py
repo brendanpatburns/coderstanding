@@ -25,7 +25,7 @@ from .scan import default_output, scan_repo
 from .testcode import is_test, files_to_retest
 from .cards import KINDS, PRIORITIES, SORTS, link_index, open_cards
 from .tours import open_tours
-from .views import (CONCRETE, EXPAND_ALL, IMPACT_DEPTH, brief, compute_view, effective_level, find,
+from .views import (CONCRETE, EXPAND_ALL, IMPACT_DEPTH, SCENE_TYPE, brief, compute_view, effective_level, find,
                     impact, outline)
 
 CURATED_FIELDS = ("level", "domain", "hint")
@@ -110,12 +110,15 @@ def run_settings(args):
         changes[name] = text
     settings = app.change_settings(changes) if changes else app.scan_settings()
     print(f"{app.name} settings " + " ".join(f"{k}={'off' if v == 0 else v}"
-                                             for k, v in settings.items()))
+                                             for k, v in settings.items())
+          + (f" levels={','.join(app.level_settings()['names'])}" if app.level_settings() else ""))
 
 
 def add_settings(commands):
     parser = commands.add_parser("settings", help="show or change scan settings "
-                                 f"({', '.join(SETTINGS)}); a change applies at the next `rescan`")
+                                 f"({', '.join(SETTINGS)}); a change applies at the next `rescan`; "
+                                 "levels=Domains,App,Systems,... names the depth levels (level 0 first, "
+                                 "the last name is the last level; never rescans)")
     app_args(parser, view_options=False)
     parser.add_argument("items", nargs="*", help="key=value ...")
     parser.set_defaults(run=run_settings)
@@ -129,9 +132,11 @@ def app_args(parser, view_options=True, optional=False):
     if view_options:
         parser.add_argument("--concrete", action="store_true", help="concrete view")
         parser.add_argument("--calls", action="store_true", help="list every call")
-        parser.add_argument("--no-scenes", action="store_true", help="hide scenes")
+        parser.add_argument("--no-scenes", action="store_true", help="same as --hide-type .tscn")
         parser.add_argument("--no-external", action="store_true", help="hide outside code")
         parser.add_argument("--tests", action="store_true", help="show test code (hidden by default)")
+        parser.add_argument("--hide-type", action="append", default=[], metavar="EXT",
+                            help="hide the classes of a file type, e.g. .gd (repeatable)")
 
 
 def open_app(args):
@@ -147,10 +152,15 @@ def open_app(args):
     return app, graph, notes
 
 
+def hidden_types(args):
+    hidden = [t.lower() for t in args.hide_type]
+    return hidden + [SCENE_TYPE] if args.no_scenes and SCENE_TYPE not in hidden else hidden
+
+
 def view_options(args):
     return {"view": CONCRETE if args.concrete else "all",
-            "show": {"scene": not args.no_scenes, "external": not args.no_external,
-                     "test": args.tests}}
+            "show": {"external": not args.no_external, "test": args.tests,
+                     "hide_types": hidden_types(args)}}
 
 
 def unique_namer(graph):

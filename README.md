@@ -1,7 +1,7 @@
 # Coderstanding
 
 Scan a code base, see its classes and how they connect, at the level of detail you choose.
-A local viewer draws the graph (granularity slider, concrete-only view, notes on classes and
+A local viewer draws the graph (depth ruler, concrete-only view, notes on classes and
 connections, guided code tours), and a slim text CLI prints the same views for AI coding agents,
 so they read structure instead of grepping files.
 

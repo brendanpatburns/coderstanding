@@ -30,6 +30,7 @@ class AppError(Exception):
 
 # Per-app scan settings, kept in `<data>/settings.json`: name -> (parser, default).
 SETTINGS = {"hub_threshold": (parse_hub_threshold, AUTO)}
+MAX_LEVELS = 12  # the depth ruler's most levels (not counting level 0)
 
 
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -122,6 +123,11 @@ class App:
 
     def change_settings(self, changes):
         """Validate and save {name: text}; they apply at the next rescan."""
+        changes = dict(changes)
+        names = changes.pop("levels", None)  # "Domains,App,Systems": level 0 first; not a scan setting
+        if names is not None:
+            names = [n.strip() for n in names.split(",")]
+            self.set_levels(len(names) - 1, names)
         settings = self.scan_settings()
         for name, text in changes.items():
             if name not in SETTINGS:
@@ -132,6 +138,30 @@ class App:
                 raise AppError(str(error)) from error
         self.write_settings(**settings)
         return settings
+
+    def level_settings(self):
+        """The saved {count, names} of the depth ruler, or None for the scan's own levels.
+        Like rules, a change never rescans."""
+        return self.saved_settings().get("levels")
+
+    def set_levels(self, count, names):
+        """Save how many levels the app has (1..MAX_LEVELS, not counting level 0) and their names."""
+        try:
+            count = int(count)
+        except (TypeError, ValueError) as error:
+            raise AppError("levels: count must be a number") from error
+        if not 1 <= count <= MAX_LEVELS:
+            raise AppError(f"levels: count must be 1-{MAX_LEVELS}")
+        names = [str(n).strip() for n in (names or [])][:count + 1]
+        levels = {"count": count, "names": names}
+        self.write_settings(levels=levels)
+        return levels
+
+    def reset_levels(self):
+        """Back to the scan's own levels, named "Level N"."""
+        settings = self.saved_settings()
+        settings.pop("levels", None)
+        self.settings_path.write_text(json.dumps(settings, indent=1) + "\n", encoding="utf-8")
 
     def warning_rules(self):
         """Per-folder warning rules (checks.parse_rule). They only filter warnings on load,
@@ -177,6 +207,7 @@ class App:
         notes = load_notes(self.notes_path)
         notes.rules = self.warning_rules()
         notes.layers = self.layer_rules()
+        notes.levels = self.level_settings()
         return notes
 
     def checked(self, graph, notes):

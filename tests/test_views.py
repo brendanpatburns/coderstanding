@@ -191,11 +191,12 @@ def test_external_always_visible_and_toggle():
     assert "addon" not in node_ids(view) and pairs(view) == set()
 
 
-def test_scene_toggle_removes_scene_nodes():
+def test_hiding_the_tscn_type_removes_scene_nodes():
     graph = make_graph({"main.tscn": (1, "scene", []), "Player": 1},
                        [("main.tscn", "Player", "composition")])
+    graph.nodes["main.tscn"].file = "main.tscn"
     assert "main.tscn→Player" in pairs(compute_view(graph))
-    view = compute_view(graph, show={"scene": False})
+    view = compute_view(graph, show={"hide_types": [".tscn"]})
     assert node_ids(view) == {"Player"} and view["counts"]["total"] == 1
 
 
@@ -273,6 +274,30 @@ def test_zoom_with_given_via_drills_deeper():
     assert edge_of(view, "M2→B")["direct"]
 
 
+def skip_graph():
+    return make_graph(
+        {"A": 1, "D1": 3, "D2": 4, "B": 1, "C": 1},
+        [("A", "D1", "composition"), ("D1", "D2", "composition"),
+         ("D2", "B", "dependency", ["hit"]), ("D1", "C", "dependency"),
+         ("A", "C", "dependency")])
+
+
+def test_zoom_skips_to_first_level_with_hidden_classes():
+    view = compute_view(skip_graph(), zoom={"from": "A", "to": "B", "level": 1})
+    assert view["level"] == 3 and view["zoom"]["level"] == 1
+    assert node_ids(view, faded=False) == {"A", "B", "D1"}
+    assert edge_of(view, "D1→B")["via"] == [["D2"]]  # deeper classes stay folded
+    assert node_ids(view, faded=True) == set()
+    assert "D1→C" not in pairs(view) and "A→C" not in pairs(view)
+    assert pairs(view) == {"A→D1", "D1→B"}
+
+
+def test_zoom_skip_drills_from_shown_level():
+    view = compute_view(skip_graph(), zoom={"from": "D1", "to": "B", "level": 3})
+    assert view["level"] == 4 and node_ids(view, faded=False) == {"D1", "D2", "B"}
+    assert "D1→C" in pairs(view)  # a one-level zoom keeps its faded lines
+
+
 def test_node_zoom_shows_neighbours():
     view = compute_view(zoom_graph(), zoom={"from": "C", "to": None, "level": 1})
     assert node_ids(view, faded=False) == {"C", "Far", "M1"}
@@ -303,7 +328,7 @@ def test_output_shape_for_viewer():
     notes.set("edge:GameEngine→VFX", "you", {"hint": "drives", "description": "long"})
     notes.set("node:VFX", "claude", {"description": "effects"})
     view = compute_view(engine_graph(), notes, level=1, view="all",
-                        show={"scene": True, "external": True}, zoom=None, focus=None)
+                        show={"external": True}, zoom=None, focus=None)
     assert set(view) >= {"level", "view", "zoom", "counts", "nodes", "edges"}
     assert view["level"] == 1 and view["view"] == "all" and view["zoom"] is None
     assert view["counts"] == {"shown": 3, "total": 6}

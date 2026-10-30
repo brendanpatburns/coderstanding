@@ -5,6 +5,8 @@ nodes and merged edges (direct or derived, with via paths and per-hop calls). Th
 the text CLI both draw this; neither computes views itself.
 """
 
+import os
+from collections import Counter
 from dataclasses import dataclass, field
 
 from .checks import split_ignored, warning_text
@@ -17,7 +19,9 @@ from .testcode import covering_tests, index_tests, is_test, retest_files
 ALL, CONCRETE = "all", "concrete"
 CODE_AUTHOR = "code"  # `description_by` of a description taken from the code
 OWNER_RANK = {"composition": 0, "association": 1, "dependency": 2}
-DEFAULT_SHOW = {"scene": True, "external": True, "test": False}
+DEFAULT_SHOW = {"external": True, "test": False}
+SCENE_TYPE = ".tscn"  # Godot scenes: hiding them is hiding this type
+HIDE_TYPES = "hide_types"  # `show` key: file extensions (`.gd`) whose classes are removed
 ABSTRACT_MEMBER_KINDS = ("abstract", "signal")  # members that are not real code
 
 
@@ -63,15 +67,60 @@ class Merged:
             self.as_from.add((link.from_id, link.as_))
 
 
+def file_type(file):
+    """A file's type chip text: its lowercase extension (`.gd`), "" without one."""
+    return os.path.splitext(file)[1].lower()
+
+
 def is_pure_abstract(node):
     """An abstract class with no real code: only abstract members (or none)."""
     return ("abstract" in node.flags
             and all(m.kind in ABSTRACT_MEMBER_KINDS for m in node.members))
 
 
-def effective_level(graph, notes, node_id):
+def raw_level(graph, notes, node_id):
     """A level set in notes wins over the scan's guess."""
     return notes.value(node_key(node_id), "level", graph.nodes[node_id].level)
+
+
+def effective_level(graph, notes, node_id):
+    """The node's level; one deeper than the app's last level counts as the last level
+    (the only place that clamps)."""
+    level = raw_level(graph, notes, node_id)
+    last = (notes.levels or {}).get("count")
+    return min(level, last) if last else level
+
+
+def level_scale(graph, notes):
+    """The app's levels as {"count": last level, "names": [name of level 0..count]}: what the
+    user saved in settings.json (apps.py), else one level per scanned depth named "Level N".
+    The one place for level names, used by the viewer, the CLI text and the view engine."""
+    saved = notes.levels or {}
+    count = saved.get("count") or max((raw_level(graph, notes, i) for i, n in graph.nodes.items()
+                                       if n.kind != "external"), default=1)
+    given = saved.get("names") or []
+    names = [given[i] if i < len(given) and given[i] else ("Domains" if i == 0 else f"Level {i}")
+             for i in range(count + 1)]
+    return {"count": count, "names": names}
+
+
+def level_label(scale, level):
+    """`2 Systems`-style text for a level (the number alone when the name is the default)."""
+    names = scale["names"] if scale else []
+    name = names[level] if level < len(names) else ""
+    return f"L{level} {name}" if name and name != f"Level {level}" else f"L{level}"
+
+
+def level_counts(ctx):
+    """Classes per level 0..count (level 0: the domains), for the viewer's depth ruler;
+    follows the Show toggles."""
+    count = level_scale(ctx.graph, ctx.notes)["count"]
+    counts = [0] * (count + 1)
+    counts[0] = len(ctx.notes.domains())
+    for node_id in ctx.allowed:
+        if not ctx.is_external(node_id):
+            counts[min(ctx.level(node_id), count)] += 1
+    return counts
 
 
 def is_interface_like(node):
@@ -123,11 +172,13 @@ class ViewContext:
         node = self.graph.nodes[node_id]
         return is_interface_like(node) or (self.view == CONCRETE and is_pure_abstract(node))
 
-    def _removed(self, node):
+    def _removed(self, node, ignore_types=False):
         """Switched-off types; hidden tests are removed outright, never folded (DESIGN 12a)."""
-        if node.kind in ("scene", "external") and not self.show.get(node.kind, True):
+        if node.kind == "external" and not self.show.get("external", True):
             return True
         if is_test(node) and not self.show.get("test"):
+            return True
+        if not ignore_types and node.file and file_type(node.file) in self.show.get(HIDE_TYPES, ()):
             return True
         return self.view == CONCRETE and (is_interface_like(node) or is_pure_abstract(node))
 
@@ -293,24 +344,31 @@ def neighbours(ctx, node_id, level):
 
 
 def zoom_view(ctx, zoom):
-    """DESIGN 6: the zoom set at one more level of detail, plus faded links out of it."""
+    """DESIGN 6: the zoom set at one more level of detail, plus faded links out of it.
+
+    A line whose hidden classes are all deeper skips to the first level that has some; then
+    the zoom shows just the path (no faded links, the ends are terminations)."""
     level = zoom.get("level", 1)
     from_id, to = zoom["from"], zoom.get("to")
+    shown = level + 1
     if to:
         via = zoom.get("via")
         if via is None:
             via = edge_via(ctx, from_id, to, level)
-        core = {from_id, to} | {n for n in via if n in ctx.graph.nodes
-                                and n not in ctx.removed and ctx.level(n) <= level + 1}
+        via = [n for n in via if n in ctx.graph.nodes and n not in ctx.removed]
+        shown = max(shown, min(map(ctx.level, via), default=shown))
+        core = {from_id, to} | {n for n in via if ctx.level(n) <= shown}
     else:
         core = {from_id} | neighbours(ctx, from_id, level + 1)
     folder = Folder(ctx, ctx.visible_at(level) | core, fold_domains=level == 0)
-    return focus_on(core, collapse(ctx, folder), folder, level + 1)
+    return focus_on(core, collapse(ctx, folder), folder, shown, outside=shown == level + 1)
 
 
-def focus_on(core, edges, folder, level):
-    """Keep edges touching the core; fade the ones that leave it and their far ends."""
-    kept = {k: e for k, e in edges.items() if e.from_id in core or e.to in core}
+def focus_on(core, edges, folder, level, outside=True):
+    """Keep edges touching the core; fade the ones that leave it and their far ends.
+    `outside` False keeps only the edges between core nodes."""
+    kept = {k: e for k, e in edges.items()
+            if (e.from_id in core and e.to in core) or (outside and (e.from_id in core or e.to in core))}
     for edge in kept.values():
         edge.faded = edge.faded or not (edge.from_id in core and edge.to in core)
     faded = {i for e in kept.values() if e.faded for i in (e.from_id, e.to)} - core
@@ -512,7 +570,8 @@ def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
     """The view for (level, view, type toggles, optional zoom, optional focus).
 
     zoom: {"from", "to" (None for a node zoom), "level", "via" (optional: found if missing)}.
-    In a zoom the returned "level" is the level shown (zoom level + 1).
+    In a zoom the returned "level" is the level shown (zoom level + 1, or deeper when the
+    line's hidden classes all are).
     expand: class ids to open into their functions (EXPAND_ALL = every shown class); only
     shown classes open. Adds "expanded" and "fanout" (fanout.py, DESIGN 12c).
     focus: targets as view ids (`A`, `A→B`, `A#f`) to highlight, as specs and tour steps do
@@ -545,14 +604,28 @@ def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
             row["cards"] = badges.get(row["id"], 0)
         for row in edge_rows:
             row["cards"] = badges.get(row["key"], 0)
+    scale = level_scale(graph, ctx.notes)
     return {"level": result.level, "view": view, "zoom": zoom,
+            "scale": {**scale, "counts": level_counts(ctx)},
             "counts": {"shown": len(result.shown), "total": len(ctx.allowed)},
+            "types": type_counts(ctx, nodes),
+            "hidden_types": sorted(ctx.show.get(HIDE_TYPES, ())),
             "nodes": sorted(nodes, key=sort_key),
             "edges": edge_rows,
             "needs_binding": ctx.needs_binding(),
             "focus": focused,
             "expanded": {i: expanded_json(ctx, i) for i in sorted(open_ids)},
             "fanout": fanout_links(ctx, [e for _, e in edges], open_ids)}
+
+
+def type_counts(ctx, node_rows):
+    """{extension: classes} for the types strip: the drawn classes, plus the hidden types
+    (count of their classes this view's toggles allow) so their chips can be turned back on."""
+    counts = Counter(file_type(row["file"]) for row in node_rows if row["file"])
+    for hidden in ctx.show.get(HIDE_TYPES, ()):
+        counts[hidden] = sum(1 for n in ctx.graph.nodes.values() if n.file and file_type(n.file) == hidden
+                             and not ctx._removed(n, ignore_types=True))
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def expanded_json(ctx, node_id):

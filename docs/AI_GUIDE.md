@@ -37,10 +37,11 @@ package; `coderstanding <command> --help` lists every option.
 ## Commands in detail
 - Before reading files in a registered repo, run `coderstanding graph <app> 1` to see the top level.
 - To understand one connection, `coderstanding zoom <app> <from> <to> [--level L]`; one class,
-  `coderstanding node <app> <name> [level]`. `graph <app> 0` shows domains.
+  `coderstanding node <app> <name> [level]`. `graph <app> 0` shows domains. Headers print the
+  user's level name next to the number (`L2 Systems`); a user-named level count caps the levels.
 - Names: full id or a unique short name (`Net`, `net.gd`, `src/net.gd`); ambiguous names
-  list the candidates. Options: `--concrete`, `--calls` (all calls), `--no-scenes`,
-  `--no-external`, `--data DIR` (keep graph/notes outside the repo).
+  list the candidates. Options: `--concrete`, `--calls` (all calls), `--hide-type .gd`
+  (repeatable; `--no-scenes` = `--hide-type .tscn`), `--no-external`, `--data DIR` (keep graph/notes outside the repo).
 - Level 1 also holds hubs (classes with too many connections, `[hub 80]` = 80 neighbours); the
   `graph` header lists them. `coderstanding settings <app> [hub_threshold=N|auto|off]` shows or
   changes the threshold (rescans next command); also `add ... --hub-threshold`, `scan ... --hub-threshold`.

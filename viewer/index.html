@@ -31,7 +31,6 @@
         <label for="specLevel">Detail</label>
         <input type="range" id="specLevel" min="1" max="1" step="1" value="1">
         <span class="lvl" id="specLevelOut">All levels</span>
-        <label class="check" title="Tie the sidebar's detail to the graph's Detail slider"><input type="checkbox" id="specFollow"> follow graph</label>
       </div>
       <nav class="spec-crumbs" id="specCrumbs" aria-label="Zoom path"></nav>
       <ul class="spec-hits" id="specHits" hidden></ul>
@@ -68,6 +67,20 @@
       <ul class="apps-list" id="appsList"></ul>
       <footer><span class="appmsg" id="appsMsg" role="status"></span><span class="grow"></span><button class="btn small" id="appsScanFolder" title="Register a repo folder on this computer and read its code">Add project…</button></footer>
     </dialog>
+    <dialog class="apps-dialog levels-dialog" id="levelsDialog" aria-labelledby="levelsTitle">
+      <form id="levelsForm">
+        <header><h2 id="levelsTitle">Levels</h2></header>
+        <div class="levels-body">
+          <label>How many levels (not counting 0) <input class="note-input" id="levelsCount" type="number" min="1" max="12" required></label>
+          <div id="levelsNames" class="levels-names"></div>
+          <p class="appmsg">Classes deeper than the last level count as the last level. Saving never rescans.</p>
+        </div>
+        <footer><span class="appmsg" id="levelsMsg" role="status"></span><span class="grow"></span>
+          <button class="btn small" id="levelsReset" type="button" title="Back to the scan's own levels">Reset</button>
+          <button class="btn small" id="levelsSave" type="submit">Save</button>
+          <button class="btn small" id="levelsCancel" type="button">Cancel</button></footer>
+      </form>
+    </dialog>
     <form class="scanform" id="scanForm" hidden>
       <label>Folder <input class="note-input" id="scanPath" placeholder="/home/me/code/my-project" size="42" required></label>
       <label>Name <input class="note-input" id="scanName" size="18" required></label>
@@ -78,12 +91,6 @@
     <section id="tabGraph" role="tabpanel" class="graph-tab">
       <div class="controls">
         <div class="ctl">
-          <label for="level">Detail</label>
-          <button class="lvl0" id="level0" disabled title="Domain level: arrives when domains exist">0</button>
-          <input type="range" id="level" min="1" max="1" step="1" value="1">
-          <span class="lvl" id="levelOut">Level 1</span>
-        </div>
-        <div class="ctl">
           <span class="ctl-label">View</span>
           <div class="seg" role="group" aria-label="View">
             <button id="viewAll" aria-pressed="true">All types</button>
@@ -92,7 +99,6 @@
         </div>
         <div class="ctl" role="group" aria-label="Show types">
           <span class="ctl-label">Show</span>
-          <label class="check"><input type="checkbox" id="showScene" checked> Scenes</label>
           <label class="check"><input type="checkbox" id="showExternal" checked> Outside code</label>
           <label class="check" title="Test code: hidden by default, removed rather than folded"><input type="checkbox" id="showTest"> Tests</label>
           <label class="check" title="§N on classes and lines that N specs or notes link"><input type="checkbox" id="showCards" checked> Specs &amp; notes</label>
@@ -142,7 +148,14 @@
         <button class="btn small" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
         <button class="btn small" id="redoBtn" title="Redo (Ctrl+Shift+Z)">Redo</button>
       </div>
-      <nav class="crumbs" id="crumbs" aria-label="Zoom path"></nav>
+      <section class="ruler" id="ruler" aria-label="Depth">
+        <div class="ruler-top">
+          <nav class="crumbs" id="crumbs" aria-label="Zoom path"></nav>
+          <span class="ruler-count" id="rulerCount"></span>
+          <button class="btn small" id="levelsBtn" title="Name the levels or change how many there are">Levels…</button>
+        </div>
+        <div class="ruler-cols" id="rulerCols" role="group" aria-label="Level (arrow keys step it)"></div>
+      </section>
       <div class="legend" aria-label="Legend">
         <span><i class="lg lg-comp"></i>composition</span>
         <span><i class="lg lg-assoc"></i>association</span>
@@ -154,6 +167,7 @@
         <span><i class="lg lg-faded"></i>outside the zoom</span>
         <span><i class="lg lg-internal"></i>call inside the class</span>
       </div>
+      <div class="type-strip" id="typeStrip" role="group" aria-label="Code types in this view" hidden></div>
       <div class="stage">
         <div class="canvas" id="canvas">
           <svg class="fan-layer" id="fanBack" aria-hidden="true"></svg>
@@ -213,10 +227,12 @@
 </div>
 <script src="vendor/cytoscape.min.js"></script>
 <script src="layout.js"></script>
+<script src="typechips.js"></script>
 <script src="fanout.js"></script>
 <script src="panels.js"></script>
 <script src="field_help.js"></script>
 <script src="lists.js"></script>
+<script src="ruler.js"></script>
 <script src="apps.js"></script>
 <script src="tours.js"></script>
 <script src="app.js"></script>

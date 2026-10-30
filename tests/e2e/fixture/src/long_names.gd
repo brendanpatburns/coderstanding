@@ -1,0 +1,6 @@
+class_name VeryLongInventoryItemSlotControllerForTheWholeGameUi
+extends RefCounted
+
+
+func a_really_long_function_name_that_keeps_going_and_going_past_any_row_width_you_would_expect():
+	return 1

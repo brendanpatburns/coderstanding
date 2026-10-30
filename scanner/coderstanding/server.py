@@ -31,7 +31,7 @@ from .textout import format_tour, tour_markdown, view_text
 from .cards import BY_FOLDER, FIELDS as CARD_FIELDS, Card, link_index, open_cards
 from .tours import AUDIO_TYPES, MAX_AUDIO_BYTES, open_tours
 from .userconfig import hosted_origin
-from .views import compute_view, effective_level, find, note_json, with_code_doc
+from .views import SCENE_TYPE, compute_view, effective_level, find, level_scale, note_json, with_code_doc
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8517
@@ -74,12 +74,19 @@ def _zoom(params):
     return {**zoom, "via": via} if via else zoom  # no via: the engine finds it
 
 
+def hidden_types(params):
+    """`hide=.gd` (repeats); the old `scene=0` means `hide=.tscn`."""
+    hidden = [t for t in params.get("hide", []) if t]
+    return hidden + [SCENE_TYPE] if not _flag(params, "scene") and SCENE_TYPE not in hidden else hidden
+
+
 def view_args(params):
     """compute_view keyword arguments from /api/view query parameters (`expand` repeats)."""
     return {"level": int(params.get("level", ["1"])[0]),
             "view": params.get("view", ["all"])[0],
-            "show": {"scene": _flag(params, "scene"), "external": _flag(params, "external"),
-                     "test": _flag(params, "test", default=False)},
+            "show": {"external": _flag(params, "external"),
+                     "test": _flag(params, "test", default=False),
+                     "hide_types": hidden_types(params)},
             "zoom": _zoom(params),
             "expand": [i for i in params.get("expand", []) if i],
             "focus": [i for i in params.get("focus", []) if i]}
@@ -129,9 +136,10 @@ class Api:
         notes = self.notes
         levels = Counter(effective_level(self.graph, notes, i)
                          for i, n in self.graph.nodes.items() if n.kind != "external")
+        scale = level_scale(self.graph, notes)
         return {"repo": self.graph.repo, "scannedAt": self.graph.scanned_at,
                 "levels": {str(k): v for k, v in sorted(levels.items())},
-                "max_level": max(levels, default=1), "domains": bool(notes.domains()),
+                "max_level": scale["count"], "scale": scale, "domains": bool(notes.domains()),
                 "statuses": list(STATUSES), "tags": notes.tags(), "warning_help": WARNING_HELP}
 
     def refresh(self):
@@ -254,6 +262,16 @@ class Api:
         with self.fields_lock:
             return field_rules.change(self.app.data, body.get("set"), body.get("reset"),
                                       house=body.get("house"), by=self.human)
+
+    def put_levels(self, body):
+        """Save the depth ruler's level count and names, or `reset` them (never rescans); answers the new scale."""
+        if not isinstance(body, dict) or set(body) - {"count", "names", "reset"}:
+            raise ValueError("send a JSON object with count and names, or reset")
+        if body.get("reset"):
+            self.app.reset_levels()
+        else:
+            self.app.set_levels(body.get("count"), body.get("names"))
+        return level_scale(self.graph, self.notes)
 
     def tour_audio(self, tour_id, key):
         return self.tours().audio_file(tour_id, key)
@@ -591,7 +609,8 @@ class Handler(SimpleHTTPRequestHandler):
     def do_PUT(self):
         self.route_write("PUT", "/api/layout", lambda body: self.api.put_layout(body),
                          "/api/notes", lambda body: self.api.put_notes(body),
-                         "/api/fields", lambda body: self.api.put_fields(body))
+                         "/api/fields", lambda body: self.api.put_fields(body),
+                         "/api/levels", lambda body: self.api.put_levels(body))
 
     def do_POST(self):
         self.route_write("POST", "/api/comments", lambda body: self.api.post_comment(body),

@@ -10,7 +10,7 @@ const ROUTE_CAP = 800;   // above this many lines, skip bending lines around box
 const EDGE_FONT = 10.5;
 
 const state = {
-  meta: null, level: 1, view: "all", show: { scene: true, external: true, test: false, cards: true },
+  meta: null, level: 1, view: "all", show: { external: true, test: false, cards: true },
   filter: "",            // "" | "status:<s>" | "tag:<t>": dims the classes that do not match
   crumbs: [],            // zoom path: [{label, zoom: {from, to, level, via}}]
   mode: "view",          // "view" | "edit"
@@ -28,6 +28,8 @@ const state = {
   edgeLabelRects: [],    // where class-line labels sit, so fan-out labels keep off them
   names: new Map(),      // id -> name shown on screen (with a path when two names clash)
   stackShown: false,
+  hiddenTypes: [],       // file types (`.gd`) switched off in the types strip; saved per app
+
   focus: null,           // targets the view highlights (a tour step, DESIGN 7c): the server's `focus`
 };
 let cy = null;
@@ -130,6 +132,7 @@ function nodeStyles(t) {
     { selector: "node.hover", style: { "border-color": t.accent, "border-width": 2.2 } },
     { selector: "node.sel", style: { "border-color": t.accent, "border-width": 2.4 } },
     { selector: "node.dim", style: { opacity: 0.25 } },
+    { selector: "node.type-hit", style: { "border-color": t.accent, "border-width": 3 } },
     { selector: "node.focus", style: { "border-color": t.hl, "border-width": 2.6 } },
   ];
 }
@@ -206,7 +209,7 @@ function nodeElement(node) {
   const lines = label.split("\n");
   const font = `500 12px ${token("f-mono")}`;
   const width = Math.max(...lines.map((line) => textWidth(line, font))) + 24;
-  const data = fanNodeData(node, { id: node.id, name, marks, label, w: width, h: lines.length * 15 + 14, raw: node });
+  const data = fanNodeData(node, { id: node.id, name, marks, label, type: fileType(node.file), w: width, h: lines.length * 15 + 14, raw: node });
   const classes = [`k-${node.kind}`, node.faded && "faded", node.flags.includes("abstract") && "abstract",
     node.warnings?.length && "warn", state.saved.get(node.id)?.pinned && "pinned",
     isExpandable(node) && "expandable", data.open && "open", inFocus("nodes", node.id) && "focus"];
@@ -545,7 +548,8 @@ function currentZoom() {
 
 function viewParams() {
   const params = new URLSearchParams({ level: state.level, view: state.view,
-    scene: state.show.scene ? 1 : 0, external: state.show.external ? 1 : 0, test: state.show.test ? 1 : 0 });
+    external: state.show.external ? 1 : 0, test: state.show.test ? 1 : 0 });
+  state.hiddenTypes.forEach((type) => params.append("hide", type));
   if (state.show.cards) params.set("badges", "1");  // spec/note counts on classes and lines
   const zoom = currentZoom();
   if (zoom) {
@@ -581,6 +585,7 @@ async function loadView({ inPlace = false } = {}) {
   state.current = view;
   keepExpanded(view);
   updateCounts(view);
+  renderTypeStrip(view);
   renderCrumbs();
   if (view.nodes.length > CAP) {
     cy.elements().remove();
@@ -699,15 +704,85 @@ function keepSelection() {
 }
 
 function updateCounts(view) {
-  $("levelOut").textContent = `Level ${state.level} · ${view.counts.shown}/${view.counts.total}`;
-  $("levelOut").title = `${view.counts.shown} of ${view.counts.total} classes shown`;
+  $("rulerCount").textContent = `${view.counts.shown} of ${view.counts.total} classes`;
+  $("rulerCount").title = `${view.counts.shown} of ${view.counts.total} classes shown`;
+  renderRuler(view);
+}
+
+// ---------- depth ruler (DESIGN 5, 6): the only level control ----------
+
+function levelName(level) {
+  return state.current?.scale.names[level] || `Level ${level}`;
+}
+
+function levelText(level) {
+  return `${level} · ${levelName(level)}`;
+}
+
+function renderRuler(view) {
+  const zoom = currentZoom();
+  const cols = Ruler.columns(view.scale, view.level, zoom ? zoom.level : null, state.meta.domains);
+  Ruler.render($("rulerCols"), cols);
+}
+
+/** Show a level (from the ruler or an arrow key); a zoom is left. */
+function setLevel(level) {
+  const first = state.meta.domains ? 0 : 1;
+  level = Math.max(first, Math.min(level, state.current?.scale.count ?? state.meta.max_level));
+  if (level === state.level && !state.crumbs.length) return;
+  state.level = level;
+  state.crumbs = [];
+  clearTimeout(levelTimer);
+  levelTimer = setTimeout(loadView, 60);
+}
+
+function onRulerKey(event) {
+  if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+  if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+  if ($("tabGraph").hidden || event.target.closest?.("input, textarea, select, dialog, [contenteditable]")) return;
+  event.preventDefault();
+  setLevel((state.current?.level ?? state.level) + (event.key === "ArrowRight" ? 1 : -1));
+}
+
+// "Levels…": how many levels and what to call them (saved in the app's settings, never rescans)
+function openLevels() {
+  const scale = state.current.scale;
+  $("levelsCount").value = scale.count;
+  fillLevelNames(scale.names);
+  $("levelsMsg").textContent = "";
+  $("levelsDialog").showModal();
+}
+
+function fillLevelNames(names) {
+  const count = Number($("levelsCount").value) || names.length - 1;
+  $("levelsNames").innerHTML = Array.from({ length: count + 1 }, (_, level) =>
+    `<label>${level} <input class="note-input" data-name="${level}" value="${esc(names[level] ?? `Level ${level}`)}"></label>`).join("");
+}
+
+function currentNameInputs() {
+  return [...$("levelsNames").querySelectorAll("input")].map((input) => input.value.trim());
+}
+
+async function saveLevels(event, reset = false) {
+  event.preventDefault();
+  const body = reset ? { reset: true } : { count: Number($("levelsCount").value), names: currentNameInputs() };
+  try {
+    await api("/api/levels", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  } catch (error) {
+    $("levelsMsg").textContent = error.message;
+    return;
+  }
+  $("levelsDialog").close();
+  state.meta = await api("/api/meta");
+  state.level = Math.min(state.level, state.meta.max_level);
+  loadView();
 }
 
 // ---------- zoom and breadcrumbs ----------
 
 function zoomLevel() {
   const zoom = currentZoom();
-  return zoom ? zoom.level + 1 : state.level;
+  return zoom ? state.current.level : state.level;  // the level the server showed
 }
 
 function pushZoom(label, zoom) {
@@ -735,7 +810,7 @@ function goToCrumb(index) {
 
 function renderCrumbs() {
   const nav = $("crumbs");
-  const root = `Level ${state.level}`;
+  const root = levelText(state.level);
   if (!state.crumbs.length) {
     nav.innerHTML = `<span class="here">${esc(root)}</span><span>· Double-click a line or class to zoom · ${triangleIcon()} opens a class into its functions</span>`;
     return;
@@ -1163,12 +1238,6 @@ async function showTab(which) {
 // ---------- controls ----------
 
 let levelTimer = 0;
-function onLevel() {
-  state.level = Number($("level").value);
-  state.crumbs = [];
-  clearTimeout(levelTimer);
-  levelTimer = setTimeout(loadView, 60);
-}
 
 function setView(view, load = true) {
   state.view = view;
@@ -1178,9 +1247,62 @@ function setView(view, load = true) {
 }
 
 function onShow() {
-  state.show = { scene: $("showScene").checked, external: $("showExternal").checked, test: $("showTest").checked,
+  state.show = { external: $("showExternal").checked, test: $("showTest").checked,
     cards: $("showCards").checked };
   loadView();
+}
+
+// ---------- types strip: the code types in this view, each a toggle that hides its classes ----------
+
+const hiddenTypesKey = () => `coderstanding-hidden-types:${CoderApps.current || ""}`;
+
+function loadHiddenTypes() {
+  try { state.hiddenTypes = JSON.parse(localStorage.getItem(hiddenTypesKey()) || "[]"); } catch { state.hiddenTypes = []; }
+}
+
+function toggleType(type) {
+  const hidden = new Set(state.hiddenTypes);
+  if (!hidden.delete(type)) hidden.add(type);
+  state.hiddenTypes = [...hidden];
+  try { localStorage.setItem(hiddenTypesKey(), JSON.stringify(state.hiddenTypes)); } catch { /* private window */ }
+  loadView();
+}
+
+/** Light the boxes of one type while its chip is hovered (`null` clears). */
+function highlightType(type) {
+  cy.nodes().removeClass("type-hit");
+  if (type) cy.nodes().filter((n) => n.data("type") === type).addClass("type-hit");
+}
+
+function renderTypeStrip(view) {
+  const strip = $("typeStrip");
+  const hidden = new Set(view.hidden_types || []);
+  const theme = themeName();
+  const entries = Object.entries(view.types || {});
+  strip.hidden = !entries.length;
+  strip.replaceChildren(...entries.map(([type, count]) => {
+    const { bg, ink } = typeColors(type, theme);
+    const off = hidden.has(type);
+    const button = document.createElement("button");
+    button.className = `type-chip-btn${off ? " off" : ""}`;
+    button.dataset.type = type;
+    button.setAttribute("aria-pressed", String(!off));
+    button.title = `${off ? "Hidden: click to show" : "Click to hide"} ${type} classes`;
+    button.style.setProperty("--chip-bg", bg);  // CSSOM, not a style attribute (the page's CSP)
+    button.style.setProperty("--chip-ink", ink);
+    button.innerHTML = `<b>${esc(type)}</b> ${count}`;
+    return button;
+  }));
+}
+
+function bindTypeStrip() {
+  const strip = $("typeStrip");
+  strip.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-type]");
+    if (button) toggleType(button.dataset.type);
+  });
+  strip.addEventListener("mouseover", (event) => highlightType(event.target.closest("[data-type]")?.dataset.type || null));
+  strip.addEventListener("mouseleave", () => highlightType(null));
 }
 
 // ---------- status / tag filter (dims classes that do not match; the engine is not asked) ----------
@@ -1220,6 +1342,7 @@ function onFilter() {
 }
 
 function onKey(event) {
+  onRulerKey(event);
   if (state.mode !== "edit" || !(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "z") return;
   event.preventDefault();
   if (event.shiftKey) redo(); else undo();
@@ -1236,10 +1359,22 @@ function toggleSide(force) {
 }
 
 function bindControls() {
-  $("level").addEventListener("input", onLevel);
+  bindTypeStrip();
+  $("rulerCols").addEventListener("click", (event) => {
+    const column = event.target.closest("[data-level]");
+    if (column && !column.disabled) setLevel(Number(column.dataset.level));
+  });
+  $("levelsBtn").addEventListener("click", openLevels);
+  $("levelsCount").addEventListener("input", () => {
+    const count = Math.max(1, Math.min(12, Number($("levelsCount").value) || 1));
+    const names = currentNameInputs();
+    fillLevelNames(Array.from({ length: count + 1 }, (_, i) => names[i] || `Level ${i}`));
+  });
+  $("levelsForm").addEventListener("submit", saveLevels);
+  $("levelsReset").addEventListener("click", (event) => saveLevels(event, true));
+  $("levelsCancel").addEventListener("click", () => $("levelsDialog").close());
   $("viewAll").addEventListener("click", () => setView("all"));
   $("viewConcrete").addEventListener("click", () => setView("concrete"));
-  $("showScene").addEventListener("change", onShow);
   $("showExternal").addEventListener("change", onShow);
   $("showTest").addEventListener("change", onShow);
   $("showCards").addEventListener("change", onShow);
@@ -1394,8 +1529,7 @@ function selectFromUrl(params) {
 function applyUrlOptions() {
   const params = new URLSearchParams(location.search);
   applyTheme(params.get("theme") || currentTheme());
-  if (params.get("level")) $("level").value = params.get("level");
-  state.level = Number($("level").value);
+  state.level = params.has("level") ? Number(params.get("level")) || 0 : 1;  // init clamps it to the app's levels
   if (params.get("view") === "concrete") setView("concrete", false);
   if (params.get("mode") === "edit") setMode("edit");
   if (params.get("tests") === "1") { $("showTest").checked = true; state.show.test = true; }
@@ -1411,8 +1545,7 @@ CoderApps.getState = () => ({ level: state.level, view: state.view, crumbs: stat
   camera: cy ? { zoom: cy.zoom(), pan: cy.pan() } : null });
 
 function restoreAppState(back) {
-  $("level").value = Math.min(back.level, state.meta.max_level);
-  state.level = Number($("level").value);
+  state.level = Math.min(back.level, state.meta.max_level);
   state.crumbs = back.crumbs || [];
   if (back.view === "concrete") setView("concrete", false);
 }
@@ -1439,7 +1572,8 @@ async function init() {
     document.title = `${meta.repo} · Coderstanding`;
     $("repoName").textContent = meta.repo;
     $("scanned").textContent = `scanned ${meta.scannedAt}`;
-    $("level").max = meta.max_level;
+    state.level = Math.max(meta.domains ? 0 : 1, Math.min(state.level, meta.max_level));
+    loadHiddenTypes();
     const params = applyUrlOptions();
     const back = params.get("level") ? null : CoderApps.takeState();  // returning to an app
     if (back) restoreAppState(back);
