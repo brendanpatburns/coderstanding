@@ -17,7 +17,7 @@ class FakePlatform:
     name = "fake"
 
     def __init__(self, tmp_path, log="line one\nline two"):
-        self.dir, self.log, self.started = tmp_path, log, 0
+        self.dir, self.log, self.started, self.up = tmp_path, log, 0, False
 
     def files(self, tray):
         return {self.dir / "helper.unit": "unit text"}
@@ -27,6 +27,7 @@ class FakePlatform:
 
     def control(self, action):
         self.started += action == "start"
+        self.up = self.up or action == "start"
 
     def recent_log(self, lines):
         return self.log, "/the/log"
@@ -66,9 +67,10 @@ def test_fetch_listing_uses_the_given_opener():
 # --- install ----------------------------------------------------------------------------------
 
 def test_install_starts_verifies_and_prints_next_steps(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(helper, "fetch_listing", lambda: {"apps": []})
-    monkeypatch.setattr(helper.time, "sleep", no_wait)
     platform = FakePlatform(tmp_path)
+    monkeypatch.setattr(helper, "fetch_listing",
+                        lambda *a, **k: {"apps": []} if platform.up else None)
+    monkeypatch.setattr(helper.time, "sleep", no_wait)
     assert helper.install(tray=False, platform=platform)
     out = capsys.readouterr().out
     assert platform.started == 1 and (tmp_path / "helper.unit").exists()
@@ -76,14 +78,14 @@ def test_install_starts_verifies_and_prints_next_steps(tmp_path, monkeypatch, ca
 
 
 def test_install_reports_a_helper_that_does_not_answer(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(helper, "fetch_listing", lambda: None)
+    monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: None)
     monkeypatch.setattr(helper.time, "sleep", no_wait)
     assert not helper.install(tray=False, platform=FakePlatform(tmp_path))
     assert "helper did not start" in capsys.readouterr().out
 
 
 def test_install_no_start(tmp_path, monkeypatch):
-    monkeypatch.setattr(helper, "fetch_listing", lambda: pytest.fail("must not poll"))
+    monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: pytest.fail("must not poll"))
     platform = FakePlatform(tmp_path)
     assert helper.install(tray=False, platform=platform, start=False)
     assert platform.started == 0
@@ -98,7 +100,8 @@ def test_cli_install_has_no_start_flag():
 def test_start_verifies_but_stop_does_not(monkeypatch, tmp_path):
     platform = FakePlatform(tmp_path)
     monkeypatch.setattr(helper, "backend", lambda: platform)
-    monkeypatch.setattr(helper, "verify_running", lambda: False)
+    monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: None)
+    monkeypatch.setattr(helper, "verify_running", lambda **k: False)
     assert helper.control("start", verify=True) is False
     assert helper.control("stop", verify=True) is True
     assert helper.control("start") is True  # the tray does not wait
@@ -178,8 +181,76 @@ def test_service_failure_without_console(capsys):
 def test_serve_service_exits_nonzero_on_startup_error(monkeypatch, tmp_path, capsys):
     import io
     seen = io.StringIO()
+    monkeypatch.setattr(helper, "helper_running", lambda *a: False)
     monkeypatch.setattr(helper, "enter_service_mode", lambda: seen)
     monkeypatch.setattr(server, "serve", lambda *a, **k: (_ for _ in ()).throw(OSError("port busy")))
     with pytest.raises(SystemExit) as exit_info:
         cli.main(["serve", "--service"])
     assert exit_info.value.code == 1 and "port busy" in seen.getvalue()
+
+
+# --- one helper only (fixes #2) ----------------------------------------------------------------
+
+def test_second_server_on_the_same_port_cannot_bind():
+    first = make_server(Hub(None, fixed={}), port=0)
+    try:
+        with pytest.raises(OSError):
+            make_server(Hub(None, fixed={}), port=first.server_port)
+    finally:
+        first.server_close()
+
+
+def test_windows_bind_is_exclusive(monkeypatch):
+    options = []
+    monkeypatch.setattr(server.userconfig, "windows", lambda: True)
+    monkeypatch.setattr(server.socket, "SO_EXCLUSIVEADDRUSE", -5, raising=False)
+    real = server.socket.socket.setsockopt
+    monkeypatch.setattr(server.ThreadingHTTPServer, "server_bind", lambda self: options.append(self.allow_reuse_address))
+    srv = server.LoopbackServer.__new__(server.LoopbackServer)
+    srv.socket = type("S", (), {"setsockopt": lambda self, *a: options.append(a)})()
+    srv.server_bind()
+    assert options == [(server.socket.SOL_SOCKET, -5, 1), False]
+
+
+def test_serve_exits_when_a_helper_already_answers(monkeypatch, capsys):
+    monkeypatch.setattr(helper, "helper_running", lambda port=helper.PORT, opener=None: True)
+    monkeypatch.setattr(server, "serve", lambda *a, **k: pytest.fail("must not start a second server"))
+    cli.main(["serve"])
+    assert "a helper is already running on http://127.0.0.1:8517/" in capsys.readouterr().out
+
+
+def test_service_mode_logs_the_guard_and_keeps_the_pid_file(monkeypatch, tmp_path):
+    logged = []
+    monkeypatch.setattr(helper, "helper_running", lambda *a, **k: True)
+    monkeypatch.setattr(helper, "log_line", logged.append)
+    monkeypatch.setattr(helper, "enter_service_mode", lambda: pytest.fail("would replace the pid file"))
+    cli.main(["serve", "--service"])
+    assert logged == ["a helper is already running on http://127.0.0.1:8517/"]
+
+
+def test_install_and_start_leave_a_running_helper_alone(tmp_path, monkeypatch, capsys):
+    platform = FakePlatform(tmp_path)
+    monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: {"apps": []})
+    assert helper.install(tray=False, platform=platform)
+    assert (tmp_path / "helper.unit").exists() and platform.started == 0  # entry written, no second helper
+    monkeypatch.setattr(helper, "backend", lambda: platform)
+    assert helper.control("start", verify=True) and platform.started == 0
+    assert capsys.readouterr().out.count("helper already running") == 2
+
+
+def test_a_non_coderstanding_listener_is_not_the_helper(monkeypatch):
+    monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: {"something": "else"})
+    assert not helper.helper_running()
+
+
+def test_restart_stops_waits_for_the_port_then_starts(tmp_path, monkeypatch):
+    platform = FakePlatform(tmp_path)
+    actions = []
+    platform.control = lambda action: (actions.append(action), setattr(platform, "up", action == "start"))
+    answers = iter([True, True, False, False])  # up for two polls after stop, free, free before start
+    polls = []
+    monkeypatch.setattr(helper, "backend", lambda: platform)
+    monkeypatch.setattr(helper, "helper_running", lambda *a, **k: (polls.append(1), platform.up if "start" in actions else next(answers))[1])
+    monkeypatch.setattr(helper.time, "sleep", no_wait)
+    assert helper.control("restart", verify=True)
+    assert actions == ["stop", "start"] and len(polls) >= 3

@@ -46,8 +46,14 @@ def test_reads_old_calls_without_from_member():
     assert graph_from_json(data).edges[("GameEngine", "Viewport", "composition")].calls[0].from_member is None
 
 
-def test_graph_from_older_scanner_is_rejected_so_apps_rescan():
+def test_graph_from_older_scanner_loads_and_remembers_its_version():
     data = graph_to_json(sample_graph())
     data["scannerVersion"] -= 1
+    assert graph_from_json(data).scanner_version == data["scannerVersion"]
+
+
+def test_unknown_graph_format_is_refused():
+    data = graph_to_json(sample_graph())
+    data["version"] += 1
     with pytest.raises(ValueError):
         graph_from_json(data)

@@ -202,6 +202,7 @@ class Graph:
     stack: dict = field(default_factory=dict)
     settings: dict = field(default_factory=dict)  # scan settings used (levels stage)
     hubs: dict = field(default_factory=dict)  # {"threshold": n, "ids": [...]} promoted to L1
+    scanner_version: int = 0  # the scanner that wrote graph.json (0: built in memory)
     fingerprints: dict = field(default_factory=dict)  # note key -> code hash (fingerprints.py)
 
     def add_node(self, node):

@@ -8,7 +8,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
-from coderstanding.apps import REGISTRY_ENV, DATA_HOME_ENV, find_app, register
+from coderstanding.apps import REGISTRY_ENV, DATA_HOME_ENV, find_app, register, rescan
 from coderstanding.hub import Hub
 from coderstanding.server import HOST, Api, make_server
 
@@ -26,6 +26,8 @@ def base(tmp_path, monkeypatch):
     monkeypatch.setenv(DATA_HOME_ENV, str(tmp_path / "share"))
     register("alpha", make_repo(tmp_path / "alpha", ["Aa", "Ab"]), tmp_path / "alpha-data")
     register("beta", make_repo(tmp_path / "beta", ["Bb"]), tmp_path / "beta-data")
+    for name in ("alpha", "beta"):
+        rescan(find_app(name))
     srv = make_server(Hub(Api), port=0)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield f"http://{HOST}:{srv.server_port}"

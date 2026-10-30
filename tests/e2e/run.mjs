@@ -141,6 +141,8 @@ const SILENT_SPEECH = `(() => {
 
 async function main() {
   mkdirSync(shots, { recursive: true });
+  // Scans are manual now (no rescan-if-stale): scan the fixture once before anything reads it.
+  execFileSync(cli, ["scan", fixture, "-o", join(data, "graph.json")], { env: { ...process.env, ...isolated } });
   execFileSync(cli, ["set", fixture, "Player", "hint=AI wrote this", "--data", data]);  // an AI draft to accept
   mkdirSync(join(data, "tours"), { recursive: true });
   writeFileSync(join(data, "tours", "first-steps.md"), readFileSync(fixtureTour));
@@ -1025,6 +1027,7 @@ async function main() {
     if (appRepo) {
       const appData = option("--app-data") || mkdtempSync(join(tmpdir(), "coderstanding-e2e-app-"));
       const appPort = await freePort();
+      execFileSync(cli, ["scan", appRepo, "-o", join(appData, "graph.json")], { env: { ...process.env, ...isolated } });
       const appServer = await startServer(appPort, appRepo, appData);
       const fixtureBase = base;
       base = `http://127.0.0.1:${appPort}/`;

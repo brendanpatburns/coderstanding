@@ -9,6 +9,9 @@ package; `coderstanding <command> --help` lists every option.
 ## Quick start
 1. Find the app name: the repo's agent instructions name it. Not registered yet?
    `coderstanding add <app> <repo folder>` (add `--data DIR` to keep the map out of the repo).
+   `add` does the first scan (`--no-scan` skips it). Commands read the saved map and
+   never rescan by themselves, so after code changes, when you need fresh structure, run
+   `coderstanding rescan <app>` first (it is cheap: unchanged files come from the cache).
    Registered apps are in `apps.json` in the per-user config folder (`~/.config/coderstanding/`,
    `%APPDATA%\coderstanding\` on Windows).
 2. `coderstanding graph <app> 1` is the top level. Then `node`, `zoom`, `outline`, `find`,
@@ -203,4 +206,4 @@ adds it. In a one-off brief to another agent: "This repo is registered in Coders
 `coderstanding graph <app> 1`, then zoom/node/specs instead of broad grepping." Paste any
 `rules X:` lines for classes that agent touches.
 
-Viewer for the user (you do not need it): `coderstanding serve [app]` serves every registered app on one port; the user switches apps, rescans and adds repos from the toolbar.
+Viewer for the user (you do not need it): `coderstanding serve [app]` serves every registered app on one port; the user switches apps, presses Refresh and adds repos from the toolbar.

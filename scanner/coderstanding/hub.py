@@ -6,18 +6,19 @@ app's own data folder.
 """
 
 import os
-import subprocess
 import sys
 import threading
 from pathlib import Path
 
 from . import userconfig
-from .apps import (AppError, app_details, clean_name, default_data_dir, find_app, load_registry,
+from .apps import (AppError, old_scanner, app_details, clean_name, default_data_dir, find_app, load_registry,
                    register, remove_app, rename_app)
 from .filewalk import assign_files
 from .graph_json import graph_summary
 from .language import load_builtin_modules
+from .procs import run_quiet
 
+BELOW_NORMAL_PRIORITY_CLASS = 0x00004000  # Windows creation flag
 PACKAGE_PARENT = str(Path(__file__).resolve().parents[1])  # so `-m coderstanding` finds us
 
 
@@ -27,11 +28,20 @@ def scan_command(app):
     return command if userconfig.windows() else ["nice", "-n", "19", *command]
 
 
-def scan_process_options():
-    """Windows has no `nice`: lower the priority and hide the console window instead."""
-    if not userconfig.windows():
-        return {}
-    return {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW}
+def scan_priority_flags():
+    """Windows has no `nice`: lower the priority class instead (run_quiet hides the window)."""
+    return BELOW_NORMAL_PRIORITY_CLASS if userconfig.windows() else 0
+
+
+def scan_in_child(app):
+    """Run the low-priority rescan child and wait: {"state": "done"} or {"state": "error", "error"}.
+    The one way to scan in the background (the page's Refresh/Add project and `coderstanding add`)."""
+    done = run_quiet(scan_command(app), flags=scan_priority_flags(), capture_output=True, text=True,
+                     env={**os.environ, "PYTHONPATH": PACKAGE_PARENT})
+    if done.returncode == 0:
+        return {"state": "done"}
+    message = (done.stderr.strip().splitlines() or ["scan failed"])[-1]
+    return {"state": "error", "error": message.removeprefix("error: ")}
 
 
 def checked_folder(text):
@@ -103,7 +113,8 @@ class Hub:
             facts = self.graph_facts(app)
             scan = self.scans.get(name, {})
             apps.append({"name": name, "path": str(app.root), "data": str(app.data),
-                         "scannedAt": facts.get("scannedAt"), "nodes": facts.get("nodes"),
+                         "scannedAt": facts.get("scannedAt"),
+                         "staleScanner": old_scanner(facts.get("scannerVersion")), "nodes": facts.get("nodes"),
                          "edges": facts.get("edges"),
                          "scanning": scan.get("state") == "running",
                          "error": scan.get("error") if scan.get("state") == "error" else None,
@@ -143,12 +154,7 @@ class Hub:
 
     def run_scan(self, app):
         try:
-            done = subprocess.run(scan_command(app), capture_output=True, text=True,
-                                  env={**os.environ, "PYTHONPATH": PACKAGE_PARENT},
-                                  **scan_process_options())
-            message = (done.stderr.strip().splitlines() or ["scan failed"])[-1]
-            result = {"state": "done"} if done.returncode == 0 else \
-                {"state": "error", "error": message.removeprefix("error: ")}
+            result = scan_in_child(app)
         except OSError as error:
             result = {"state": "error", "error": str(error)}
         self.scans[app.name] = result

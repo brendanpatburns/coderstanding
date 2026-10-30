@@ -17,6 +17,7 @@ from pathlib import Path
 from .checks import DOMAIN_PREFIX, WARNING_KINDS
 from .model import function_names
 from .offline import GIT_OFFLINE, GIT_OFFLINE_ENV
+from .procs import run_quiet
 
 AI_AUTHOR = "claude"  # author of AI writes (`coderstanding set` without --by)
 HUMAN_AUTHOR = "you"  # old viewer writes; new ones use human_author() (a real name)
@@ -95,7 +96,7 @@ def human_author(repo=None):
     name = os.environ.get(USER_ENV, "").strip()
     if not name and repo:
         try:
-            name = subprocess.run(["git", *GIT_OFFLINE, "-C", str(repo), "config", "user.name"],
+            name = run_quiet(["git", *GIT_OFFLINE, "-C", str(repo), "config", "user.name"],
                                   capture_output=True, text=True, timeout=5,
                                   env={**os.environ, **GIT_OFFLINE_ENV}).stdout.strip()
         except (OSError, subprocess.SubprocessError):

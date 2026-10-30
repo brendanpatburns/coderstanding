@@ -21,6 +21,7 @@ import urllib.request
 from pathlib import Path
 
 from . import assets, userconfig
+from .procs import popen_quiet, run_quiet
 
 PORT = 8517
 HELPER = "coderstanding-helper"
@@ -31,6 +32,7 @@ LOCAL_URL = f"http://127.0.0.1:{PORT}/"
 LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 SERVE_ARGS = ["serve", "--port", str(PORT)]
 WINDOWS_SERVE_ARGS = [*SERVE_ARGS, "--service"]  # --service: log to the log file, write the pid file
+DETACHED_FLAGS = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 LOG_BYTES, LOG_FILES = 1_000_000, 3
 VERIFY_TRIES = 8  # one try per second
 NEXT_STEPS = (f"Add a project: coderstanding add <name> <folder>, or open {LOCAL_URL} "
@@ -139,15 +141,15 @@ class SystemdUser:
         return lines
 
     def _answer(self, query, unit):
-        done = subprocess.run(self._ctl(query, unit), capture_output=True, text=True)
+        done = run_quiet(self._ctl(query, unit), capture_output=True, text=True)
         return done.stdout.strip() or done.stderr.strip() or "unknown"
 
     def control(self, action):
-        subprocess.run(self._ctl(action, HELPER), check=False)
+        run_quiet(self._ctl(action, HELPER), check=False)
 
     def recent_log(self, lines):
         """(last log lines, where the whole log is)"""
-        done = subprocess.run(["journalctl", "--user", "-u", HELPER, "-n", str(lines), "--no-pager"],
+        done = run_quiet(["journalctl", "--user", "-u", HELPER, "-n", str(lines), "--no-pager"],
                               capture_output=True, text=True, check=False)
         return done.stdout.strip(), f"journalctl --user -u {HELPER}"
 
@@ -155,7 +157,7 @@ class SystemdUser:
         follow = f"journalctl --user -u {HELPER} -f"
         for terminal, flag in (("konsole", ["-e"]), ("gnome-terminal", ["--"]), ("xterm", ["-e"])):
             if shutil.which(terminal):
-                subprocess.Popen([terminal, *flag, "bash", "-c", follow])
+                popen_quiet([terminal, *flag, "bash", "-c", follow])
                 return
         print(f"no terminal found; run: {follow}")
 
@@ -210,9 +212,7 @@ class WindowsStartup:
         if action in ("stop", "restart"):
             self._stop()
         if action in ("start", "restart"):
-            flags = (subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-                     | subprocess.CREATE_NO_WINDOW)
-            subprocess.Popen([*launch_command(windowless=True), *WINDOWS_SERVE_ARGS], creationflags=flags,
+            popen_quiet([*launch_command(windowless=True), *WINDOWS_SERVE_ARGS], flags=DETACHED_FLAGS,
                              env={**os.environ, **launch_env()}, close_fds=True,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -228,7 +228,7 @@ class WindowsStartup:
             pid = int(self.pid_file().read_text(encoding="utf-8").strip())
         except (OSError, ValueError):
             return
-        subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
+        run_quiet(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True, check=False)
         self.pid_file().unlink(missing_ok=True)
 
     def show_log(self):
@@ -246,7 +246,7 @@ def _run(commands, dry_run):
     for command in commands:
         print(("would run: " if dry_run else "running: ") + " ".join(command))
         if not dry_run:
-            subprocess.run(command, check=False)
+            run_quiet(command, check=False)
 
 
 def install(tray=None, dry_run=False, platform=None, start=True):
@@ -270,8 +270,7 @@ def install(tray=None, dry_run=False, platform=None, start=True):
     if not start:
         print("Not started. Start now with: coderstanding helper start")
         return True
-    platform.control("start")
-    running = verify_running()
+    running = start_unless_running(platform)
     if running:
         print(NEXT_STEPS)
     return running
@@ -288,19 +287,43 @@ def uninstall(dry_run=False, platform=None):
     _run(platform.after_uninstall(), dry_run)
 
 
-def fetch_listing(opener=None):
+def fetch_listing(opener=None, port=PORT):
     """The helper's parsed /api/apps, or None when it does not answer."""
     try:
-        with (opener or LOCAL_OPENER).open(LOCAL_URL + "api/apps", timeout=2) as response:
+        with (opener or LOCAL_OPENER).open(f"http://127.0.0.1:{port}/api/apps", timeout=2) as response:
             return json.load(response)
     except (OSError, ValueError):
         return None
 
 
+def helper_running(port=PORT, opener=None):
+    """True when a Coderstanding helper answers on the port (the one "is the helper up" check)."""
+    listing = fetch_listing(opener, port)
+    return isinstance(listing, dict) and "apps" in listing
+
+
+def start_unless_running(platform=None, **verify_options):
+    """Start the helper and verify it answers, unless one already does. Returns True when up."""
+    if helper_running():
+        print(f"helper already running on {LOCAL_URL}")
+        return True
+    (platform or backend()).control("start")
+    return verify_running(platform=platform, **verify_options)
+
+
+def wait_until_down(pause=time.sleep, tries=10):
+    """Wait (a second per try) until nothing answers on the helper port; False if it never frees."""
+    for _ in range(tries):
+        if not helper_running():
+            return True
+        pause(1)
+    return False
+
+
 def verify_running(fetch=None, pause=time.sleep, tries=VERIFY_TRIES, platform=None):
     """Wait a few seconds for the helper to answer; print the result. On failure show the last
     log lines and the log's location. Returns True when it answered."""
-    fetch = fetch or fetch_listing
+    fetch = fetch or (lambda: True if helper_running() else None)
     for attempt in range(tries):
         if fetch() is not None:
             print(f"helper running on {LOCAL_URL}")
@@ -323,8 +346,13 @@ def status():
 def control(action, verify=False):
     """action: start, stop or restart the helper. `verify` (the CLI): after start/restart check it
     answers and report; returns False when it did not."""
-    backend().control(action)
-    return verify_running() if verify and action in ("start", "restart") else True
+    if action == "restart":
+        backend().control("stop")
+        wait_until_down()
+    if action in ("start", "restart") and verify:
+        return start_unless_running()
+    backend().control("start" if action == "restart" else action)
+    return True
 
 
 def show_log():
@@ -376,3 +404,9 @@ def report_service_failure(error, console):
     print(message)  # stdout/stderr are the log file here
     if console is not None:
         print(message, file=console, flush=True)
+
+
+def log_line(text):
+    """One line into the helper log (service mode, before it owns the log and pid file)."""
+    stream = LogStream(WindowsStartup().log_file())
+    stream.write(text + "\n")

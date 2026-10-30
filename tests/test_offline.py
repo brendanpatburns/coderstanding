@@ -215,6 +215,8 @@ LOOPBACK_URL = re.compile(r"(https?|wss?)://(127\.0\.0\.1|localhost)[:/]")
 
 # (file glob, text on the line, why it is fine). Keep this short; every entry needs a reason.
 ALLOWED = [
+    ("scanner/coderstanding/server.py", "import socket",
+     "SO_EXCLUSIVEADDRUSE on the loopback listener (Windows: one helper per port)"),
     ("scanner/coderstanding/offline.py", "import socket",
      "the guard's loopback probe for `coderstanding privacy` (127.0.0.1 only)"),
     ("scanner/coderstanding/offline.py", "create_connection",

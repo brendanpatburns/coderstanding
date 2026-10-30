@@ -26,7 +26,7 @@ Needs Python 3.10 or newer (Linux, macOS or Windows). No source checkout is need
 ### From a release
 
 ```bash
-pipx install coderstanding-0.2.1-py3-none-any.whl      # or: pip install --user coderstanding-0.2.1-py3-none-any.whl
+pipx install coderstanding-0.2.2-py3-none-any.whl      # or: pip install --user coderstanding-0.2.2-py3-none-any.whl
 coderstanding --version
 ```
 
@@ -35,11 +35,11 @@ On Windows, install pipx first, then the wheel:
 ```powershell
 py -m pip install --user pipx
 py -m pipx ensurepath          # then open a NEW terminal, or `pipx` is not found
-pipx install coderstanding-0.2.1-py3-none-any.whl
+pipx install coderstanding-0.2.2-py3-none-any.whl
 coderstanding helper install   # starts the helper now and checks it answers
 ```
 
-If `pipx` is still not found, `py -m pipx install coderstanding-0.2.1-py3-none-any.whl` works without
+If `pipx` is still not found, `py -m pipx install coderstanding-0.2.2-py3-none-any.whl` works without
 any PATH change.
 
 Installing downloads the tree-sitter grammar wheels from PyPI once (the only network use, at install
@@ -48,11 +48,11 @@ PyPI, download everything on another machine with the same OS and Python version
 and install from it:
 
 ```bash
-pip download coderstanding-0.2.1-py3-none-any.whl -d wheels/     # on a machine with internet
-pip install --no-index --find-links wheels/ coderstanding-0.2.1-py3-none-any.whl   # on the target
+pip download coderstanding-0.2.2-py3-none-any.whl -d wheels/     # on a machine with internet
+pip install --no-index --find-links wheels/ coderstanding-0.2.2-py3-none-any.whl   # on the target
 ```
 
-(`pipx install --pip-args="--no-index --find-links wheels/" coderstanding-0.2.1-py3-none-any.whl` for pipx.)
+(`pipx install --pip-args="--no-index --find-links wheels/" coderstanding-0.2.2-py3-none-any.whl` for pipx.)
 
 ### Helper at login and tray icon
 
@@ -68,7 +68,7 @@ coderstanding add <name> <folder>   # register a project (or use Projects... -> 
 that it answers on http://127.0.0.1:8517/, printing the last log lines and the log path if not. The
 helper starts fine with no project registered; the page then shows how to add one.
 Add `--dry-run` to see what it would write. The optional tray icon (green = up, amber = scanning,
-grey = down; start/stop/log menu) needs Qt: `pipx install "coderstanding-0.2.1-py3-none-any.whl[tray]"` or
+grey = down; start/stop/log menu) needs Qt: `pipx install "coderstanding-0.2.2-py3-none-any.whl[tray]"` or
 `pipx inject coderstanding PySide6` (pipx) or `python -m pip install "coderstanding[tray]"`, then
 `coderstanding helper install` again. On Windows the log is
 `%LOCALAPPDATA%\coderstanding\helper.log`; on Linux use `journalctl --user -u coderstanding-helper`.

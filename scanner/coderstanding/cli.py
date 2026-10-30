@@ -10,9 +10,10 @@ from pathlib import Path
 
 from . import textout
 from .textout import short_namer
-from .apps import (AppError, SETTINGS, find_app, find_id, load_graph, parse_target, register,
+from .apps import (AppError, load_registry, SETTINGS, find_app, find_id, load_graph, parse_target, register,
                    remove_app, rename_app, rescan, selection_id)
 from .graph_json import write_graph
+from .cache import SCANNER_VERSION
 from .offline import helper_listening, install as install_offline_guard, privacy_report
 from .levels import parse_hub_threshold
 from .checks import RULE_FILTERS, warnings_by_kind
@@ -71,10 +72,18 @@ def scan_settings(args):
 
 
 def run_add(args):
+    known = args.name in load_registry()
     entry = register(args.name, args.path, args.data)
     if args.hub_threshold is not None:
         find_app(args.name).change_settings(scan_settings(args))
     print(f"{args.name} -> {entry['path']}")
+    if args.no_scan or (known and not args.rescan):
+        return
+    from .hub import scan_in_child  # the page's Add project scan: niced child
+    result = scan_in_child(find_app(args.name))
+    if result["state"] == "error":
+        sys.exit(f"{args.name} added, but the scan failed: {result['error']}")
+    print(f"{args.name} scanned")
 
 
 def add_add(commands):
@@ -84,6 +93,9 @@ def add_add(commands):
     parser.add_argument("--data", help="folder for graph.json/notes.jsonl "
                         "(default: <path>/.coderstanding)")
     hub_threshold_option(parser)
+    parser.add_argument("--no-scan", action="store_true", help="register only (for scripts)")
+    parser.add_argument("--rescan", action="store_true",
+                        help="scan even when the name was already registered (re-pointing)")
     parser.set_defaults(run=run_add)
 
 
@@ -102,7 +114,7 @@ def run_settings(args):
 
 def add_settings(commands):
     parser = commands.add_parser("settings", help="show or change scan settings "
-                                 f"({', '.join(SETTINGS)}); a change rescans on the next command")
+                                 f"({', '.join(SETTINGS)}); a change applies at the next `rescan`")
     app_args(parser, view_options=False)
     parser.add_argument("items", nargs="*", help="key=value ...")
     parser.set_defaults(run=run_settings)
@@ -122,10 +134,12 @@ def app_args(parser, view_options=True, optional=False):
 
 
 def open_app(args):
-    """(app, graph, notes), rescanning if stale; warns about lost notes."""
+    """(app, graph, notes) from the saved graph (never scans); warns about lost notes."""
     app = find_app(args.app, args.data)
     graph, notes = load_graph(app), app.load_notes()
     app.checked(graph, notes)
+    if graph.scanner_version != SCANNER_VERSION:
+        print(f"note: made by an older scanner: run `coderstanding rescan {app.name}`", file=sys.stderr)
     lost = notes.lost(graph)
     if lost:
         print(f"warning: {len(lost)} lost notes: {', '.join(lost[:5])}", file=sys.stderr)
@@ -829,9 +843,15 @@ def run_serve(args):
         app = find_app(args.app, args.data) if args.app else None
     except AppError as error:
         sys.exit(str(error))
+    from .helper import enter_service_mode, helper_running, log_line, report_service_failure
+    if helper_running(args.port):  # before service mode: it must not take over the running one's pid file
+        message = f"a helper is already running on http://127.0.0.1:{args.port}/"
+        print(message)
+        if args.service:
+            log_line(message)
+        return
     if not args.service:
         return serve(app, args.port, allow_origin=args.allow_origin)
-    from .helper import enter_service_mode, report_service_failure
     console = enter_service_mode()
     try:
         serve(app, args.port, allow_origin=args.allow_origin)

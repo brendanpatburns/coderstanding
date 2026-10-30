@@ -38,12 +38,14 @@ def test_graph_by_name_and_path(app, capsys):
     assert (app / ".coderstanding" / "graph.json").exists()
 
 
-def test_rescans_when_a_file_is_newer(app, capsys):
+def test_never_rescans_by_itself_but_rescan_does(app, capsys):
     run(capsys, "graph", "game")
     graph_json = app / ".coderstanding" / "graph.json"
     built = graph_json.stat().st_mtime
     os.utime(app / "src" / "player.gd", (built + 10, built + 10))
     run(capsys, "graph", "game")
+    assert graph_json.stat().st_mtime == built
+    run(capsys, "rescan", "game")
     assert graph_json.stat().st_mtime > built
 
 
@@ -95,8 +97,9 @@ def test_level_zero_domains(app, capsys):
 
 
 def test_data_folder_keeps_repo_clean(app, capsys, tmp_path):
+    shutil.rmtree(app / ".coderstanding", ignore_errors=True)
     data = tmp_path / "data"
-    run(capsys, "graph", str(app), "--data", str(data))
+    run(capsys, "rescan", str(app), "--data", str(data))
     assert (data / "graph.json").exists() and not (app / ".coderstanding").exists()
 
 
@@ -128,6 +131,7 @@ def add_tests_to(repo):
 
 def test_tests_command_direct_and_deep(app, capsys):
     add_tests_to(app)
+    run(capsys, "rescan", "game")
     assert run(capsys, "tests", "game", "Player") == ["game tests Player 1", "tests/test_player.gd"]
     deep = run(capsys, "tests", "game", "Player", "--deep")
     assert deep == ["game tests Player deep 2", "tests/test_player.gd",
@@ -170,10 +174,13 @@ def test_set_status_tags_rules(app, capsys):
     assert "status must be one of" in str(error.value)
 
 
-def test_old_graph_version_is_rescanned(app, capsys):
+def test_old_graph_version_asks_for_a_rescan(app, capsys):
     run(capsys, "graph", "game")
     graph_json = app / ".coderstanding" / "graph.json"
     graph_json.write_text('{"version": 1, "nodes": [], "edges": []}')
+    with pytest.raises(SystemExit, match="coderstanding rescan game"):
+        main(["graph", "game"])
+    run(capsys, "rescan", "game")
     assert run(capsys, "graph", "game")[0].startswith("game L1 all ")
     assert '"version": 2' in graph_json.read_text()
 
@@ -205,16 +212,20 @@ def test_view_command_matches_shared_text_and_sets_function_notes(app, capsys):
 def test_settings_round_trip_and_stale(app, capsys):
     assert run(capsys, "settings", "game") == ["game settings hub_threshold=auto"]
     assert run(capsys, "settings", "game", "hub_threshold=1") == ["game settings hub_threshold=1"]
+    run(capsys, "rescan", "game")
     assert run(capsys, "settings", "game") == ["game settings hub_threshold=1"]
     header = run(capsys, "graph", "game")[0]
     assert "(hubs ≥ 1: " in header and "[hub " in header
+    run(capsys, "rescan", "game", "--data", str(app / "other"))
     assert "hubs" not in run(capsys, "graph", "game", "--data", str(app / "other"))[0]
-    run(capsys, "settings", "game", "hub_threshold=off")  # rescans on the next command
+    run(capsys, "settings", "game", "hub_threshold=off")
+    run(capsys, "rescan", "game")  # settings apply at the next rescan
     assert "hubs" not in run(capsys, "graph", "game")[0]
 
 
 def test_hub_in_node_line_and_notes_level_wins(app, capsys):
     run(capsys, "settings", "game", "hub_threshold=1")
+    run(capsys, "rescan", "game")
     lines = run(capsys, "node", "game", "Player")
     assert "[hub " in lines[1]
     run(capsys, "set", "game", "Player", "level=3")
@@ -247,7 +258,7 @@ def test_view_via_round_trip(app, capsys):
 
 def test_rules_add_list_remove_and_apply(app, capsys, tmp_path):
     (app / "lonely.gd").write_text("class_name Lonely\nextends Node\n", encoding="utf-8")
-    capsys.readouterr()
+    run(capsys, "rescan", "game")
     assert "unused 1" in run(capsys, "warnings", "game")[0]
     assert run(capsys, "rules", "game") == ["game rules 0"]
     run(capsys, "rules", "game", "add", "**", "ignore=unused,cycle", "lang=gdscript")

@@ -176,6 +176,7 @@ def run_cli(capsys, *args):
 
 
 def test_cli_specs_tree_filters_show_and_writes(app, capsys):
+    rescan(app)
     repo = str(app.root)
     out = run_cli(capsys, "specs", repo)
     assert out.splitlines()[:4] == [
@@ -211,6 +212,7 @@ def test_cli_specs_tree_filters_show_and_writes(app, capsys):
 
 
 def test_cli_memos_and_linked_lines(app, capsys):
+    rescan(app)
     repo = str(app.root)
     assert run_cli(capsys, "memos", repo).splitlines() == [
         "repo memos: 2, levels 1-1", "fix: Fix the heal bug [L1, todo, p:high, 1 links]",

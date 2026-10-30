@@ -6,6 +6,7 @@ from fnmatch import fnmatch
 from pathlib import Path
 
 from .offline import GIT_OFFLINE, GIT_OFFLINE_ENV
+from .procs import run_quiet
 
 DEFAULT_SKIP_DIRS = (".git", ".godot", "bin", "obj", "node_modules", ".venv", "addons",
                      ".coderstanding", "fixtures")
@@ -14,7 +15,7 @@ DEFAULT_SKIP_DIRS = (".git", ".godot", "bin", "obj", "node_modules", ".venv", "a
 def git_files(root):
     """Repo-relative files git does not ignore, or None when root is not in a git repo."""
     try:
-        out = subprocess.run(
+        out = run_quiet(
             ["git", *GIT_OFFLINE, "-C", str(root), "ls-files", "-z", "--cached", "--others",
              "--exclude-standard"],
             capture_output=True, check=True, env={**os.environ, **GIT_OFFLINE_ENV},

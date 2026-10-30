@@ -8,7 +8,7 @@ from urllib.request import urlopen
 
 import pytest
 
-from coderstanding.apps import App, load_graph, rescan
+from coderstanding.apps import App, AppError, load_graph, rescan
 from coderstanding.hub import Hub
 from coderstanding.server import HOST, Api, make_server
 
@@ -54,7 +54,10 @@ def test_an_api_error_is_a_json_500(app, monkeypatch):
         srv.server_close()
 
 
-def test_local_mode_still_rescans_another_scanner_version(app):
+def test_local_mode_loads_another_scanner_version_without_rescanning(app):
     edit_graph(app, scannerVersion=1)
-    load_graph(app)
-    assert json.loads(app.graph_path.read_text())["scannerVersion"] != 1
+    assert load_graph(app).scanner_version == 1
+    assert json.loads(app.graph_path.read_text())["scannerVersion"] == 1  # untouched
+    edit_graph(app, version=99)
+    with pytest.raises(AppError, match="coderstanding rescan"):
+        load_graph(app)

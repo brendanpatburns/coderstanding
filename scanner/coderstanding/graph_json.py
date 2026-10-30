@@ -96,11 +96,10 @@ def node_from_json(data):
 def graph_from_json(data):
     if data.get("version") != VERSION:
         raise ValueError(f"unsupported graph.json version: {data.get('version')}")
-    if data.get("scannerVersion") != SCANNER_VERSION:  # made by another scanner: rescan
-        raise ValueError(f"graph.json from scanner version {data.get('scannerVersion')}")
+    # Any scanner version loads (only an unknown format refuses); callers note an old one.
     graph = Graph(repo=data.get("repo", ""), scanned_at=data.get("scannedAt", ""),
                   stack=data.get("stack", {}), settings=data.get("settings", {}),
-                  hubs=data.get("hubs", {}), fingerprints=data.get("fingerprints", {}))
+                  hubs=data.get("hubs", {}), scanner_version=data.get("scannerVersion") or 0, fingerprints=data.get("fingerprints", {}))
     for node in data["nodes"]:
         graph.add_node(node_from_json(node))
     for edge in data["edges"]:

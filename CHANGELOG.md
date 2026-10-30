@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 (2026-10-30)
+
+- Fixes #2 (Windows helper):
+  - No more console windows: every child process (git, the rescan child, taskkill, schtasks)
+    starts through one helper (`procs.py`) that hides the window on Windows.
+  - Refresh is manual only: the server and the CLI never rescan by themselves, so `git ls-files`
+    no longer runs on every request. A project is scanned by Refresh, `coderstanding rescan <app>`
+    or `add` (first scan; `--no-scan` skips it); an unscanned project says "press Refresh". Commands read
+    the saved graph, also one an older scanner wrote (noted as "made by an older scanner").
+  - One helper only: the server binds its port exclusively (`SO_EXCLUSIVEADDRUSE` on Windows),
+    `serve` exits if a helper already answers, `helper install`/`start` start nothing when it
+    runs, and `restart` waits for the port to free.
+
 ## 0.2.1 (2026-10-30)
 
 - Using it with any AI coding agent, not just Claude Code: `coderstanding guide` prints the full

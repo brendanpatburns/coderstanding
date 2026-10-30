@@ -14,11 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from . import userconfig
-from .filewalk import assign_files
 from .cache import SCANNER_VERSION
 from .checks import apply_layers, check_layer_sides, parse_layer, parse_rule
 from .graph_json import read_graph, write_graph
-from .language import load_builtin_modules
 from .layout import FILE_NAME as LAYOUT_FILE
 from .levels import AUTO, parse_hub_threshold
 from .notes import DOMAIN_PREFIX, domain_id, load_notes, save_notes
@@ -123,7 +121,7 @@ class App:
         return {name: saved.get(name, default) for name, (_, default) in SETTINGS.items()}
 
     def change_settings(self, changes):
-        """Validate and save {name: text}; the next load_graph rescans if they differ."""
+        """Validate and save {name: text}; they apply at the next rescan."""
         settings = self.scan_settings()
         for name, text in changes.items():
             if name not in SETTINGS:
@@ -225,11 +223,16 @@ def data_files(app):
             for kind, names in (("generated", GENERATED_FILES), ("own", OWN_FILES))}
 
 
+def old_scanner(version):
+    """True for a graph.json another scanner version wrote (None: no graph yet)."""
+    return version is not None and version != SCANNER_VERSION
+
+
 def app_details(app, facts):
     """The app manager's facts about an app; `facts` = graph_json.graph_summary of its graph.json."""
     version = facts.get("scannerVersion")
     tours = app.data / "tours"
-    return {"scannerVersion": version, "staleScanner": version is not None and version != SCANNER_VERSION,
+    return {"scannerVersion": version, "staleScanner": old_scanner(version),
             "graphBytes": app.graph_path.stat().st_size if app.graph_path.exists() else None,
             "dataBytes": size_of(app.data), "notes": len(load_notes(app.notes_path).keys()),
             "tours": len(list(tours.glob("*.md"))) if tours.is_dir() else 0,
@@ -287,15 +290,6 @@ def rename_app(old, new):
     return new
 
 
-def is_stale(app):
-    """graph.json is missing or older than any file the scan would read."""
-    if not app.graph_path.exists():
-        return True
-    built = app.graph_path.stat().st_mtime
-    return any((app.root / rel).stat().st_mtime > built
-               for rel, _ in assign_files(app.root, load_builtin_modules()))
-
-
 def rescan(app):
     """Scan the repo now into the app's data folder (graph.json and cache, never the repo)."""
     graph = scan_repo(app.root, cache_dir=app.cache_dir, **app.scan_settings())
@@ -306,15 +300,14 @@ def rescan(app):
 
 
 def load_graph(app):
-    """The app's graph, rescanned first if stale or made with other settings."""
-    if not is_stale(app):
-        try:
-            graph = read_graph(app.graph_path)
-            if graph.settings == app.scan_settings():
-                return graph
-        except ValueError:  # written by an older scanner version: rescan
-            pass
-    return rescan(app)
+    """The app's saved graph, from any scanner version. Never scans (DESIGN 4: manual refresh only):
+    a project never scanned, or with an unknown graph.json format, raises AppError saying how to scan it."""
+    if not app.graph_path.exists():
+        raise AppError(f"{app.name} was never scanned: press Refresh, or run `coderstanding rescan {app.name}`")
+    try:
+        return read_graph(app.graph_path)
+    except ValueError as error:  # an unknown graph.json format; other scanner versions load
+        raise AppError(f"{app.name}: {error}: run `coderstanding rescan {app.name}`") from error
 
 
 def ends_with_part(text, query):

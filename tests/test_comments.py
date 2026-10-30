@@ -161,6 +161,8 @@ def test_cli_comment_commands(repo, monkeypatch, capsys, tmp_path):
     root, _ = repo
     monkeypatch.setenv(REGISTRY_ENV, str(tmp_path / "reg.json"))
     (tmp_path / "reg.json").write_text(json.dumps({"app": {"path": str(root)}}))
+    main(["rescan", "app"])
+    capsys.readouterr()
     main(["comment", "app", "tour:walk#1", "Explain hp", "--line", "3", "--by", "ana"])
     out = capsys.readouterr().out
     assert out.startswith("added [") and "on tour:walk#k1 line 3 as ana" in out

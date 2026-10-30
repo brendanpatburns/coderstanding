@@ -223,6 +223,8 @@ def test_cli_tour_commands(repo, monkeypatch, capsys, tmp_path):
     root, _ = repo
     monkeypatch.setenv(REGISTRY_ENV, str(tmp_path / "reg.json"))
     (tmp_path / "reg.json").write_text(json.dumps({"app": {"path": str(root)}}))
+    main(["rescan", "app"])
+    capsys.readouterr()
     main(["tours", "app"])
     assert capsys.readouterr().out.strip() == "walk A walk 2 steps [you] 1 ai"
     main(["tour", "app", "walk", "--step", "2", "--audio"])

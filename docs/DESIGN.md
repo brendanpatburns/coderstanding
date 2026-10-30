@@ -144,8 +144,17 @@ coderstanding curate <app>            classes needing levels/domains/hints, comp
 coderstanding set <app> <id> key=value ... | --file <batch>
 ```
 
-Registered apps live in `~/.config/coderstanding/apps.json` (name → path). Text commands
-rescan first when any scanned file is newer than `graph.json`, so output is never stale.
+Registered apps live in `~/.config/coderstanding/apps.json` (name → path). **Manual refresh only**
+(decided 2026-10-30 by the user): nothing scans by itself. Text commands and the server read the
+saved `graph.json`; a project is scanned only by the viewer's Refresh (`POST /api/rescan`), by
+`coderstanding rescan <app>`, or when it is added in the viewer. A project with no graph says "never
+scanned: press Refresh"; one written by an older scanner still loads with a note ("made by an older scanner: press
+Refresh"; only an unknown graph.json format refuses). `coderstanding add` does the first scan. The server only
+`stat`s `graph.json` per request to pick up a finished rescan; it never walks the repo, so the
+helper (which has no console on Windows) starts `git` only for a scan. Every child process
+(git, the rescan child, taskkill) starts through `procs.py` so no console window opens.
+The helper is a single instance: it binds its port exclusively, `serve` exits if a helper
+already answers, and `helper install|start` start none when one does.
 
 Layout: one module per language, all producing the same model; shared steps are their own
 modules (see `docs/COMPONENTS.md` once built).
@@ -299,7 +308,7 @@ first guess so a fresh scan is usable:
    (default, = the god-class threshold, max(20, 6 x median)), a number, or `off`/`0`. Chosen per
    app before scanning: `<data>/settings.json`, set by `add --hub-threshold`, `settings <app>
    hub_threshold=N`, or one-off `scan --hub-threshold`. graph.json records the settings used
-   (`settings`, `hubs`); a command whose settings differ rescans (levels are cache-free, so
+   (`settings`, `hubs`); new settings apply at the next rescan (levels are cache-free, so
    only the cheap whole-graph stages rerun). Notes level overrides still win.
 3. Others: 1 + shortest distance from a level-1 node along `composition`/`association`,
    capped at the max level (default 5).

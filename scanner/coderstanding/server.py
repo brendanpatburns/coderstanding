@@ -9,6 +9,7 @@ every read and write, and refuses writes from any other site. Maps never leave t
 
 import json
 import re
+import socket
 import threading
 from collections import Counter
 from functools import partial
@@ -17,7 +18,7 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import assets
+from . import assets, userconfig
 from .checks import WARNING_HELP
 from .graph_json import external_to_json, write_graph
 from .layout import read_layout, update_layout
@@ -98,12 +99,19 @@ class Api:
         self.state_dir = app.data
         self.live = graph is None  # a given graph (tests) is never rescanned
         self.graph = graph if graph is not None else self.load()
+        self.graph_stamp = self.stamp()
         self.notes_lock = threading.Lock()  # one notes read-modify-write at a time
         self.tours_lock = threading.Lock()  # one tour read-modify-write at a time
         self.cards_lock = threading.Lock()  # one spec/memo read-modify-write at a time
 
     def load(self):
         return load_graph(self.app)
+
+    def stamp(self):
+        try:
+            return self.app.graph_path.stat().st_mtime_ns
+        except OSError:
+            return None
 
     @property
     def human(self):
@@ -126,9 +134,10 @@ class Api:
                 "statuses": list(STATUSES), "tags": notes.tags(), "warning_help": WARNING_HELP}
 
     def refresh(self):
-        """Rescan when files changed since the last scan (cheap mtime check)."""
-        if self.live:
-            self.graph = self.load()
+        """Pick up a graph.json a Refresh or `coderstanding rescan` wrote since (one stat; never
+        scans and never walks the repo, DESIGN 4)."""
+        if self.live and self.stamp() != self.graph_stamp:
+            self.graph, self.graph_stamp = self.load(), self.stamp()
 
     def view(self, params):
         """The view; `badges=1` adds each shown class's and line's spec/memo count."""
@@ -656,6 +665,18 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(error) or type(error).__name__)
 
 
+class LoopbackServer(ThreadingHTTPServer):
+    """Owns its port exclusively. ThreadingHTTPServer sets SO_REUSEADDR, which on Windows lets a
+    second process bind the same port (two helpers); there we use SO_EXCLUSIVEADDRUSE instead.
+    On Linux SO_REUSEADDR only allows rebinding past TIME_WAIT, so it stays."""
+
+    def server_bind(self):
+        self.allow_reuse_address = not userconfig.windows()
+        if userconfig.windows():
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
 def make_server(api_or_hub, port=DEFAULT_PORT, viewer_dir=None, host=HOST,
                 allow_origin=None):
     """An Api (one fixed app, as tests use it) or a Hub (every registered app).
@@ -665,7 +686,7 @@ def make_server(api_or_hub, port=DEFAULT_PORT, viewer_dir=None, host=HOST,
                          "(127.0.0.1 / ::1 / localhost)")
     hub = api_or_hub if isinstance(api_or_hub, Hub) else Hub(None, fixed={api_or_hub.app.name: api_or_hub})
     handler = type("BoundHandler", (Handler,), {"hub": hub, "allow_origin": allow_origin})
-    return ThreadingHTTPServer((host, port), partial(handler, directory=str(viewer_dir or assets.viewer_dir())))
+    return LoopbackServer((host, port), partial(handler, directory=str(viewer_dir or assets.viewer_dir())))
 
 
 def serve(app=None, port=DEFAULT_PORT, allow_origin=None):
@@ -674,9 +695,8 @@ def serve(app=None, port=DEFAULT_PORT, allow_origin=None):
     default: userconfig.hosted_origin() (env CODERSTANDING_ALLOW_ORIGIN, then hosted.json)."""
     hub = Hub(Api, initial=app)
     if hub.known_apps():
-        first = hub.api()  # scans it now if stale, so a bad repo fails here
-        print(f"{len(hub.known_apps())} apps; {first.app.name}: {len(first.graph.nodes)} nodes, "
-              f"{len(first.graph.edges)} edges ({first.app.data})")
+        print(f"{len(hub.known_apps())} apps (a project is scanned only by Refresh or "
+              "`coderstanding rescan <app>`)")
     else:  # the page shows its empty state: Projects... -> Add project...
         print("no projects yet: add one with `coderstanding add <name> <folder>` or in the viewer")
     allow_origin = allow_origin or hosted_origin()
