@@ -8,12 +8,36 @@
 </head>
 <body>
 <div class="app" id="app">
-  <aside class="side" id="side" aria-label="Specs">
+  <aside class="side" id="side" aria-label="Specs and notes">
     <button class="iconbtn" id="sideToggle" aria-expanded="false" aria-controls="sideBody"
-            title="Specs">›</button>
-    <h2 class="side-title">Specs</h2>
+            title="Specs and notes">›</button>
+    <h2 class="side-title">Specs · Notes</h2>
     <div class="side-body" id="sideBody" hidden>
-      <p class="muted">Specs arrive with the spec store.</p>
+      <div class="seg card-tabs" role="tablist" aria-label="Specs or notes">
+        <button role="tab" id="cardTabSpecs" data-folder="specs" data-one="spec" aria-selected="true">Specs</button>
+        <button role="tab" id="cardTabMemos" data-folder="memos" data-one="note" aria-selected="false">Notes</button>
+      </div>
+      <div class="spec-tools"><button class="btn small" id="specAdd" type="button" title="A new top-level item">+ Spec</button><span class="appmsg" id="specMsg" role="status"></span></div>
+      <input class="note-input" id="specSearch" type="search" placeholder="Search title, text, class…" aria-label="Search">
+      <div class="spec-filters" aria-label="Filter and sort">
+        <select class="select" id="specStageFilter" aria-label="Stage filter"></select>
+        <select class="select" id="specPriorityFilter" aria-label="Work priority filter"></select>
+        <select class="select" id="specImportanceFilter" aria-label="Importance filter"></select>
+        <select class="select" id="specSort" aria-label="Sort">
+          <option value="">Tree order</option><option value="priority">By work priority</option><option value="importance">By importance</option>
+        </select>
+      </div>
+      <div class="spec-level">
+        <label for="specLevel">Detail</label>
+        <input type="range" id="specLevel" min="1" max="1" step="1" value="1">
+        <span class="lvl" id="specLevelOut">All levels</span>
+        <label class="check" title="Tie the sidebar's detail to the graph's Detail slider"><input type="checkbox" id="specFollow"> follow graph</label>
+      </div>
+      <nav class="spec-crumbs" id="specCrumbs" aria-label="Zoom path"></nav>
+      <ul class="spec-hits" id="specHits" hidden></ul>
+      <div class="spec-tree" id="specTree"></div>
+      <div class="spec-top" id="specTop" data-drop="" hidden>Drop here: top level</div>
+      <div class="hint" id="specHint"></div>
     </div>
   </aside>
   <div class="resizer" id="sideResizer" role="separator" aria-orientation="vertical" tabindex="0"
@@ -71,6 +95,7 @@
           <label class="check"><input type="checkbox" id="showScene" checked> Scenes</label>
           <label class="check"><input type="checkbox" id="showExternal" checked> Outside code</label>
           <label class="check" title="Test code: hidden by default, removed rather than folded"><input type="checkbox" id="showTest"> Tests</label>
+          <label class="check" title="§N on classes and lines that N specs or notes link"><input type="checkbox" id="showCards" checked> Specs &amp; notes</label>
           <label class="check off" title="Arrives when domains exist"><input type="checkbox" disabled> Domains</label>
         </div>
         <div class="ctl">
@@ -195,6 +220,8 @@
 <script src="apps.js"></script>
 <script src="tours.js"></script>
 <script src="app.js"></script>
+<script src="comments.js"></script>
 <script src="tour_view.js"></script>
+<script src="spec_view.js"></script>
 </body>
 </html>

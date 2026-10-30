@@ -96,7 +96,7 @@ def test_tour_json_contract(repo):
     assert step["audio"] == {"rec": None} and not step["stale"] and not step["lost"]
     assert step["focus"] == ["m.Player#hit"] and step["expand"] == ["m.Player"]
     assert tours.list_json()["tours"] == [{"id": "walk", "title": "A walk", "by": "you",
-                                           "ai": False, "steps": 2, "changed": 0, "ai_steps": 1}]
+                                           "ai": False, "steps": 2, "changed": 0, "ai_steps": 1, "comments": 0}]
 
 
 def test_anchor_follows_an_edit_above_it(repo):

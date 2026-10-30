@@ -62,7 +62,7 @@ def write_gitignore(root):
     folder.mkdir(exist_ok=True)
     marker = folder / ".gitignore"
     if not marker.exists():
-        marker.write_text(GITIGNORE_TEXT)
+        marker.write_text(GITIGNORE_TEXT, encoding="utf-8")
 
 
 class ScanCache:
@@ -82,7 +82,7 @@ class ScanCache:
     def load(self, rel_path, module_name, digest):
         """(FileResult, deps) for a still-valid entry, else None."""
         try:
-            entry = json.loads(self._entry_path(rel_path, module_name).read_text())
+            entry = json.loads(self._entry_path(rel_path, module_name).read_text(encoding="utf-8"))
             if (entry["version"], entry["module"], entry["path"], entry["hash"]) != (
                     SCANNER_VERSION, module_name, rel_path, digest):
                 return None
@@ -97,7 +97,7 @@ class ScanCache:
         entry = {"version": SCANNER_VERSION, "module": module_name, "path": rel_path,
                  "hash": digest, "deps": deps, "result": encode(result)}
         self.directory.mkdir(parents=True, exist_ok=True)
-        self._entry_path(rel_path, module_name).write_text(json.dumps(entry))
+        self._entry_path(rel_path, module_name).write_text(json.dumps(entry), encoding="utf-8")
 
     def prune(self):
         """Delete entries no file used this scan (deleted or no longer scanned files)."""

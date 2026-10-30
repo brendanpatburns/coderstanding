@@ -23,7 +23,8 @@ const shots = args.includes("--shots") ? args[args.indexOf("--shots") + 1] : joi
 const data = mkdtempSync(join(tmpdir(), "coderstanding-e2e-data-"));
 const results = [];
 // never the real registry or data home
-const isolated = { CODERSTANDING_REGISTRY: join(data, "apps.json"), CODERSTANDING_DATA_HOME: join(data, "share") };
+const isolated = { CODERSTANDING_REGISTRY: join(data, "apps.json"), CODERSTANDING_DATA_HOME: join(data, "share"),
+  CODERSTANDING_USER: "Sam Tester" };  // a fixed human name, not the machine's git user
 
 function freePort() {
   return new Promise((ok) => {
@@ -117,15 +118,23 @@ true`;
 const fixtureTour = join(fixture, ".coderstanding", "tours", "first-steps.md");
 /** The tour file as the server keeps it (in the data folder: serve runs with --data). */
 const tourFile = () => readFileSync(join(data, "tours", "first-steps.md"), "utf8");
+/** The fixture's spec tree (game > player (AI draft) > helper; tools), copied into the data folder. */
+const fixtureSpecs = join(fixture, ".coderstanding", "specs");
+const specFile = (id, folder = "specs") => (existsSync(join(data, folder, `${id}.md`)) ? readFileSync(join(data, folder, `${id}.md`), "utf8") : null);
 
-/** Every utterance speaks at volume 0 (no sound from the checks) and logs its events. */
+/** Every utterance speaks at volume 0 (no sound from the checks) and logs its events
+ *  (`__speech`: names; `__speechLog`: {t, type, text} with performance.now() times). */
 const SILENT_SPEECH = `(() => {
   if (!window.speechSynthesis) return;
   window.__speech = [];
+  window.__speechLog = [];
   const speak = speechSynthesis.speak.bind(speechSynthesis);
   speechSynthesis.speak = (u) => {
     u.volume = 0;
-    for (const name of ["start", "boundary", "end", "error"]) u.addEventListener(name, (e) => __speech.push(name + (e.error ? ":" + e.error : "")));
+    for (const name of ["start", "boundary", "end", "error"]) u.addEventListener(name, (e) => {
+      __speech.push(name + (e.error ? ":" + e.error : ""));
+      __speechLog.push({ t: performance.now(), type: name, text: u.text });
+    });
     speak(u);
   };
 })();`;
@@ -135,6 +144,10 @@ async function main() {
   execFileSync(cli, ["set", fixture, "Player", "hint=AI wrote this", "--data", data]);  // an AI draft to accept
   mkdirSync(join(data, "tours"), { recursive: true });
   writeFileSync(join(data, "tours", "first-steps.md"), readFileSync(fixtureTour));
+  mkdirSync(join(data, "specs"), { recursive: true });
+  for (const id of ["game", "player", "helper", "tools"]) writeFileSync(join(data, "specs", `${id}.md`), readFileSync(join(fixtureSpecs, `${id}.md`)));
+  mkdirSync(join(data, "memos"), { recursive: true });
+  writeFileSync(join(data, "memos", "bus-note.md"), readFileSync(join(fixture, ".coderstanding", "memos", "bus-note.md")));
   const port = await freePort();
   const roPort = await freePort();  // the hosted shell step's page uses this server as its helper
   isolated.CODERSTANDING_ALLOW_ORIGIN = `http://127.0.0.1:${roPort}`;
@@ -145,6 +158,9 @@ async function main() {
   const { page, close } = await launch({ width: 1780, height: 1000,
     args: ["--enable-speech-dispatcher", "--use-fake-device-for-media-stream", "--use-fake-ui-for-media-stream"] });  // graph area ~1400x800
   await page.send("Page.addScriptToEvaluateOnNewDocument", { source: SILENT_SPEECH });
+  const requests = [];  // every request the page makes over the whole run (offline guarantee, DESIGN 18)
+  page.conn.on((method, params) => { if (method === "Network.requestWillBeSent") requests.push(params.request.url); });
+  await page.send("Network.enable");
   const expectedErrors = [/favicon\.ico/];  // a step may add one it causes on purpose
   const errorsBefore = () => page.errors.filter((e) => !expectedErrors.some((pattern) => pattern.test(e)));
 
@@ -574,6 +590,174 @@ async function main() {
       assert(cmd.startsWith("$ coderstanding view") && !cmd.includes("\n"), `command only: ${cmd}`);
     });
 
+    // ---------- Specs sidebar (DESIGN 7) ----------
+    const specBox = (id) => `#specTree [data-spec="${id}"]`;
+    const specCard = (sel) => `#specTree .spec-box.sel > .spec-card ${sel}`;
+    async function openSpecs(query = "specs=1") {
+      await open(query);
+      await page.waitFor("document.getElementById('app').classList.contains('side-open') && document.querySelector('#specTree .spec-box')", { what: "specs sidebar" });
+    }
+    async function specWait(expr, what) {
+      await page.waitFor(expr, { what });
+      await settle();
+    }
+    const setStage = (id, stage) => page.eval(`(() => { const s = document.querySelector('${specBox(id)} .stage-pick'); s.value = ${JSON.stringify(stage)}; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    const choose = (sel, value) => page.eval(`(() => { const s = document.querySelector(${JSON.stringify(sel)}); s.value = ${JSON.stringify(value)}; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+    const setValue = (id, value) => page.eval(`(() => { const el = document.getElementById(${JSON.stringify(id)}); el.value = ${JSON.stringify(value)}; el.dispatchEvent(new Event("input", { bubbles: true })); })()`);
+
+    await step("Specs: nested boxes, level slider folds (+N finer), zoom with breadcrumbs, search paths", async () => {
+      await openSpecs();
+      const tree = () => page.eval("[...document.querySelectorAll('#specTree .spec-pick')].map((b) => b.textContent)");
+      assert((await tree()).join("|") === "The game|Player moves|Big helper steps|Tools", `tree: ${await tree()}`);
+      assert(await page.eval(`document.querySelector('${specBox("player")} .stage-pick').value`) === "todo", "old status planned read as stage todo");
+      assert(await page.eval(`document.querySelector('${specBox("game")} .stage-pick').selectedOptions[0].textContent`) === "in progress", "stage label");
+      assert(/AI draft/.test(await page.eval(`document.querySelector('${specBox("player")} > .spec-row').textContent`)), "AI draft chip");
+      await page.clickOn("#specLevel");
+      await page.key("Home");
+      await specWait("document.querySelectorAll('#specTree .spec-pick').length === 2", "level 1 folds");
+      assert(await page.eval(`document.querySelector('${specBox("game")} .spec-finer').textContent`) === "+2 finer", "+2 finer");
+      await page.clickOn(`${specBox("game")} .spec-finer`);
+      await specWait("document.querySelectorAll('#specCrumbs button').length === 1", "zoomed");
+      assert((await tree()).join("|") === "The game|Player moves", `zoom: it and one level more: ${await tree()}`);
+      assert(/All › The game/.test(await page.eval("document.getElementById('specCrumbs').textContent")), "breadcrumbs");
+      await page.clickOn("#specCrumbs [data-crumb='']");
+      await specWait("!document.getElementById('specCrumbs').textContent", "back to all");
+      await page.clickOn("#specSearch");
+      await page.type("heavy");
+      await specWait("document.querySelector('#specHits [data-hit]')", "search hit");
+      assert(/^The game › Player moves › Big helper steps/.test(await page.eval("document.querySelector('#specHits [data-hit]').textContent")), "hit shows its path");
+    });
+
+    await step("Specs: selecting one focuses its classes (folded ones too); a class lists its specs", async () => {
+      await openSpecs("specs=1&level=3");
+      await page.clickOn("#specLevel");
+      await page.key("Home");
+      await specWait("document.querySelectorAll('#specTree .spec-pick').length === 2", "level 1 folds");
+      await page.clickOn(`${specBox("game")} .spec-pick`);
+      await specWait("cy.nodes('.focus').length >= 3", "graph focus");
+      const focused = await page.eval("cy.nodes('.focus').map((n) => n.data('raw').name).sort().join()");
+      assert(/Big/.test(focused) && /Player/.test(focused) && /main\.gd/.test(focused), `own and folded classes lit: ${focused}`);
+      assert(await page.eval("state.focus.length") === 3, "the view asked with the box's focus");
+      assert(await page.eval(`[...document.querySelectorAll('${specCard(".cchip.folded")}')].map((c) => c.textContent).join()`) === "Player,Big", "folded classes as outlined chips");
+      await page.clickOn(`${specBox("game")} .spec-pick`);  // again: unselect
+      await specWait("!state.focus && !cy.nodes('.focus').length", "focus cleared");
+      const node = await qa('node("Player")');
+      await page.click(node.x, node.top + 10);
+      await page.waitFor("document.querySelector('#details [data-field=cards] [data-act=open-card]')", { what: "class lists its specs" });
+      assert(/The game › Player moves/.test(await page.eval("document.querySelector('#details [data-field=cards]').textContent")), "spec path in the details panel");
+      await page.clickOn("#details [data-act=open-card]");
+      await specWait("document.querySelector('#specTree .spec-box.sel')?.dataset.spec === 'player'", "opened from the details panel");
+    });
+
+    await step("Specs stages and priorities: quick stage picker, filter, sort, priority selects", async () => {
+      await openSpecs("specs=1&level=3");
+      await setStage("helper", "in-progress");
+      await specWait(`document.querySelector('${specBox("helper")} .stage-pick').value === 'in-progress'`, "stage picked");
+      assert(/stage: in-progress/.test(specFile("helper")), `quick stage stored:\n${specFile("helper")}`);
+      assert(/work: high/.test(await page.eval(`document.querySelector('${specBox("player")} > .spec-row').textContent`)), "work priority chip");
+      assert(/imp: high/.test(await page.eval(`document.querySelector('${specBox("tools")} > .spec-row').textContent`)), "importance chip");
+      await choose("#specSort", "priority");
+      await specWait("document.querySelector('#specHits [data-hit]')", "sorted list");
+      assert(await page.eval("document.querySelector('#specHits [data-hit]').dataset.hit") === "player", "high work priority first");
+      await choose("#specSort", "importance");
+      await specWait("document.querySelector('#specHits [data-hit]').dataset.hit === 'tools'", "high importance first");
+      await choose("#specSort", "");
+      await choose("#specStageFilter", "implemented");
+      await specWait("document.querySelectorAll('#specHits [data-hit]').length === 1", "stage filter");
+      assert(await page.eval("document.querySelector('#specHits [data-hit]').dataset.hit") === "tools", "old status done read as implemented");
+      await choose("#specStageFilter", "");
+      await specWait("document.getElementById('specHits').hidden", "filters off: the tree");
+      await page.clickOn(`${specBox("helper")} .spec-pick`);
+      await choose("#specImportance", "medium");
+      await specWait(`/imp: medium/.test(document.querySelector('${specBox("helper")} > .spec-row').textContent)`, "importance saved");
+      assert(/importance: medium/.test(specFile("helper")), "importance stored");
+    });
+
+    await step("Notes tab: same component, N/A by default, add a note, link a line", async () => {
+      await openSpecs("notes=1&level=3");
+      assert(await page.eval("document.getElementById('cardTabMemos').getAttribute('aria-selected')") === "true", "Notes tab");
+      assert(await page.eval(`document.querySelector('${specBox("bus-note")} .stage-pick').selectedOptions[0].textContent`) === "N/A", "N/A stage");
+      assert(await page.eval("[...document.querySelector('#specStageFilter').options].map((o) => o.value).join()") === ",todo,in-progress,done,na", "the kind's stages");
+      await page.clickOn("#specAdd");
+      await specWait("document.querySelector('#specTree .spec-box.sel')?.dataset.spec === 'new-note'", "note added");
+      assert(/title: New note/.test(specFile("new-note", "memos") || "") && !/stage:/.test(specFile("new-note", "memos")), "stored in memos/, default stage");
+      await setValue("specTitle", "Ask about frames");
+      await page.clickOn(specCard("[data-act=save]"));
+      await specWait("!document.getElementById('specTitle')", "saved");
+      const edge = await qa('edge("Player", "Big")');
+      await page.click(edge.x, edge.y);
+      await page.waitFor(`/Player → Big/.test(document.querySelector('${specCard("[data-act=attach-sel]")}').textContent)`, { what: "line offered" });
+      await page.clickOn(specCard("[data-act=attach-sel]"));
+      await specWait(`document.querySelector('${specCard(".cchip [data-detach]")}')`, "line linked");
+      assert(/links: \[Player>Big\]/.test(specFile("new-note", "memos")), `line link stored:\n${specFile("new-note", "memos")}`);
+      await specWait("cy.edges('.focus').length === 1", "the linked line lights up");
+      await page.clickOn("#cardTabSpecs");
+      await specWait("document.getElementById('cardTabSpecs').getAttribute('aria-selected') === 'true' && document.querySelector('#specTree [data-spec=game]')", "back to specs");
+    });
+
+    await step("Links both ways: badges on classes and lines, a line's details list its notes", async () => {
+      await openSpecs("specs=1&level=3");
+      assert(/§\d/.test(await page.eval("cy.getElementById('Player').data('marks')")), "class badge");
+      const label = await page.eval("cy.edges().filter((e) => e.data('raw').to === 'Big' && e.source().data('raw').name === 'Player')[0].data('label')");
+      assert(/^§2 /.test(label), `line badge: ${label}`);
+      const edge = await qa('edge("Player", "Big")');
+      await page.click(edge.x, edge.y);
+      await page.waitFor("document.querySelectorAll('#details [data-field=cards] [data-act=open-card]').length === 2", { what: "line lists its notes" });
+      assert(/Note Ask about frames/.test(await page.eval("document.querySelector('#details [data-field=cards]').textContent")), "note in a line's details");
+      await page.clickOn("#details [data-act=open-card][data-folder=memos]");
+      await specWait("document.getElementById('cardTabMemos').getAttribute('aria-selected') === 'true' && document.querySelector('#specTree .spec-box.sel')", "opened on the Notes tab");
+      await page.clickOn("#showCards");
+      await settle();
+      assert(!/§/.test(await page.eval("cy.getElementById('Player').data('marks')")), "Show menu hides the badges");
+      await page.clickOn("#showCards");
+      await settle();
+    });
+
+    await step("Specs editing: add, edit, attach a class, re-parent, accept, delete", async () => {
+      await openSpecs("specs=1&level=3");
+      await page.clickOn("#specAdd");
+      await specWait("document.getElementById('specTitle') && document.querySelector('#specTree .spec-box.sel')?.dataset.spec === 'new-spec'", "new spec in edit mode");
+      assert(/title: New spec/.test(specFile("new-spec") || ""), "created on the server");
+      await setValue("specTitle", "Saving games");
+      await setValue("specText", "Writes [[Player]] to disk.");
+      await setValue("specLevelSet", "2");
+      await page.clickOn(specCard("[data-act=save]"));
+      await specWait("!document.getElementById('specTitle') && /Saving games/.test(document.querySelector('#specTree .spec-box.sel .spec-pick').textContent)", "saved");
+      assert(/title: Saving games/.test(specFile("new-spec")) && /level: 2/.test(specFile("new-spec")) && /Writes \[\[Player\]\] to disk\./.test(specFile("new-spec")), `edit stored:\n${specFile("new-spec")}`);
+      await setStage("new-spec", "review");
+      await specWait(`document.querySelector('${specBox("new-spec")} .stage-pick').value === 'review'`, "stage saved");
+      assert(/stage: review/.test(specFile("new-spec")), "stage stored");
+      const node = await qa('node("Player")');
+      await page.click(node.x, node.top + 10);
+      await page.waitFor(`!document.querySelector('${specCard("[data-act=attach-sel]")}').disabled`, { what: "selection offered" });
+      await page.clickOn(specCard("[data-act=attach-sel]"));
+      await specWait(`document.querySelector('${specCard(".cchip [data-detach]")}')`, "class attached");
+      assert(/links: \[Player\]/.test(specFile("new-spec")), `class stored:\n${specFile("new-spec")}`);
+      await page.clickOn("#specPicker");
+      await page.type("big");
+      await page.waitFor(`document.querySelector('${specCard(".spec-picks [data-attach]")}')`, { what: "picker results" });
+      await page.clickOn(specCard(".spec-picks [data-attach]"));
+      await specWait(`document.querySelectorAll('${specCard(".cchip [data-detach]")}').length === 2`, "picked class attached");
+      assert(/links: \[Player, Big\]/.test(specFile("new-spec")), `picked class stored:\n${specFile("new-spec")}`);
+      await page.clickOn(specCard("[data-act=in]"));  // under the spec above it (Tools)
+      await specWait(`document.querySelector('${specBox("tools")} .spec-kids [data-spec="new-spec"]')`, "re-parented");
+      assert(/parent: tools/.test(specFile("new-spec")), "parent stored");
+      await page.clickOn(specCard("[data-act=out]"));
+      await specWait(`!document.querySelector('${specBox("tools")} .spec-kids')`, "moved out");
+      assert(!/parent:/.test(specFile("new-spec")), "back at the top level");
+      await page.clickOn(`${specBox("player")} .spec-pick`);
+      await specWait(`document.querySelector('${specCard("[data-act=accept]")}')`, "player selected");
+      await page.clickOn(specCard("[data-act=accept]"));
+      await specWait(`!document.querySelector('${specCard("[data-act=accept]")}')`, "accepted");
+      assert(!/ai:/.test(specFile("player")) && /by: Sam Tester/.test(specFile("player")), `accepted:\n${specFile("player")}`);
+      await page.clickOn(`${specBox("game")} .spec-pick`);
+      await page.clickOn(specCard("[data-act=delete]"));
+      await page.waitFor(`/sub-item move up/.test(document.querySelector('${specCard(".spec-confirm")}')?.textContent || "")`, { what: "in-page confirm" });
+      await page.clickOn(specCard("[data-act=delete-yes]"));
+      await specWait("!document.querySelector('#specTree [data-spec=\"game\"]')", "deleted");
+      assert(specFile("game") === null && !/parent:/.test(specFile("player")), "deleted; its child moved to the top");
+    });
+
     // ---------- Tours tab ----------
     const tourPanel = (sel) => page.eval(`document.querySelector('#tourPanel ${sel}')?.textContent || ""`);
     async function openTour(query) {
@@ -621,35 +805,47 @@ async function main() {
       await settle();
     });
 
-    await step("Tours player: slider and highlight move on the clock, seek by words", async () => {
+    await step("Tours player: slider and highlight move on the clock, seek by characters", async () => {
       await openTour("tab=tours&tour=first-steps&step=1");
       assert((await page.eval("document.getElementById('seekDur').textContent")).startsWith("~"), "voice length is an estimate");
       await page.clickOn("#tourPlay");
       await page.waitFor("+document.getElementById('seekBar').value > 30 && document.querySelector('#tourPanel .w.now')", { what: "slider and highlight move" });
       await page.clickOn("#tourPlay");  // pause
-      const total = await page.eval("TourView.player.track.total");
       await page.eval("(() => { const bar = document.getElementById('seekBar'); bar.value = 500; bar.dispatchEvent(new Event('input')); })()");
       const word = await page.eval("TourView.player.word");
-      assert(word === Math.floor(total / 2), `seek to the middle word: ${word} of ${total}`);
+      const middle = await page.eval("CoderTours.wordAtChar(TourView.player.track.starts, TourView.player.track.total / 2)");
+      assert(word === middle && word > 3, `seek to the middle (by characters): word ${word}, expected ${middle}`);
       const now = await page.eval("+document.querySelector('#tourPanel .w.now').dataset.s");
       assert(now <= word && await page.eval("document.querySelectorAll('#tourPanel .w.said').length") > 3, "highlight at the seeked word, earlier words dim");
     });
 
-    await step("Tours speech (speech-dispatcher voices in Chromium)", async () => {
+    await step("Tours speech: chunks in step with the voice (speech-dispatcher voices in Chromium)", async () => {
       await openTour("tab=tours&tour=first-steps&step=1");
       const voices = await page.eval("speechSynthesis.getVoices().length");
       if (!voices) { console.log("     skip: no speech voices (speech-dispatcher + a voice, Chromium with --enable-speech-dispatcher)"); return; }
       await page.eval("window.__speech.length = 0");
       const voice = await page.eval("document.getElementById('tourVoice').value");
+      // chunk sync: every chunk's start puts the highlight on its first word (sampled every frame)
+      await page.eval("(() => { window.__words = []; const tick = () => { if (!window.__words) return; __words.push([performance.now(), TourView.player.word]); requestAnimationFrame(tick); }; tick(); })()");
       await page.clickOn("#tourPlay");  // a real click: Chromium speaks only after a user gesture
       await page.waitFor("__speech.some((e) => e === 'start' || e.startsWith('error'))", { what: "speech start", timeout: 8000 });
       const events = await page.eval("__speech.slice()");
       assert(!events.some((e) => e.startsWith("error")), `speech error: ${events}`);
-      await page.waitFor("+document.getElementById('seekBar').value > 30 && document.querySelector('#tourPanel .w.now')", { what: "slider moves while speaking" });
-      await sleep(1500);
-      const boundaries = (await page.eval("__speech.filter((e) => e === 'boundary').length"));
-      console.log(`     ${voices} voices, picked "${voice}", ${boundaries} boundary events in ~2 s${boundaries ? "" : " (none: the slider runs on the clock)"}`);
-      await page.clickOn("#tourPlay");
+      // chunk sync: every chunk's start puts the highlight on its first word (sampled every frame)
+      const chunks = await page.eval("TourView.player.track.chunks");
+      await page.waitFor(`__speechLog.filter((e) => e.type === "end").length >= ${chunks.length}`, { what: "every chunk spoken", timeout: 30000 })
+        .catch(async (error) => { throw new Error(`${error.message}: ${JSON.stringify(await page.eval("__speechLog.map((e) => [Math.round(e.t), e.type, e.text.slice(0, 20)])"))}`); });
+      await page.clickOn("#tourPlay");  // pause before the next step
+      const { log, samples } = await page.eval("(() => { const out = { log: __speechLog.slice(), samples: __words.slice() }; window.__words = null; return out; })()");
+      const starts = log.filter((e) => e.type === "start");
+      assert(starts.length === chunks.length, `one start per chunk: ${starts.length} of ${chunks.length}`);
+      const rows = starts.map((e, k) => {
+        const before = samples.filter(([t]) => t < e.t).at(-1)?.[1] ?? -1;   // the clock's guess just before
+        const after = samples.find(([t]) => t > e.t + 20)?.[1] ?? -1;        // after the start event
+        return { chunk: k, first: chunks[k].first, before, after };
+      });
+      console.log(`     ${voices} voices, "${voice}"; chunk starts (first word / highlight just before / after): ${rows.map((r) => `${r.first}/${r.before}/${r.after}`).join(" ")}; ${await page.eval("__speech.filter((e) => e === 'boundary').length")} boundary events`);
+      for (const r of rows) assert(r.after === r.first, `chunk ${r.chunk} start: highlight ${r.after}, first word ${r.first}`);
       assert(voice && !/afrikaans/i.test(voice), `a voice for the page language, not Chromium's first ("default") one: ${voice}`);
     });
 
@@ -714,6 +910,50 @@ async function main() {
       await page.waitFor("TourView.player.track.pos > 0.2", { what: "recording plays" });
       await page.clickOn("#tourPlay");
       assert(!(await page.eval("(window.__speech || []).includes('start')")), "no speech for a recording");
+    });
+
+    await step("Tours: comments on a step and a code line, reply, resolve, badges", async () => {
+      const commentsFile = join(data, "tours", "first-steps.comments.jsonl");
+      await openTour("tab=tours&tour=first-steps&step=1");
+      await page.waitFor("document.querySelector('#tourComments [data-cdraft=new]')", { what: "comment box" });
+      await page.clickOn("#tourComments [data-cdraft=new]");
+      await page.type("Explain the **bus** here");
+      await page.clickOn("#tourComments [data-cact=send][data-ckey=new]");
+      await page.waitFor("document.querySelectorAll('#tourComments .cthread').length === 1", { what: "step comment shown" });
+      const me = await page.eval("CoderComments.state.me");
+      assert(me && me !== "you", `comments carry a real name: ${me}`);
+      assert(await page.eval("document.querySelector('#tourComments .cbody b')?.textContent") === "bus", "Markdown rendered");
+      assert(await page.eval("document.querySelector('#tourDots [data-go=\"0\"] .cbadge')?.textContent") === "1", "badge on dot 1");
+      assert(await page.eval("document.querySelector('#tourPanel .steplist [data-go=\"0\"] .cbadge')?.textContent") === "1", "badge in the step list");
+      // a code line: the gutter's "+"
+      const line = await page.eval("+document.querySelectorAll('#codeSrc .ln')[1].querySelector('.no').textContent");
+      await page.clickOn("#codeSrc .ln:nth-child(2) .cadd");
+      await page.waitFor(`document.querySelector('#tourComments .cline')?.textContent.includes('Line ${line}')`, { what: "line picked" });
+      await page.clickOn("#tourComments [data-cdraft=new]");
+      await page.type("Why this call?");
+      await page.clickOn("#tourComments [data-cact=send][data-ckey=new]");
+      await page.waitFor("document.querySelectorAll('#tourComments .cthread').length === 2", { what: "line comment shown" });
+      assert(await page.eval(`document.querySelector('#codeSrc .ln:nth-child(2) .cmark')?.textContent`) === "1", "line marked in the gutter");
+      assert(await page.eval("document.querySelector('#tourDots [data-go=\"0\"] .cbadge').textContent") === "2", "badge counts 2");
+      assert(await page.eval("document.querySelector('#tourList [aria-current=true] .cbadge')?.textContent") === "2", "open count on the tour in the list");
+      // reply to the first thread, then resolve it (folded)
+      await page.clickOn("#tourComments .cthread [data-cact=reply]");
+      await page.waitFor("document.querySelector('#tourComments [data-cdraft^=reply]')", { what: "reply box" });
+      await page.clickOn("#tourComments [data-cdraft^=reply]");
+      await page.type("On it.");
+      await page.clickOn("#tourComments [data-cact=send][data-ckey^=reply]");
+      await page.waitFor("document.querySelectorAll('#tourComments .cthread:first-child .cmt').length === 2", { what: "reply shown" });
+      await page.clickOn("#tourComments .cthread [data-cact=resolve]");
+      await page.waitFor("document.querySelector('#tourComments details.cthread.resolved:not([open])')", { what: "resolved thread folded" });
+      assert(await page.eval("document.querySelector('#tourDots [data-go=\"0\"] .cbadge').textContent") === "1", "badge drops to 1");
+      const rows = readFileSync(commentsFile, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+      assert(rows.length === 3 && rows.every((r) => r.by === me) && rows.some((r) => r.anchor && r.resolved === undefined)
+        && rows.some((r) => r.resolved?.by === me), `comments file: ${JSON.stringify(rows)}`);
+      const cliText = execFileSync(cli, ["tour", fixture, "first-steps", "--comments", "--data", data], { env: { ...process.env, ...isolated } }).toString();
+      assert(/comments: 1 open, 1 resolved/.test(cliText) && cliText.includes(`main.gd:${line}`), `CLI comments: ${cliText}`);
+      // leave no open threads for later checks
+      await page.clickOn("#tourComments .cthread:not(.resolved) [data-cact=resolve]");
+      await page.waitFor("!document.querySelector('#tourDots .cbadge')", { what: "no open comments" });
     });
 
     await step("Tours: back to the graph tab", async () => {
@@ -941,6 +1181,18 @@ async function main() {
         base = home;
       }
       await open();
+    });
+
+    await step("offline: strict CSP on the page, every request to this PC or data:/blob:", async () => {
+      const response = await fetch(base);
+      const csp = response.headers.get("content-security-policy") || "";
+      assert(/default-src 'self'/.test(csp) && /connect-src 'self'/.test(csp) && /script-src 'self'/.test(csp), `CSP: ${csp}`);
+      assert(response.headers.get("referrer-policy") === "no-referrer", "Referrer-Policy");
+      const local = /^(https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?\/|data:|blob:)/;
+      const outside = requests.filter((url) => !local.test(url));
+      assert(requests.length > 50, `recorded ${requests.length} requests`);
+      assert(!outside.length, `requests off this PC: ${outside.slice(0, 5).join(" ")}`);
+      console.log(`     ${requests.length} requests, all local`);
     });
 
     await step("no console errors overall", async () => {

@@ -3,12 +3,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parent.parent / "scripts" / "claude-hook.py"
+SCANNER = Path(__file__).resolve().parent.parent / "scanner"
 
 
 def run(stdin, tmp_path, registry):
-    env = {"CODERSTANDING_REGISTRY": str(registry), "XDG_RUNTIME_DIR": str(tmp_path), "PATH": "/usr/bin"}
-    done = subprocess.run([sys.executable, str(HOOK)], input=stdin, text=True,
+    env = {"CODERSTANDING_REGISTRY": str(registry), "XDG_RUNTIME_DIR": str(tmp_path), "PATH": "/usr/bin", "PYTHONPATH": str(SCANNER)}
+    done = subprocess.run([sys.executable, "-m", "coderstanding", "hook-run"], input=stdin, text=True,
                           capture_output=True, env=env)
     assert done.returncode == 0
     return json.loads(done.stdout)["hookSpecificOutput"] if done.stdout else None

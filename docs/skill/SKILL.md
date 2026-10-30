@@ -21,10 +21,19 @@ instead of grepping files.
    code lines (`--step N` one step, `--marked` just the highlighted lines). Asked to explain a
    flow, write one: `tour <app> <id> --draft "Title" A#f A>B ...` (an AI draft the user accepts),
    then fix steps with `--step N --text ...`; `(changed)` steps need re-checking.
-5. Open real files only for the classes and calls the output points at.
-6. Put this line in agent briefs for that repo: "This repo is registered in Coderstanding:
+   Before editing a tour, read its open comments (`tour <app> <id> --comments`; steps show
+   `(2 open comments)`): they are what the user or a co-worker wants changed. After acting on
+   one, reply (`comment <app> --reply ID "Done: ..."`) or resolve it (`comment <app> --resolve ID`).
+5. Planning or building a feature: `coderstanding specs <app> [words]` finds its spec (tree, or
+   hits with their paths; `--stage todo --sort priority` = the work queue), `spec <app> <id>`
+   reads it; `memos` / `memo` are the user's Notes (same options). Keep specs current: `spec <app>
+   --add "Title" --parent id --links A,A>B --stage todo --priority high`, `spec <app> <id> --set
+   stage=review links+=C` (AI drafts the user accepts; fields the user set are kept).
+6. Open real files only for the classes and calls the output points at.
+7. Put this line in agent briefs for that repo: "This repo is registered in Coderstanding:
    start with `coderstanding graph <app> 1`, then zoom/node/specs instead of broad grepping."
    Paste any `rules X:` lines it prints for classes the agent touches.
 
-Full reference (how to read the text, curating with `set`): read `../FOR_CLAUDE.md` from this
-skill's folder (it is the Coderstanding repo's `docs/skill`, so that is `docs/FOR_CLAUDE.md`).
+Full reference (how to read the text, curating with `set`): read `FOR_CLAUDE.md` in this
+skill's folder (`coderstanding skill install` puts it there; in a checkout where this folder is
+linked into `~/.claude/skills`, it is `../FOR_CLAUDE.md`).

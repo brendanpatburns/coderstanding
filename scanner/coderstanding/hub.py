@@ -11,6 +11,7 @@ import sys
 import threading
 from pathlib import Path
 
+from . import userconfig
 from .apps import (AppError, app_details, clean_name, default_data_dir, find_app, load_registry,
                    register, remove_app, rename_app)
 from .filewalk import assign_files
@@ -21,9 +22,16 @@ PACKAGE_PARENT = str(Path(__file__).resolve().parents[1])  # so `-m coderstandin
 
 
 def scan_command(app):
-    """The niced child process that rescans `app` into its data folder."""
-    return ["nice", "-n", "19", sys.executable, "-m", "coderstanding", "rescan",
-            str(app.root), "--data", str(app.data)]
+    """The low-priority child process that rescans `app` into its data folder."""
+    command = [sys.executable, "-m", "coderstanding", "rescan", str(app.root), "--data", str(app.data)]
+    return command if userconfig.windows() else ["nice", "-n", "19", *command]
+
+
+def scan_process_options():
+    """Windows has no `nice`: lower the priority and hide the console window instead."""
+    if not userconfig.windows():
+        return {}
+    return {"creationflags": subprocess.BELOW_NORMAL_PRIORITY_CLASS | subprocess.CREATE_NO_WINDOW}
 
 
 def checked_folder(text):
@@ -31,7 +39,7 @@ def checked_folder(text):
     text = str(text or "").strip()
     path = Path(text).expanduser()
     if not text or not path.is_absolute():
-        raise AppError("folder must be an absolute path (like /home/me/code/app)")
+        raise AppError("folder must be an absolute path (like /home/me/code/app or C:\\code\\app)")
     if not path.exists():
         raise AppError(f"no such folder: {path}")
     if not path.is_dir():
@@ -136,7 +144,8 @@ class Hub:
     def run_scan(self, app):
         try:
             done = subprocess.run(scan_command(app), capture_output=True, text=True,
-                                  env={**os.environ, "PYTHONPATH": PACKAGE_PARENT})
+                                  env={**os.environ, "PYTHONPATH": PACKAGE_PARENT},
+                                  **scan_process_options())
             message = (done.stderr.strip().splitlines() or ["scan failed"])[-1]
             result = {"state": "done"} if done.returncode == 0 else \
                 {"state": "error", "error": message.removeprefix("error: ")}

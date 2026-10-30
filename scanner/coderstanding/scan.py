@@ -13,6 +13,7 @@ from .filewalk import DEFAULT_SKIP_DIRS, assign_files
 from .fingerprints import compute_fingerprints
 from .language import FileContext, load_builtin_modules, track_dependencies
 from .levels import AUTO, guess_levels
+from .offline import install as install_offline_guard
 from .resolver import Parsed, build_graph
 from .stack import read_stack
 from .testcode import mark_tests
@@ -34,7 +35,7 @@ def parse_one(root, rel_path, module):
 def parse_all(root, jobs, workers, parallel_min):
     """parse_one for every (rel_path, module) job, in job order; pooled when there are many."""
     if workers > 1 and len(jobs) >= parallel_min:
-        with ProcessPoolExecutor(max_workers=workers) as pool:
+        with ProcessPoolExecutor(max_workers=workers, initializer=install_offline_guard) as pool:
             chunk = max(1, len(jobs) // (workers * 4))
             return list(pool.map(parse_one, repeat(root), *zip(*jobs), chunksize=chunk))
     return [parse_one(root, rel, module) for rel, module in jobs]

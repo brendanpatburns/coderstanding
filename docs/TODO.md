@@ -4,8 +4,8 @@ Small things decided but not scheduled. Bigger work lives in `docs/DESIGN.md` §
 
 - [ ] Low priority: "Open in editor" button (VS Code `vscode://file/<path>:<line>`) and a
       Forgejo file link in the details panel (DESIGN §12a).
-- [ ] Low priority, with git integration: human note edits record the user's git `user.name`
-      instead of `you` (AI edits keep their own name, e.g. `claude`, with `ai: true`).
+- [x] Human note edits record the user's git `user.name` instead of `you` (AI edits keep their
+      own name, e.g. `claude`, with `ai: true`). Done with comments: `notes.human_author`.
 - [ ] Maybe later: write an accepted description back into the header comment.
 - [x] Reader fixes found matching the mock: autoload / typed-field hookups and emits (`Events.hit.emit()`,
       `hit.emit()`, `emit_signal("x")`, own-signal `connect`) now read as `emit` / `signal` refs instead of

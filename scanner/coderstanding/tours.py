@@ -16,13 +16,15 @@ import re
 import secrets
 from dataclasses import dataclass, field
 
+from .comments import Comments
 from .fingerprints import SourceLines, class_end, digest, function_spans
-from .items import (Item, ItemError, ItemStore, check_id, join_sections, resolve_target,
-                    split_sections, unknown_targets)
+from .items import (Item, ItemError, ItemStore, check_id, focus_ids, join_sections,
+                    resolve_target, split_sections, unknown_targets)
 from .notes import AI_AUTHOR, ARROW, FUNCTION_SEP, HUMAN_AUTHOR, edge_key, function_key, node_key
 from .views import effective_level
 
 KIND = "tours"
+COMMENT_KIND = "tour"  # comment targets `tour:<id>` and `tour:<id>#<step key>`
 AUDIO_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg"}  # upload type -> file extension
 MAX_AUDIO_BYTES = 5 * 1024 * 1024  # about 20 minutes of 32 kbps Opus
 DRAFT_LINES = 8  # excerpt length of an AI draft's step
@@ -207,6 +209,41 @@ class Tours:
     def __init__(self, data_dir, graph, notes, source):
         self.store = ItemStore(data_dir, KIND)
         self.graph, self.notes, self.source = graph, notes, source
+        self.comments = Comments(data_dir, locate=self.locate)  # DESIGN 7d: `tour:<id>[#<key>]`
+        self.comments.add_kind(COMMENT_KIND, KIND, self)
+
+    # comments: the hooks comments.py asks a kind for
+    def locate(self, at):
+        """(path, first line today) of a class or function anchor, or None."""
+        span = anchor_span(self.graph, self.notes, at)
+        return span[:2] if span else None
+
+    def step_of(self, rest):
+        """(tour, step or None) of `<id>` / `<id>#<key>`; (None, None) when gone."""
+        tour_id, _, key = rest.partition("#")
+        try:
+            tour = self.get(tour_id)
+        except (KeyError, ItemError):
+            return None, None
+        return tour, next((s for s in tour.steps if s.key == key), None) if key else None
+
+    def comment_exists(self, rest):
+        tour, step = self.step_of(rest)
+        return tour is not None and ("#" not in rest or step is not None)
+
+    def comment_target(self, text):
+        """A target as the CLI takes it: `tour:<id>#<N>` (a step number) becomes the step's key."""
+        kind, _, rest = text.partition(":")
+        tour_id, _, part = rest.partition("#")
+        if kind == COMMENT_KIND and part.isdigit():
+            tour, step = self.step_of(rest)
+            if tour and step is None and 1 <= int(part) <= len(tour.steps):
+                return f"{kind}:{tour_id}#{tour.steps[int(part) - 1].key}"
+        return text
+
+    def comment_anchor(self, rest):
+        _, step = self.step_of(rest)
+        return step.code.at if step and step.code else None
 
     # reading
     def ids(self):
@@ -242,12 +279,7 @@ class Tours:
     # views of a step (DESIGN 7c: the step's view is compute_view(level, focus, expand))
     def focus_of(self, step):
         """The step's targets as view ids (`A`, `A→B`, `A#f`); unknown ones left out."""
-        ids = []
-        for target in step.targets:
-            found = resolve_target(self.graph, self.notes, target)
-            if found:
-                ids.append({"edge": ARROW, "function": FUNCTION_SEP}.get(found[0], "").join(found[1:]))
-        return ids
+        return focus_ids(self.graph, self.notes, step.targets)
 
     def level_of(self, step, focus):
         """The step's level, else the lowest level that shows every target class."""
@@ -284,13 +316,19 @@ class Tours:
                                   if ARROW not in f and f not in self.graph.nodes})}
 
     def tour_json(self, tour, app_name=None):
+        """The tour; `comments` = open threads on the tour (all of it) and per step (DESIGN 7d)."""
+        target = f"{COMMENT_KIND}:{tour.id}"
+        counts = self.comments.open_counts(target)
+        steps = [{**self.step_json(tour, s, app_name), "comments": counts.get(f"{target}#{s.key}", 0)}
+                 for s in tour.steps]
         return {"id": tour.id, "title": tour.title, "by": tour.by, "ai": tour.ai,
-                "steps": [self.step_json(tour, s, app_name) for s in tour.steps]}
+                "comments": sum(counts.values()), "steps": steps}
 
     def row_json(self, tour):
         return {"id": tour.id, "title": tour.title, "by": tour.by, "ai": tour.ai,
                 "steps": len(tour.steps), "changed": sum(self.is_stale(s) for s in tour.steps),
-                "ai_steps": sum(s.ai for s in tour.steps)}
+                "ai_steps": sum(s.ai for s in tour.steps),
+                "comments": sum(self.comments.open_counts(f"{COMMENT_KIND}:{tour.id}").values())}
 
     def list_json(self, query=""):
         return {"tours": [self.row_json(t) for t in self.search(query)]}
@@ -538,7 +576,7 @@ class Tours:
         for folder in sorted(p for p in self.store.folder.glob("*/") if p.is_dir()):
             tour = known.get(folder.name)
             keep = {p.name for s in tour.steps if (p := self.audio_path(tour.id, s))} if tour else set()
-            orphans += [str(p.relative_to(self.store.folder)) for p in sorted(folder.glob("*.rec.*"))
+            orphans += [p.relative_to(self.store.folder).as_posix() for p in sorted(folder.glob("*.rec.*"))
                         if p.name not in keep]
         return orphans
 

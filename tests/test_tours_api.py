@@ -54,7 +54,7 @@ def test_list_get_and_markdown(desk):
     base, _ = desk
     assert call(base, "/api/tours?app=app")["tours"][0] == {
         "id": "walk", "title": "A walk", "by": "you", "ai": False, "steps": 2, "changed": 0,
-        "ai_steps": 1}
+        "ai_steps": 1, "comments": 0}
     tour = call(base, "/api/tours/walk?app=app")
     assert tour["steps"][0]["code"]["lines"] == ["        self.hp -= 1", "        self.flash()"]
     md = call(base, "/api/tours/walk.md?app=app", raw=True).decode()

@@ -6,3 +6,7 @@ node_modules/
 .coderstanding/*
 !.coderstanding/tours/
 !.coderstanding/specs/
+!.coderstanding/memos/
+dist/
+build/
+*.egg-info/

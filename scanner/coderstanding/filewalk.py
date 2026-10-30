@@ -5,6 +5,8 @@ import subprocess
 from fnmatch import fnmatch
 from pathlib import Path
 
+from .offline import GIT_OFFLINE, GIT_OFFLINE_ENV
+
 DEFAULT_SKIP_DIRS = (".git", ".godot", "bin", "obj", "node_modules", ".venv", "addons",
                      ".coderstanding", "fixtures")
 
@@ -13,9 +15,9 @@ def git_files(root):
     """Repo-relative files git does not ignore, or None when root is not in a git repo."""
     try:
         out = subprocess.run(
-            ["git", "-C", str(root), "ls-files", "-z", "--cached", "--others",
+            ["git", *GIT_OFFLINE, "-C", str(root), "ls-files", "-z", "--cached", "--others",
              "--exclude-standard"],
-            capture_output=True, check=True,
+            capture_output=True, check=True, env={**os.environ, **GIT_OFFLINE_ENV},
         ).stdout
     except (OSError, subprocess.CalledProcessError):
         return None

@@ -30,7 +30,7 @@ def read_layout(state_dir):
     path = layout_path(state_dir)
     if not path.exists():
         return {}
-    return {item["key"]: item for item in map(clean_item, json.loads(path.read_text()))}
+    return {item["key"]: item for item in map(clean_item, json.loads(path.read_text(encoding="utf-8")))}
 
 
 def write_layout(state_dir, items):

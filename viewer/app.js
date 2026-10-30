@@ -10,7 +10,7 @@ const ROUTE_CAP = 800;   // above this many lines, skip bending lines around box
 const EDGE_FONT = 10.5;
 
 const state = {
-  meta: null, level: 1, view: "all", show: { scene: true, external: true, test: false },
+  meta: null, level: 1, view: "all", show: { scene: true, external: true, test: false, cards: true },
   filter: "",            // "" | "status:<s>" | "tag:<t>": dims the classes that do not match
   crumbs: [],            // zoom path: [{label, zoom: {from, to, level, via}}]
   mode: "view",          // "view" | "edit"
@@ -196,7 +196,7 @@ function boxName(node) {
 /** Flags without a badge, status and #tags, for the box's second line. */
 function nodeMarks(node) {
   const flags = node.flags.filter((f) => !HIDDEN_FLAGS.includes(f) && !START_BADGES[f]);
-  return [...flags, node.status, ...(node.tags || []).map((t) => `#${t}`)].filter(Boolean).join(" · ");
+  return [...flags, node.status, ...(node.tags || []).map((t) => `#${t}`), cardBadge(node)].filter(Boolean).join(" · ");
 }
 
 function nodeElement(node) {
@@ -223,8 +223,13 @@ function callSummary(calls, max = 3) {
   return names.slice(0, max).join(", ") + more;
 }
 
+/** "§2" on a class or line that 2 specs or notes link (the server's `cards` count, Show menu). */
+function cardBadge(item) {
+  return item.cards ? `§${item.cards}` : "";
+}
+
 function edgeLabel(edge) {
-  const text = (edge.layer?.length ? "⚠ " : "") + (edge.hint || callSummary(edge.calls));
+  const text = (edge.layer?.length ? "⚠ " : "") + (edge.cards ? `${cardBadge(edge)} ` : "") + (edge.hint || callSummary(edge.calls));
   if (!edge.as) return text;
   return text ? `as ${edge.as}: ${text}` : `as ${edge.as}`;
 }
@@ -541,6 +546,7 @@ function currentZoom() {
 function viewParams() {
   const params = new URLSearchParams({ level: state.level, view: state.view,
     scene: state.show.scene ? 1 : 0, external: state.show.external ? 1 : 0, test: state.show.test ? 1 : 0 });
+  if (state.show.cards) params.set("badges", "1");  // spec/note counts on classes and lines
   const zoom = currentZoom();
   if (zoom) {
     params.set("zoom_from", zoom.from);
@@ -623,6 +629,46 @@ function fitReadable() {
   const start = key.filter((n) => isStartClass(n.data("raw")));
   cy.zoom(READABLE_ZOOM);
   cy.center(start.nonempty() ? start : parts.at(-1));
+}
+
+/** Frame the highlighted classes (the server's focus: a tour step, a spec) when it marked any;
+ *  never below the readable zoom: then centre on the first focused class (a focused function's, if any). */
+function fitFocus() {
+  const focus = cy.nodes(".focus");
+  if (focus.empty()) return;
+  cy.fit(focus, 60);
+  if (cy.zoom() > 1.2) { cy.zoom(1.2); cy.center(focus); }
+  if (cy.zoom() < READABLE_ZOOM) {
+    const fnClass = (state.current.focus.functions || [])[0]?.split("#")[0];
+    const main = (fnClass && cy.getElementById(fnClass).nonempty()) ? cy.getElementById(fnClass) : focus[0];
+    cy.zoom(READABLE_ZOOM);
+    cy.center(main);
+  }
+  scheduleFan();
+}
+
+/** Select a target (CLI syntax: `Class`, `A>B`, `Class#function`; a class by id or name) when it is
+ *  on screen; false when it is not. Wiki links and target chips use it. */
+function selectInGraph(target) {
+  const fn = target.includes("#") && fnById(target);
+  if (fn) { selectFn(fn); return true; }
+  const byName = (name) => {
+    const node = cy.getElementById(name);
+    return node.nonempty() ? node : cy.nodes().filter((n) => n.data("raw").name === name);
+  };
+  const [from, to] = target.split(/>|→/);
+  const ids = (name) => byName(name).map((n) => n.id());
+  const element = to ? cy.edges().filter((e) => ids(from).includes(e.data("raw").from) && ids(to).includes(e.data("raw").to))
+    : byName(target);
+  if (element.empty()) return false;
+  select({ type: element[0].isNode() ? "node" : "edge", raw: element[0].data("raw") });
+  return true;
+}
+
+/** Text with its [[wiki links]] (DESIGN 7b) as link spans (`data-target`), escaped. */
+function wikiLinksHtml(text) {
+  return esc(text).replace(/\[\[([^\]]+)\]\]/g, (_, target) =>
+    `<span class="wl" data-target="${target}" role="link" tabindex="0" title="Select ${target}">${target}</span>`);
 }
 
 function isStartClass(raw) {
@@ -879,6 +925,7 @@ function renderEdge(edge) {
       ${field("kinds", "Kinds", kinds)}
       ${field("calls", `Calls (${calls.length})`, callList(calls))}
       ${field("via", "Via", via)}
+      ${field("cards", "Specs & notes", SpecView.linkedHtml(edge.key))}
     </dl>
     <div class="actions"><button class="btn" data-act="zoom-edge">Zoom into this connection</button></div>`;
   growAllNotes();
@@ -969,6 +1016,7 @@ function renderNode(node) {
       ${field("level", "Level", String(node.level))}
       ${field("flags", startBadges(node).length ? "Starts as" : "Flags", badgeList(node))}
       ${field("tested_by", "Tested by", testedBy(node.tested_by))}
+      ${field("cards", "Specs & notes", SpecView.linkedHtml(node.id))}
       ${nodeInfoFields(info)}
     </dl>
     <div class="actions"><button class="btn" data-act="zoom-node">Zoom into class</button>${pinAction(node)}</div>`;
@@ -1014,6 +1062,7 @@ function onDetailsClick(event) {
   const item = shownItem(shown);
   if (!act || !item) return;
   if (act === "help") { event.target.closest(".help").classList.toggle("open"); return; }
+  if (act === "open-card") { const b = event.target.closest("[data-act]"); SpecView.open(b.dataset.id, b.dataset.folder); return; }
   if (act === "accept") acceptNote(item, event.target.dataset.name);
   if (act === "still-true") stillTrueNote(item, event.target.dataset.name);
   if (act === "zoom-edge") zoomIntoEdge(item.raw);
@@ -1109,7 +1158,8 @@ function setView(view, load = true) {
 }
 
 function onShow() {
-  state.show = { scene: $("showScene").checked, external: $("showExternal").checked, test: $("showTest").checked };
+  state.show = { scene: $("showScene").checked, external: $("showExternal").checked, test: $("showTest").checked,
+    cards: $("showCards").checked };
   loadView();
 }
 
@@ -1155,8 +1205,9 @@ function onKey(event) {
   if (event.shiftKey) redo(); else undo();
 }
 
-function toggleSide() {
-  const open = !$("app").classList.contains("side-open");
+/** Open or close the specs sidebar (no argument: toggle). */
+function toggleSide(force) {
+  const open = typeof force === "boolean" ? force : !$("app").classList.contains("side-open");
   $("app").classList.toggle("side-open", open);
   $("sideBody").hidden = !open;
   $("sideToggle").textContent = open ? "‹" : "›";
@@ -1171,6 +1222,7 @@ function bindControls() {
   $("showScene").addEventListener("change", onShow);
   $("showExternal").addEventListener("change", onShow);
   $("showTest").addEventListener("change", onShow);
+  $("showCards").addEventListener("change", onShow);
   $("filter").addEventListener("change", onFilter);
   $("modeView").addEventListener("click", () => setMode("view"));
   $("modeEdit").addEventListener("click", () => setMode("edit"));
@@ -1180,7 +1232,7 @@ function bindControls() {
   $("undoBtn").addEventListener("click", undo);
   $("redoBtn").addEventListener("click", redo);
   $("themeBtn").addEventListener("click", cycleTheme);
-  $("sideToggle").addEventListener("click", toggleSide);
+  $("sideToggle").addEventListener("click", () => toggleSide());
   $("tabGraphBtn").addEventListener("click", () => showTab("graph"));
   $("tabStackBtn").addEventListener("click", () => showTab("stack"));
   $("tabToursBtn").addEventListener("click", () => showTab("tours"));
@@ -1374,6 +1426,7 @@ async function init() {
     await seedAutoSpots();
     await loadView();
     if (back?.camera) { cy.zoom(back.camera.zoom); cy.pan(back.camera.pan); }
+    await SpecView.start(params);
     if (params.get("tab") === "stack") showTab("stack");
     if (params.get("tab") === "tours") await showTab("tours");
     else selectFromUrl(params);

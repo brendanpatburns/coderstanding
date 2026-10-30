@@ -19,15 +19,68 @@ so they read structure instead of grepping files.
 Stack and outside dependencies come from project files (`package.json`, `pyproject.toml`,
 `requirements*.txt`, `.csproj`, Dockerfiles, compose files, git submodules).
 
-## Install (once)
+## Install
 
-Needs Python 3.15+ (and its development headers to build tree-sitter, e.g. Fedora `python3-devel`).
+Needs Python 3.10 or newer (Linux, macOS or Windows). No source checkout is needed.
+
+### From a release
+
+```bash
+pipx install coderstanding-0.2.0-py3-none-any.whl      # or: pip install --user coderstanding-0.2.0-py3-none-any.whl
+coderstanding --version
+```
+
+On Windows, install pipx first, then the wheel:
+
+```powershell
+py -m pip install --user pipx
+py -m pipx ensurepath          # then open a new terminal
+pipx install coderstanding-0.2.0-py3-none-any.whl
+coderstanding helper install
+```
+
+Installing downloads the tree-sitter grammar wheels from PyPI once (the only network use, at install
+time; Coderstanding itself never sends your code anywhere). To install on a machine without access to
+PyPI, download everything on another machine with the same OS and Python version, copy the folder over,
+and install from it:
+
+```bash
+pip download coderstanding-0.2.0-py3-none-any.whl -d wheels/     # on a machine with internet
+pip install --no-index --find-links wheels/ coderstanding-0.2.0-py3-none-any.whl   # on the target
+```
+
+(`pipx install --pip-args="--no-index --find-links wheels/" coderstanding-0.2.0-py3-none-any.whl` for pipx.)
+
+### Helper at login and tray icon
+
+The viewer is served by a small local helper. To start it at every login:
+
+```bash
+coderstanding helper install     # Linux: systemd user units. Windows: Startup entries (no admin needed)
+coderstanding helper start       # start now; also: stop, restart, status, log, uninstall
+```
+
+Add `--dry-run` to see what it would write. The optional tray icon (green = up, amber = scanning,
+grey = down; start/stop/log menu) needs Qt: `pipx install "coderstanding-0.2.0-py3-none-any.whl[tray]"` or
+`pip install --user PySide6`, then `coderstanding helper install` again. On Windows the log is
+`%LOCALAPPDATA%\coderstanding\helper.log`; on Linux use `journalctl --user -u coderstanding-helper`.
+
+### AI tools (Claude Code)
+
+```bash
+coderstanding skill install      # copies the skill to ~/.claude/skills/coderstanding (asks before replacing)
+coderstanding hook               # prints the hooks JSON: merge it into ~/.claude/settings.json
+```
+
+The hook only adds a short hint when a session works inside a registered repo; it never blocks.
+
+### From source (development)
 
 ```bash
 git clone <this repo> coderstanding && cd coderstanding
 python3 -m venv .venv && .venv/bin/pip install -e ".[dev]"   # Fedora needs python3-devel
-ln -sfn "$PWD/bin/coderstanding" ~/.local/bin/coderstanding   # puts it on PATH
-mkdir -p ~/.claude/skills && ln -sfn "$PWD/docs/skill" ~/.claude/skills/coderstanding  # Claude skill
+bin/coderstanding scan <path>        # runs from the checkout without installing
+scripts/build-release.sh             # wheel + sdist into dist/, then a fresh-venv smoke test
 ```
 
 ## Use
@@ -67,7 +120,7 @@ The viewer can also be served as static files from your own server, behind your 
 (for example oauth2-proxy in front of a small web server holding `viewer/` plus a `hosted.json`
 copied from `deploy/hosted.json`). It holds no maps and runs no Coderstanding code: on each PC the
 page talks to the local helper (`coderstanding serve`, started at login by
-`scripts/install-helper.sh`), so every map stays on that PC. Without the helper it shows how to
+`coderstanding helper install`), so every map stays on that PC. Without the helper it shows how to
 start it. Tell the helper which page may use it, per run or once in your config:
 
 ```bash
@@ -77,6 +130,28 @@ echo '{"origin": "https://code.your-server.example"}' > ~/.config/coderstanding/
 
 The helper binds 127.0.0.1 only, answers cross-origin requests from that one origin, and
 refuses writes from any other site.
+
+## Privacy: works fully offline
+
+Coderstanding makes no outside network calls, so it is safe to point at company code.
+
+- **Guaranteed**: scans, maps, notes and tours stay on your PC. The only network traffic is
+  between your browser and the local server on `127.0.0.1`.
+- **How it is enforced**: every entry point (CLI, `serve`, background scans, tray, AI hook) turns
+  on a Python audit hook that refuses any connection, send or name lookup that is not loopback,
+  with an error naming the destination. The server listens on 127.0.0.1 only and has no option
+  to listen on a network address. Every page it serves carries a strict Content-Security-Policy,
+  so the browser itself refuses any request to another site. `git` runs only local commands with
+  its network transports turned off. Tests check all of this, plus a scan of the source for
+  network APIs and a browser run that records every request the page makes.
+- **Check a machine**: `coderstanding privacy` prints the guard state, bind address, allowed
+  origin and voice policy. The tests: `pytest tests/test_offline.py` and `node tests/e2e/run.mjs`.
+- **What to avoid**: the hosted page (above) is the one deliberate exception. Leave
+  `~/.config/coderstanding/hosted.json` absent on a work machine (the default), and no other
+  site can call the helper. Tour narration uses only on-device voices (`localService`): online
+  voices, such as Chrome's "Google …" voices or Edge's "Microsoft … Online (Natural)" voices,
+  would send the text to their vendor and are never used. Without a local voice, tours play
+  silently on their timeline. On Windows, the built-in voices are local.
 
 ## More
 

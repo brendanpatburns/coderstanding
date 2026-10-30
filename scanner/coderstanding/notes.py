@@ -1,21 +1,26 @@
 """Notes store for `.coderstanding/notes.jsonl` (docs/DESIGN.md 10).
 
-One JSON object per line, sorted by key, each with its author `by` (a real name: `you` from
-the viewer, `claude` for AI writes) and `ai: true` on AI drafts. A key can have one line per
+One JSON object per line, sorted by key, each with its author `by` (a real name: the human's
+`human_author()`, e.g. their git user.name (old lines: `you`), `claude` for AI writes) and `ai: true` on AI drafts. A key can have one line per
 author: `{"key":"node:X","level":3,"by":"claude","ai":true}` and
 `{"key":"node:X","hint":"..","by":"you"}`. Reading merges them field by field and human values
 win. An AI write never sets a field a human already set; a human write replaces the AI drafts
-of that field. Old lines without `ai` count as AI when `by` is `claude`.
+and other people's value of that field (the newest human edit is the value). Old lines without `ai` count as AI when `by` is `claude`.
 """
 
+import getpass
 import json
+import os
+import subprocess
 from pathlib import Path
 
 from .checks import DOMAIN_PREFIX, WARNING_KINDS
 from .model import function_names
+from .offline import GIT_OFFLINE, GIT_OFFLINE_ENV
 
 AI_AUTHOR = "claude"  # author of AI writes (`coderstanding set` without --by)
-HUMAN_AUTHOR = "you"  # author of viewer writes (later: the git user.name)
+HUMAN_AUTHOR = "you"  # old viewer writes; new ones use human_author() (a real name)
+USER_ENV = "CODERSTANDING_USER"  # overrides the human's name (tests, shared machines)
 FIELDS = {"hint": str, "description": str, "level": int, "domain": str,
           "bindings": list, "singleton": bool, "status": str, "tags": list, "rules": str,
           "review": str,
@@ -83,6 +88,26 @@ def clean_value(name, value):
     return None if value in ("", []) else value  # ignore_warnings: a list, [] clears
 
 
+def human_author(repo=None):
+    """Who the human here is, by a real name so co-workers tell each other apart (DESIGN 7d):
+    $CODERSTANDING_USER, else the repo's `git config user.name`, else the OS user. The one
+    place that answers it (notes, tours and comments written from the viewer)."""
+    name = os.environ.get(USER_ENV, "").strip()
+    if not name and repo:
+        try:
+            name = subprocess.run(["git", *GIT_OFFLINE, "-C", str(repo), "config", "user.name"],
+                                  capture_output=True, text=True, timeout=5,
+                                  env={**os.environ, **GIT_OFFLINE_ENV}).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            name = ""
+    if not name:
+        try:
+            name = getpass.getuser()
+        except (OSError, KeyError):
+            name = ""
+    return name or HUMAN_AUTHOR
+
+
 class Notes:
     def __init__(self):
         self.entries = {}  # (key, by) -> {field: value}
@@ -144,10 +169,10 @@ class Notes:
             self.put(key, by, ai, {name: value})
             if name in FINGERPRINTED and value is not None:
                 self.stamp(key, by, [name], graph)
-            if not ai:
+            if not ai:  # a human value replaces the AI drafts and other people's older value
                 for other in self.authors(key):
-                    if self.is_ai(key, other):
-                        self.put(key, other, True, {name: None})
+                    if other != by:
+                        self.put(key, other, self.is_ai(key, other), {name: None})
         return skipped
 
     def stamp(self, key, by, names, graph):

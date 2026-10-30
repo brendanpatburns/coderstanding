@@ -1,7 +1,7 @@
 # Coderstanding for Claude and agents
 
-`coderstanding` is on PATH (`~/.local/bin`, see README). The `coderstanding` Claude skill
-(`~/.claude/skills/coderstanding/SKILL.md`, source `docs/skill/SKILL.md`) points here.
+`coderstanding` is on PATH (see README). The `coderstanding` Claude skill
+(`~/.claude/skills/coderstanding/SKILL.md`, installed by `coderstanding skill install`) points here.
 Keep it short; it is meant to be pasted into briefs or loaded by a skill.
 Registered apps: `~/.config/coderstanding/apps.json`.
 
@@ -16,7 +16,26 @@ Registered apps: `~/.config/coderstanding/apps.json`.
 - Level 1 also holds hubs (classes with too many connections, `[hub 80]` = 80 neighbours); the
   `graph` header lists them. `coderstanding settings <app> [hub_threshold=N|auto|off]` shows or
   changes the threshold (rescans next command); also `add ... --hub-threshold`, `scan ... --hub-threshold`.
-- To find the plan for a feature, `coderstanding specs <app> <query>`; then `spec <app> <id>`.
+- Specs (the plan as nested epics, `specs/<id>.md` in the app's data folder) and memos (the
+  viewer's "Notes": comments and information, `memos/<id>.md`; not the per-class notes of `set`)
+  share one set of commands: `coderstanding specs|memos <app>` prints the tree (`id: Title [L2,
+  implemented, p:high, i:low, 3 links, ai] +N finer`; `--level N` folds finer ones, `--zoom id`
+  one item and its children); `specs <app> <words>` searches titles, text and links at any level
+  and prints each hit's path (`A › B › C`); `--stage todo`, `--priority high`, `--importance high`
+  filter and `--sort priority|importance` sorts (high first). `spec|memo <app> <id>` prints one
+  (path, children, links, problems such as unknown links, then the text). `node` and `zoom` end
+  with the `specs:` / `memos:` that link that class or line. Read the spec before working on a
+  feature it covers.
+- Spec stages: idea, todo, in-progress, review, implemented, dropped. Memo stages: todo,
+  in-progress, done, na (N/A, the default: just information). Priority (work: how soon) and
+  importance (how much it matters): high, medium, low.
+- Writing specs and memos: `spec <app> --add "Title" [--parent id] [--links A,B>C,D#f] [--stage s]
+  [--priority p] [--importance p] [--level N] [--text "..."]` (id from the title; `memo` the same);
+  change one with `spec <app> <id> --set stage=implemented links+=C links-=A priority=high
+  text="..."` (or the flags); `--delete` (its children move up to its parent). Your writes are AI
+  drafts the user accepts in the viewer; a field the user filled in is kept (`kept your stage`):
+  tell the user instead. `--by NAME` writes as that person (only when asked). When you finish a
+  feature, move its spec to `review` (or `implemented` when the user said so).
 - To see packages/addons and who uses them, `coderstanding deps <app>`.
 - After changing a class, `coderstanding tests <app> <name>` lists the test files to run
   (`--deep` adds the tests of its direct users). Tests are hidden in graph/zoom/node unless
@@ -42,7 +61,7 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   (`coderstanding serve`, the `coderstanding-helper` user unit). There is no `sync` and nothing
   to push to the server; deploying the hosted page only copies the viewer, when asked.
 - Registry upkeep: `coderstanding rename <old> <new>`; `coderstanding remove <app>` (files stay),
-  `--delete-data` (graph, cache, layout), `--delete-notes` (also notes, specs, tours, settings:
+  `--delete-data` (graph, cache, layout), `--delete-notes` (also notes, specs, memos, tours, settings:
   only when the user asks). The viewer's "Projects…" modal does the same.
 - Before opening a file: `coderstanding outline <app> Net` lists its functions with
   `file:first-last` lines, so you read only that range (`Net#join` = one function).
@@ -67,6 +86,15 @@ Registered apps: `~/.config/coderstanding/apps.json`.
   matter: `key`, `targets`, `code: {at, lines: +a..+b, mark: [+n]}`; one `## Title` section per
   step). After checking a `(changed)` step is still right: `tour <app> <id> --still-true [--step N]`.
   `view <app> --focus A A>B A#f` highlights targets like a step does.
+- Tour comments (`.coderstanding/tours/<id>.comments.jsonl`, committed): the user, or a
+  co-worker through git, leaves comments on a tour, a step or a code line of a step. **Before
+  editing a tour, check its open comments**: `coderstanding tour <app> <id> --comments [--all]`
+  (`[id] step 2 Title path:line author: text`, replies indented; `--all` adds resolved threads);
+  the lean `tour` text shows `(2 open comments)` on a step's title line. Comment with
+  `coderstanding comment <app> tour:<id>[#<step N>] "text" [--line N] [--quote "words"]`
+  (Markdown and `[[links]]` work; you write as `claude`, marked AI). **After acting on a comment,
+  reply or resolve it**: `comment <app> --reply ID "Done: ..."`, `comment <app> --resolve ID`
+  (`--reopen ID` undoes). Comments on a deleted step are listed as lost in `warnings`.
 - Open real files only for the classes and calls the output points at.
 
 ## Reading the slim text
@@ -120,25 +148,12 @@ Registered apps: `~/.config/coderstanding/apps.json`.
 - Calls from a class to itself are internal calls: they show when the class is opened.
 
 ## Hook: nudge Claude Code toward the graph
-`scripts/claude-hook.py` (stdlib, ~40 ms, never blocks or errors) adds context on SessionStart
+The hook (`coderstanding hook-run`, stdlib-light, never blocks or errors) adds context on SessionStart
 (cwd in a registered app) and on PreToolUse for Grep/Glob/Read and Bash `grep|rg|find|cat`
 inside a registered repo or its worktrees: once per session per app, it suggests
-`coderstanding find|outline|impact|brief|graph|node`. Add to `~/.claude/settings.json`
-(merge with existing `hooks`):
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {"hooks": [{"type": "command", "command": "python3 \"/path/to/coderstanding/scripts/claude-hook.py\""}]}
-    ],
-    "PreToolUse": [
-      {"matcher": "Grep|Glob|Read|Bash",
-       "hooks": [{"type": "command", "command": "python3 \"/path/to/coderstanding/scripts/claude-hook.py\""}]}
-    ]
-  }
-}
-```
-State: `$XDG_RUNTIME_DIR/coderstanding-hook-<session_id>.json`.
+`coderstanding find|outline|impact|brief|graph|node`. `coderstanding hook` prints the JSON to merge
+into `~/.claude/settings.json` (it calls the installed `coderstanding`, no repo path).
+State: `$XDG_RUNTIME_DIR/coderstanding-hook-<session_id>.json` (temp folder when unset).
 
 ## Line for agent briefs
 "This repo is registered in Coderstanding: start with `coderstanding graph <app> 1`, then

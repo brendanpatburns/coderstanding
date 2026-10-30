@@ -76,6 +76,12 @@ def out_line(view, names):
     return ["out: " + ", ".join(faded)] if faded else []
 
 
+def near_line(view, names):
+    """`near:` the faded classes of a focus (one connection out), names only."""
+    near = sorted(names[n["id"]] for n in view["nodes"] if n["faded"])
+    return ["near: " + ", ".join(near)] if near else []
+
+
 def alone_line(view, names):
     linked = {i for e in view["edges"] for i in (e["from"], e["to"])}
     alone = [names[n["id"]] for n in view["nodes"] if n["id"] not in linked]
@@ -111,6 +117,8 @@ def edge_lines(view, all_calls=False, short_name=str, descriptions=False, faded=
             lines.append(description_line(edge))
         if descriptions:
             lines += review_line(edge)
+    if view.get("focus"):  # DESIGN 7c: a focus lists the faded classes, not every faded line
+        return lines + (near_line(view, names) if faded else [])
     return lines + (out_line(view, names) if faded else [])
 
 
@@ -594,11 +602,17 @@ def step_audio_text(step):
     return " audio: " + ("voice" if not rec else "rec (stale)" if rec["stale"] else "rec")
 
 
+def open_comments_text(count):
+    """` (2 open comments)` after a step or tour that has open comment threads (DESIGN 7d)."""
+    return f" ({count} open comment{'s' if count != 1 else ''})" if count else ""
+
+
 def step_head(step, label, audio=False):
     lost = f" (lost: {', '.join(step['lost_targets'] or [step['code']['at']])})" \
         if step["lost"] else ""
     return (f"{label} {step['title']} {{{', '.join(step['targets'])}}}"
             + (" (changed)" if step["stale"] else "") + lost
+            + open_comments_text(step.get("comments", 0))
             + (step_audio_text(step) if audio else ""))
 
 
@@ -629,7 +643,8 @@ def format_tour(app, tour, number=None, code=True, marked=False, audio=False):
                           *step_lines(step, f"{number}/{len(steps)}", code, marked, audio)])
     changed = sum(s["stale"] for s in steps)
     lines = [f"{app} tour {tour['id']} {tour['title']} {len(steps)} steps {author_text(tour)}"
-             + (f", {changed} changed" if changed else "")]
+             + (f", {changed} changed" if changed else "")
+             + open_comments_text(tour.get("comments", 0))]
     for n, step in enumerate(steps, 1):
         lines += step_lines(step, f"{n}.", code, marked, audio)
     return "\n".join(lines)
@@ -657,13 +672,117 @@ def tour_markdown(app, tour):
     return "\n".join(out) + "\n"
 
 
-def tour_warning_lines(stale, lost):
-    """`stale tour steps: scan-pipeline 4, 6` / `lost tour steps: ...` for `warnings`."""
+def comment_where(comment, step_labels):
+    """`step 2 Hits m.py:15` / `tour` / `lost step k9`: where a thread's first comment sits."""
+    part = comment["target"].partition("#")[2]
+    where = "tour" if not part else step_labels.get(part) or f"lost step {part}"
+    if comment["anchor"]:
+        where += f" {comment['path']}:{comment['line']}" if comment["line"] else \
+            f" line in {comment['anchor']['at']} (code gone)"
+    if comment["quote"]:
+        where += f' "{comment["quote"]}"'
+    return where
+
+
+def format_comments(app, tour, comments, show_resolved=False):
+    """`tour <app> <id> --comments [--all]` (DESIGN 7d): one line per comment, replies indented,
+    each with its id for `comment --reply/--resolve`; a thread's first line says where it is.
+    Resolved threads are counted in the header and listed only with show_resolved."""
+    labels = {s["key"]: f"step {n} {s['title']}" for n, s in enumerate(tour["steps"], 1)}
+    threads = {c["thread"] for c in comments}
+    resolved = len({c["thread"] for c in comments if c["resolved"]})
+    lines = [f"{app} tour {tour['id']} comments: {len(threads) - resolved} open"
+             + (f", {resolved} resolved" if resolved else "")
+             + (" (--all lists them)" if resolved and not show_resolved else "")]
+    for c in comments if show_resolved else [c for c in comments if not c["resolved"]]:
+        author = c["by"] + (" (ai)" if c["ai"] else "")
+        text = "(deleted)" if c["deleted"] else c["text"]
+        if c["parent"]:
+            head = f"  [{c['id']}] {author}:"
+        else:
+            state = f" (resolved by {c['resolved']['by']})" if c["resolved"] else ""
+            head = f"[{c['id']}] {comment_where(c, labels)}{state} {author}:"
+        indent = "      " if c["parent"] else "    "
+        lines.append(f"{head} {text}".replace("\n", "\n" + indent))
+    return "\n".join(lines)
+
+
+def tour_warning_lines(stale, lost, lost_comments=None):
+    """`stale tour steps: scan-pipeline 4, 6` / `lost tour steps: ...` / `lost tour comments:
+    tour:walk#k9 2` (comments on a deleted step) for `warnings`."""
     def grouped(items):
         tours = {}
         for tour_id, number in items:
             tours.setdefault(tour_id, []).append(str(number))
         return "; ".join(f"{t} {', '.join(ns)}" for t, ns in tours.items())
     return ([f"stale tour steps (code changed since written): {grouped(stale)}"] if stale else []) + \
-        ([f"lost tour steps: {grouped(lost)}"] if lost else [])
+        ([f"lost tour steps: {grouped(lost)}"] if lost else []) + \
+        ([f"lost tour comments: {'; '.join(f'{t} {n}' for t, n in lost_comments.items())}"]
+         if lost_comments else [])
 
+
+
+# --- cards (DESIGN 7, 7d): specs and memos; the tree, hits with their paths, one card ---
+
+def card_facts(card, with_author=False):
+    """`L2 implemented, p:high, i:low, 3 links, ai` (the bracket after a card's title)."""
+    facts = [f"L{card['level']}", card["stage"],
+             f"p:{card['priority']}" if card["priority"] else "",
+             f"i:{card['importance']}" if card["importance"] else "",
+             f"{len(card['links'])} links" if card["links"] else "",
+             ("ai" if not with_author else f"ai: {', '.join(card['ai_fields'])}") if card["ai"] else "",
+             f"{len(card['problems'])} problems" if card["problems"] and not with_author else ""]
+    if with_author:
+        facts.insert(0, f"by {card['by']}")
+    return ", ".join(f for f in facts if f)
+
+
+def hit_facts(hit):
+    return ", ".join(f for f in (hit["stage"], hit["priority"] and f"p:{hit['priority']}",
+                                 hit["importance"] and f"i:{hit['importance']}") if f)
+
+
+def card_tree_lines(data, boxes, depth=0):
+    lines = []
+    for box in boxes:
+        card = data["items"][box["id"]]
+        finer = f" +{box['finer']} finer" if box["finer"] else ""
+        lines.append(f"{'  ' * depth}{card['id']}: {card['title']} [{card_facts(card)}]{finer}")
+        lines += card_tree_lines(data, box["children"], depth + 1)
+    return lines
+
+
+def format_cards(app, data):
+    """`coderstanding specs|memos <app> [query]`: the tree (or the hits with their paths), problems."""
+    items, folder = data["items"], data["folder"]
+    if data["hits"] is not None:
+        lines = [f"{h['id']}: {h['path']} [{hit_facts(h)}]" for h in data["hits"]]
+        lines = lines or [f"{app}: no {data['kind']} matches"]
+    else:
+        lines = [f"{app} {folder}: {len(items)}, levels 1-{data['max_level']}"] if items else \
+            [f"{app}: no {folder} yet"]
+        lines += card_tree_lines(data, data["tree"])
+    lines += [f"problem: {p['id']}: {p['problem']}" for p in data["problems"]]
+    return "\n".join(lines)
+
+
+def format_card(app, card):
+    """`coderstanding spec|memo <app> <id>`: head, path, children, links, problems, then the text."""
+    lines = [f"{app} {card['kind']} {card['id']}: {card['title']} [{card_facts(card, with_author=True)}]",
+             "path: " + " › ".join(p["title"] for p in card["path"])]
+    if card["children"]:
+        lines.append(f"children: {', '.join(card['children'])}")
+    if card["links"]:
+        lines.append(f"links: {', '.join(card['links'])}")
+    lines += [f"problem: {p}" for p in card["problems"]]
+    if card["text"]:
+        lines += ["", card["text"]]
+    return "\n".join(lines)
+
+
+def linked_lines(hits):
+    """`specs: effects [implemented], ...` / `memos: ...` for a class or line (`node`)."""
+    by_kind = {}
+    for hit in hits:
+        by_kind.setdefault(hit["kind"], []).append(f"{hit['id']} [{hit_facts(hit)}]")
+    return [f"{kind}s: {', '.join(rows)}" for kind, rows in by_kind.items()]

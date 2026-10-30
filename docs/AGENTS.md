@@ -11,6 +11,9 @@
 - Work on your own branch; do not merge to main or push.
 - Be token-efficient: grep, read line ranges, terse report.
 - Product UI text says AI, not Claude; stored data keeps the real author name.
+- Offline only (DESIGN 18): never add a call to another machine (no web APIs, CDNs, online
+  voices, telemetry). `tests/test_offline.py` scans for network APIs; a new loopback-only use goes
+  in its allowlist with a reason. New entry points call `offline.install()` first.
 
 ## How to write a language module
 

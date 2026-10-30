@@ -1,8 +1,4 @@
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-import helper_status as hs  # noqa: E402
+from coderstanding import helper_status as hs
 
 
 def listing(*apps):

@@ -382,11 +382,43 @@ folder tree.
   the classes on each side.
 - Text: `coderstanding graph mygame 0` prints domain-to-domain lines.
 
-## 7. Specs
+## 7. Specs (built 2026-10-30, with full add/edit in the viewer)
 
 Specs are the plan for the app, organized like epics: top-level specs hold sub-specs, which
 hold their own, as deep as needed. They live in a collapsible **sidebar** in the viewer,
 drawn as nested boxes, not as a graph.
+
+**Built (2026-10-30)**: `specs.py` on `items.py` (since round 2: `cards.py`, see 7a, which also
+holds notes as memos, stages, priorities and two-way links), CLI `specs` / `spec`, the API below,
+and the sidebar (`viewer/spec_view.js`). The user asked to add and edit specs in the viewer too, so the
+sidebar is a full editor. Decisions from the build:
+- **Folder**: `<data>/specs/<id>.md`, the same rule as tours (the app's data folder; that is the
+  repo's `.coderstanding/` unless the app keeps its data elsewhere, e.g. `--data`).
+- **File** (round 2 names, 7a): `id, title, parent?, level?, stage?, priority?, importance?,
+  order?, links, by, ai?`, body = text (older files with `status` / `classes` still read). `level`
+  is stored only when set (default parent + 1); `order` sorts siblings (unset: after the ordered
+  ones, by title). Links are CLI targets; the viewer's ids are
+  stored as the short name when that is unique.
+- **Authors, per field** (notes model): `by` = the spec's author, `ai` = the fields still AI drafts
+  (`ai: true` = all; a file with `by: claude` and no `ai` counts as all AI). A human edit makes the
+  changed fields the human's (fields sent back unchanged keep their author); Accept makes all
+  (or the named) AI fields the human's. An AI write never changes a field a human filled in; the
+  CLI says `kept your <field>`.
+- **Ids** come from the title once (`slug`, `-2` when taken) and never change on rename.
+- **Checks**: a write is refused for a missing parent, a parent cycle, or a set level shallower
+  than the parent's + 1. Hand-edited files that break a rule still show (a lost parent or cycle
+  at the top; a too-shallow level shows one finer than its parent) and are listed as problems,
+  as are unknown classes and unreadable files (never dropped or overwritten). `warnings` prints
+  them as `spec problem:` lines.
+- **Move**: a spec moved under a parent its set level no longer fits drops the set level
+  (follows the new parent). Re-parenting and reordering use `parent` + `position` on PUT.
+- **Delete moves the children up** to the deleted spec's parent, at its place (not refused): the
+  delete confirm says so.
+- **Folding is computed by the server** (`Specs.tree`): top specs always show; with a level,
+  finer specs fold into their nearest shown parent (`finer` count, `folded_classes`, and `focus`
+  = own + folded classes as view ids). Zoom shows the spec and its direct children (one tree
+  level more, so a child that skips levels still shows), with breadcrumbs.
+- **API and viewer**: see 7a (one router and one sidebar for specs and notes).
 
 - **Levels like the graph**: every spec has a level, 1 = a broad area ("Rendering"), up to
   the finest ("Player has a turret"). Default is parent + 1; you can set it deeper to skip
@@ -421,11 +453,73 @@ drawn as nested boxes, not as a graph.
   ```
 
   Plain files mean you, Claude, and the viewer can all edit them; the viewer writes the same
-  format through `PUT /specs/<id>`.
+  format through `PUT /api/specs/<id>`.
 - **Spec store**: one Python module reads, writes, searches, and validates specs (unknown
   class names show as warnings, like lost notes). Server and CLI both use it. Build it on the
   shared Markdown item store (`items.py`, built with tours, 7c).
 - Spec files are tiny on purpose, so Claude can find one by search and read only that.
+
+## 7a. Notes (memos), stages, priorities, two-way links (built 2026-10-30, round 2)
+
+User asks (2026-10-30): "specs can be in stages from todo to implemented, a priority for both
+work todo and functionality importance"; "Notes in a tab next to specs that reuse the same code
+... for comments and such ... todo and done states, but also just an N/A kind of setting"; "Specs
+and notes should be bidirectionally linked to nodes and connections".
+
+- **One store for both kinds** (`cards.py`, "cards"): a `Kind` declares only its folder, stage
+  list and default stage; everything else (nesting, levels, folding, search, links, priorities,
+  AI drafts, checks, JSON) is shared. Kinds: `spec` in `<data>/specs/`, and `memo` in
+  `<data>/memos/`, which the viewer calls **Notes**. **Naming**: in code, storage, CLI and API
+  "notes" keeps meaning the per-class note fields (`notes.py`, `notes.jsonl`: hint, description,
+  rules ...); the Notes tab's items are **memos** everywhere except the UI text.
+- **Target keys** (links, wiki links, the coming comments store): `spec:<id>`, `memo:<id>`.
+  Comment threads are not built here; memos are standalone items.
+- **Stages** replace the status. Spec: `idea → todo → in-progress → review → implemented`, plus
+  `dropped`; default `idea`. Memo: `todo → in-progress → done`, plus `na` (shown "N/A"), the
+  default for a note that is just information. Older files map on read (`planned` -> todo,
+  `doing` -> in-progress, `done` -> implemented; `status` key -> `stage`, `classes` -> `links`); a
+  file is rewritten in the new names only when it is next saved. An unset stage is the default
+  (and still free for an AI write).
+- **Two priorities, one scale**: `priority` (work priority: how soon) and `importance` (how much
+  the functionality matters), each `high | medium | low` or unset. Words, not P0-P3: the same
+  three words read right for both meanings ("importance: high"), sort without a legend, and three
+  steps leave nothing to argue about. Sorting puts high first, unset last, then tree order.
+- **Links**: `links` holds classes, connections (`A>B`) and functions (`A#f`) in CLI target syntax,
+  resolved with the shared `parse_target` (`items.resolve_target`). Links live only on the card;
+  `cards.link_index` computes the reverse index (view id `A` or `A→B` -> linking cards of both
+  kinds; a function link counts for its class), the one function behind the view badges, the
+  details panel (`/api/linked`) and the CLI (`node` and `zoom` end with `specs:` / `memos:` lines).
+  Badges count direct links on shown classes and lines (a line hidden inside a derived line is
+  not counted on it).
+- **CLI**: `specs|memos <app> [words] [--level N] [--zoom id] [--stage s] [--priority p]
+  [--importance p] [--sort tree|priority|importance]` (a filter or sort prints hits with paths);
+  `spec|memo <app> <id>`; writes `--add "Title" [--parent] [--links A,B>C,D#f] [--stage]
+  [--priority] [--importance] [--level] [--text]`, `--set stage= priority= importance= links+=
+  links-= ...` (old `status=`/`classes=` still accepted), `--delete`, `--accept`, `--by`.
+  `warnings` lists `spec problem:` / `memo problem:` lines.
+- **API** (one router, the kind's folder as the path): `GET /api/specs|memos?app=[&level=N]
+  [&zoom=id][&q=words][&stage=s][&priority=p][&importance=p][&sort=...]` -> `{kind, folder, items:
+  {id: card}, tree: [{id, finer, folded, folded_links, focus, children}], roots, crumbs: [{id,
+  title}], hits: [{kind, id, title, path: "A › B › C", stage, stage_label, priority, importance}] |
+  null, max_level, stages, default_stage, stage_labels, priorities, problems: [{id, problem}]}`;
+  a card is `{kind, key, id, title, parent, level, level_set, stage, stage_set, priority,
+  importance, links, text, order, by, ai, ai_fields, path, children, unknown_links, focus,
+  problems}`. `GET .../<id>`; `POST /api/specs|memos` (new, id from the title); `PUT .../<id>`
+  (create or update: some of `{title, stage, priority, importance, level, parent, links, text}`
+  plus `position`); `DELETE .../<id>` -> `{deleted, moved}`; `POST .../<id>/accept` `{fields?}`.
+  `GET /api/linked?at=<class id | A→B>` -> `{at, items: [hit]}`; `GET /api/view?...&badges=1` adds
+  `cards` (count) to every node and edge. `GET /api/find?q=` = the class picker. Writes have the
+  same guards as every write.
+- **Viewer**: one sidebar component (`spec_view.js`) with tabs [Specs | Notes]; per tab its own
+  level, zoom, search, filters, sort and selection. Each box has a quick stage picker (a
+  chip-sized select) and `work:` / `imp:` chips; filters (stage, work priority, importance) and
+  sort (tree, work priority, importance) show the matching items as a list with paths. The
+  selected item's card has the priority selects, Edit form (title, level, text), links (+ Link
+  selection takes a class, a line or a function row; a class picker; × unlinks), + Sub-item,
+  moves, delete confirm and Accept. Selecting an item focuses its links (lines light up). The
+  details panel of a class **or a line** lists its specs and notes ("Specs & notes", kind, path,
+  stage and priorities; click opens it on its tab). Classes and lines show `§N` badges (Show menu
+  "Specs & notes", on by default). URL: `?specs=1` / `?notes=1`, `&spec=<id>` / `&note=<id>`.
 
 ## 7b. Sequence diagrams and wiki links (planned)
 
@@ -536,7 +630,9 @@ anchors, stale, authors, audio files), `compute_view(focus=...)`, CLI `tours` / 
   expand=classes of #function targets)` with the step's connection/function as the
   selection. Today's `spec_classes` widens to `focus` (classes, `A>B`, `A#f`), so hidden
   targets light up their stand-ins or derived lines exactly as specs do. The viewer computes
-  nothing itself.
+  nothing itself. Classes one connection from a target show faded, as in zoom (6); a `#function` target unfades the classes it calls or is called by; text lists the faded on a `near:` line.
+- **Comments** (7d): threads on a tour, a step or a code line of a step, for the user to tell the
+  AI what to change, or co-workers to talk; `tour --comments`, `comment`, a panel in the viewer.
 - **Authors**: `by` / `ai` per tour and per step, the notes model (10): an AI step is an
   "AI draft" chip with **Accept** until a human accepts or edits it; the UI says AI, the file
   keeps the real name.
@@ -595,15 +691,28 @@ step text, without needing any audio file: the seek bar counts words (user, 2026
   (`speechSynthesis`) reading today's text, else (no voice installed) a silent timer. Same
   rule as notes: a human value beats the default. Source chip per step: "Your recording ·
   <name>" or "Read aloud · seek by words", plus "Changed text: recording out of date".
-- **Seek by words** (browser voice): the slider is a word count of the spoken text (title +
-  text, links read as names). Length = words × a typical pace (0.4 s at 1×), shown as `~0:16`.
-  The voice's `boundary` events move the slider to the word being spoken; seeking cancels the
-  voice and speaks again from the word under the slider. Steps never go stale for audio,
+- **Chunk-synced voice** (browser voice; replaced plain seek-by-words 2026-10-30): engines
+  send no word `boundary` events (Firefox and Chromium with speech-dispatcher, measured), and a
+  fixed 0.4 s/word clock drifted up to 7 words from the voice. So the spoken text (title + text,
+  links read as names) is split into chunks at sentence ends (from 12 characters) and at
+  `, ; :` (from 40 characters), a short tail joining the chunk before; one utterance per chunk,
+  all queued at once (`chunksOf`, `tours.js`). Each chunk's `start` puts the highlight on its
+  first word and `end` on its last; in between it moves by characters (speech time follows
+  syllables) at the voice's learned pace: seconds per character at 1x, a moving average of the
+  finished chunks per voice name in localStorage (default 0.07). Where an engine does send
+  `boundary` events they place it exactly and the clock does not guess. The slider is that
+  character timeline: length = characters × pace, shown as `~0:16`. Seeking cancels and speaks
+  from the chunk holding the word under the slider, trimmed to start at that word. Queued
+  chunks cost a pause per chunk boundary (measured: ~190 ms Chromium + espeak-ng, ~530 ms
+  Firefox + its speech-dispatcher voice), hence the minimum lengths. Drift measured on the
+  fixture tour (highlight vs the voice's chunk events): Firefox 7 words before, 2 after (1st
+  run, pace not yet learned); Chromium 3 before, 1 after. Steps never go stale for audio,
   since the voice always reads the current text. Speed applies to both.
 - **Follow-along highlight**: the step text is rendered as word spans that know which spoken
   words they cover (a link like `[[cli#run_scan]]` is one span that speaks as three words);
-  the word at the slider's count is highlighted and earlier words dim. Same index for the
-  voice, the timer and recordings (for a recording it follows time, so it is approximate).
+  the word at the slider's character position is highlighted and earlier words dim. Same
+  index for the voice, the timer and recordings (for a recording it follows time by
+  characters, so it is approximate).
 - **Recording** (optional): Edit tour has Record / Stop / Re-record / Delete recording per
   step. `MediaRecorder` with `audio/webm;codecs=opus` (fallback `audio/ogg;codecs=opus`),
   mono, 32 kbps, echo cancellation and noise suppression on; uploaded unchanged with
@@ -618,12 +727,59 @@ step text, without needing any audio file: the seek bar counts words (user, 2026
   = `fingerprints.digest` of the spoken text when recorded. The tour store owns the files
   (read, write, delete, list orphans with the lost notes).
   Opus at 32 kbps is about 4 kB per second; `tour_audio: ignore` keeps recordings out of git.
-- **Voices**: whatever the browser has (Linux Firefox/Chromium need speech-dispatcher with a
+- **Voices**: on-device only (`localService`, section 18); otherwise whatever the browser has (Linux Firefox/Chromium need speech-dispatcher with a
   voice, e.g. espeak-ng; Chromium loads voices late). A voice picker per browser. No server-side
   TTS: generated audio files (Piper) were dropped in favour of word-count seeking (2026-10-30).
 - **Hosted page**: works like the local page (every call goes to the local helper, `apiBase`).
 - **Exports**: `--md` and "Save as Markdown" leave audio out; the lean `tour` text prints
   `audio: rec (stale)` on a step's title line only when asked (`--audio`).
+
+## 7d. Comments (built 2026-10-30)
+
+Comments on tours (first), later on specs and classes: the user shows the AI what to change on a
+tour it made, or talks to a co-worker about one. Everything stays local; co-workers share through
+git, so comments live next to the item and are committed with it. One store for every kind
+(`comments.py`); a kind plugs in with `add_kind(prefix, folder, owner)` (the owner says whether a
+target exists and which class/function a line comment anchors on). Tours do this in `tours.py`.
+
+- **Targets**: `tour:<id>` (the whole tour) or `tour:<id>#<step key>`; the CLI also takes
+  `#<step number>`. A comment can be narrowed to a code line: stored as `anchor: {at, off}`, an
+  offset inside the step's code anchor, so it follows edits above it like tour code; gone
+  anchor = "Line gone". Or to quoted words of the text (`quote`).
+- **A comment**: `id` (8 hex), `target`, `by` (a real name), `ai` (only when true), `created`,
+  `changed` (every write), `edited` (text edits), `text` (Markdown, `[[links]]`), `parent`
+  (replies join the parent's thread and target), `resolved: {by, at}` on a thread's first
+  comment, `deleted` (the line stays, text gone; shown as "Deleted comment" while it has replies).
+- **Storage**: `<data>/tours/<id>.comments.jsonl`, one comment per line (sorted keys), sorted by
+  thread (its first comment's target, time, id), then time; times in UTC milliseconds. The folder
+  gets a `.gitattributes` with `*.comments.jsonl merge=union`, so two people's new lines merge
+  without conflicts; a comment changed on both sides then appears twice and reading keeps the
+  copy with the newest `changed`. The next write cleans the file up.
+- **Lost**: comments whose step (or tour) is gone are listed as lost (a "Lost step" chip in the
+  viewer, `lost tour comments: tour:walk#k9 2` in `warnings`), never dropped.
+- **Authors**: humans write under `notes.human_author()` = `$CODERSTANDING_USER`, else the repo's
+  `git config user.name`, else the OS user (never "you"); the same name for notes and tour
+  writes from the viewer. The AI writes as `claude` with `ai: true`; the UI says "AI".
+  Anyone can resolve or reopen; only the author edits or deletes.
+- **CLI**: `tour <app> <id> --comments [--all]` (header `N open, M resolved`, then
+  `[id] step 2 Title path:line author: text`, replies indented); the lean `tour` text adds
+  `(2 open comments)` to a step's title line and the header. `comment <app> <target> "<text>"
+  [--line N] [--quote ..]`, `comment <app> --reply ID "<text>"`, `--resolve ID`, `--reopen ID`
+  (`--by NAME` writes as a human).
+- **API**: `GET /api/comments?target=<prefix>` (`tour:walk` = the tour and its steps) ->
+  `{me, comments: [{id, target, by, ai, created, edited, text, parent, thread, anchor, path,
+  line, line_lost, quote, resolved, deleted, lost}]}`; `POST /api/comments` `{target, text,
+  line?, quote?}` or `{parent, text}`; `PATCH /api/comments/<id>` `{text}` (own) or
+  `{resolved: bool}`; `DELETE /api/comments/<id>` (own). Writes answer `{me, comment,
+  comments}` (the item's comments); same write guards as every write (origin, JSON body);
+  someone else's comment = 403. Tour JSON carries `comments` (open threads) on the tour, each
+  step and each tours-list row.
+- **Viewer** (`viewer/comments.js`, mounted by `tour_view.js` with a box in the step panel and one
+  call after each render): the step's threads, "All on this tour (N open)" with Step links, a
+  box to comment (Ctrl+Enter sends), Reply, Resolve (folded into a "Resolved by" summary) /
+  Reopen, Edit / Delete on your own; a hover "+" in the code gutter starts a line comment, lines
+  with open comments get a mark; open counts on the progress dots, the step list, the tour head
+  and the tours list.
 
 ## 8. Tech stack and external dependencies
 
@@ -724,8 +880,8 @@ viewer marks singletons with a badge.
 ### notes.jsonl (yours)
 
 One item per line, sorted by key, so two branches that touch different items merge without
-conflicts. Each line is a small JSON object; `by` records who set it (a name: `you`, `claude`)
-and `ai: true` marks an AI draft:
+conflicts. Each line is a small JSON object; `by` records who set it (a name: the human's git
+user.name via `notes.human_author()` (7d; older lines say `you`), `claude`) and `ai: true` marks an AI draft:
 
 ```
 {"key":"edge:GameEngine→VFX","hint":"drives rendering, which triggers effects","description":"Each frame GameEngine asks the Viewport to render...","by":"you"}
@@ -738,7 +894,8 @@ and `ai: true` marks an AI draft:
 ```
 
 A key can have one line per author (an AI draft level plus your hint); fields merge on
-read and a human value wins per field (`you` first among humans).
+read and a human value wins per field (`you` first among humans). A human write clears that
+field from every other author's line, so the newest human edit is the value.
 
 **Stale marks.** A text value (hint, description, review, rules) is only as good as the code it
 was written for. When written, the line also stores `"fp":{"hint":"<hash>"}`: a short hash of
@@ -1178,7 +1335,7 @@ was left in place for the user to clear.
   network prompt, and how to install it once (`scripts/install-helper.sh`).
 - **Deploy** = the lab's deploy script: rsync `viewer/` + `deploy/hosted.json` to `web/`,
   `docker compose up`, one health check of `/hosted.json`. Quick, no data step.
-- **Security** (local server, unchanged): binds 127.0.0.1 only. CORS for exactly one origin,
+- **Security** (local server, unchanged; offline guarantee in 18): binds 127.0.0.1 only. CORS for exactly one origin,
   read from `~/.config/coderstanding/hosted.json` (`{"origin": "https://code.your-server.example"}`;
   `--allow-origin` / `CODERSTANDING_ALLOW_ORIGIN` override it), now
   on reads too since the page reads everything from the helper; preflights answer
@@ -1282,3 +1439,47 @@ Replaced by v3: reads and writes all go to the helper, nothing is pushed.
 ## 17. Open questions
 
 - Otherwise none blocking. Revisit after the first scan of the test game.
+
+## 18. Offline guarantee (built 2026-10-30)
+
+The user runs it at work on company code: it must make **zero** outside calls (user,
+2026-10-30). Rules, each enforced by a test (`tests/test_offline.py`, e2e):
+
+- **Runtime guard** (`offline.py`): `install()` adds a `sys.addaudithook` hook (cannot be
+  removed) that raises `OfflineError` naming the destination for every `socket.connect` /
+  `connect_ex` / `sendto` / `sendmsg` / `bind` and every name lookup (`getaddrinfo`,
+  `gethostbyname[_ex]`, `gethostbyaddr`, `getnameinfo`) that is not loopback. Allowlist:
+  127.0.0.0/8, ::1 (also IPv4-mapped), the names `localhost` / `localhost.localdomain` /
+  `ip6-localhost` / `ip6-loopback`, AF_UNIX paths, and lookups for no host. The hook sits in the
+  C socket module, so `_socket` and Windows (`localhost` = ::1) are covered; nothing in it is
+  POSIX-only. Installed by `cli.main` (CLI, `serve`, the `rescan` child), the scan process pool's
+  initializer, the tray and the Claude hook.
+- **git** (`filewalk.git_files`): only `ls-files`, run with `-c protocol.allow=never -c
+  core.fsmonitor=false` and `GIT_NO_LAZY_FETCH=1` (`offline.GIT_OFFLINE`), so no transport and no
+  partial-clone lazy fetch can run. No network subcommands anywhere (static test).
+- **Server**: `make_server` refuses any non-loopback host; there is no CLI option for one (the
+  hosted shell on the lab is a separate static server). Every response carries
+  `Content-Security-Policy: default-src 'self'; connect-src 'self'; img-src 'self' data: blob:;
+  media-src 'self' blob:; style-src 'self' <hash>; script-src 'self'; object-src 'none';
+  frame-ancestors 'none'; form-action 'self'; base-uri 'none'`, `Referrer-Policy: no-referrer`,
+  `X-Content-Type-Options: nosniff`. The one inline style is Cytoscape's injected container rule,
+  allowed by its sha256 (a test recomputes it from the vendored file).
+- **Speech**: only voices with `localService === true` (`tours.js` `localVoices`, used by the
+  picker, the default choice and the player's "voice ready" check). Chrome's "Google …" and
+  Edge's "Microsoft … Online (Natural)" voices send the text away and are never used; no local
+  voice = the silent timeline with the usual note.
+- **Hosted page**: the deliberate exception. With no `~/.config/coderstanding/hosted.json` (and
+  no `--allow-origin` / env) there is no cross-origin access at all: the **work setting**.
+- **Tray**: polls `127.0.0.1:8517` through a no-proxy opener (an `HTTP_PROXY` at work never sees
+  it); its "Open hosted page" entry appears only when an origin is configured.
+- **Check**: `coderstanding privacy [--port N]` prints guard, bind address, helper running,
+  allowed origin (none / which, and where it came from), voice and git policy, and a verdict.
+  No systemd or `/proc` checks, so it runs on Windows too.
+- **Tests**: unit (loopback rule), runtime in a fresh interpreter (1.1.1.1:443, example.com,
+  UDP, bind 0.0.0.0, urlopen and `_socket` refused; 127.0.0.1 and `localhost` work), real CLI
+  reports the guard on, a static scan of `scanner/`, `scripts/`, `viewer/` (not vendor) for
+  network APIs and off-site URLs against a short commented allowlist, the CSP on every route,
+  and e2e: every request over the whole run (CDP `Network.requestWillBeSent`) goes to
+  127.0.0.1 / `data:` / `blob:`, and the page has the CSP.
+- **Imports**: tree-sitter and the grammar packages load compiled grammars from the installed
+  wheels; importing and parsing under the guard makes no socket call at all (tested).

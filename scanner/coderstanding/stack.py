@@ -10,12 +10,16 @@ import builtins
 import json
 import re
 import sys
-import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections import Counter
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:  # Python 3.10: the same reader under its old name
+    import tomli as tomllib
 
 from .filewalk import DEFAULT_SKIP_DIRS, list_files
 from .godot_files import autoloads, declared_class_name, main_scene, quoted_list, read_config, unquote
@@ -107,14 +111,14 @@ def read_addons(stack, root, godot_dir):
 def read_addon(root, folder):
     rel_dir = folder.relative_to(root).as_posix()
     cfg = folder / "plugin.cfg"
-    plugin = read_config(cfg.read_text(errors="replace")).get("plugin", {}) if cfg.is_file() else {}
+    plugin = read_config(cfg.read_text(encoding="utf-8", errors="replace")).get("plugin", {}) if cfg.is_file() else {}
     info = {"path": rel_dir}
     for key in ("name", "author"):
         if plugin.get(key):
             info["title" if key == "name" else key] = unquote(plugin[key])
     if any(folder.glob("*.gdextension")):
         info["gdextension"] = True
-    classes = {declared_class_name(p.read_text(errors="replace")) for p in folder.rglob("*.gd")}
+    classes = {declared_class_name(p.read_text(encoding="utf-8", errors="replace")) for p in folder.rglob("*.gd")}
     return Dep("addon", folder.name, unquote(plugin.get("version", "")),
                f"{rel_dir}/plugin.cfg" if cfg.is_file() else rel_dir, info,
                classes - {""})

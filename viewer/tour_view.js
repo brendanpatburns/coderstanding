@@ -41,6 +41,7 @@ const player = new T.StepPlayer({
   frame: (fn) => requestAnimationFrame(fn),
   cancelFrame: (id) => cancelAnimationFrame(id),
   later: (fn, ms) => setTimeout(fn, ms),
+  storage: (() => { try { return window.localStorage; } catch { return null; } })(),  // the learned pace per voice
   cancelLater: (id) => clearTimeout(id),
   onChange: () => updateSeek(),
   onEnd: () => onStepEnd(),
@@ -93,7 +94,7 @@ function updateSeek() {
   const t = player.track;
   const bar = $("seekBar");
   bar.disabled = !t;
-  bar.value = t ? Math.round((t.pos / t.dur) * 1000) : 0;
+  bar.value = t && t.dur > 0 ? Math.round((t.pos / t.dur) * 1000) : 0;
   $("seekNow").textContent = T.fmtTime(t ? t.pos : 0);
   $("seekDur").textContent = t ? (t.mode === "words" ? "~" : "") + T.fmtTime(t.dur) : "0:00";
   bar.title = t?.mode === "words" ? "Seek by words: the voice restarts at the word under the slider" : "Seek in this step";
@@ -157,31 +158,9 @@ async function showStepGraph(target) {
   if (fn) selectFn(fn);
 }
 
-/** Frame the step's highlighted classes (the server's focus) when it marked any; never below
- *  the readable zoom: then centre on the first focused class (a focused function's, if any). */
-function fitFocus() {
-  const focus = cy.nodes(".focus");
-  if (focus.empty()) return;
-  cy.fit(focus, 60);
-  if (cy.zoom() > 1.2) { cy.zoom(1.2); cy.center(focus); }
-  if (cy.zoom() < READABLE_ZOOM) {
-    const fnClass = (state.current.focus.functions || [])[0]?.split("#")[0];
-    const main = (fnClass && cy.getElementById(fnClass).nonempty()) ? cy.getElementById(fnClass) : focus[0];
-    cy.zoom(READABLE_ZOOM);
-    cy.center(main);
-  }
-  scheduleFan();
-}
-
 /** Links and target chips select their target in the graph when it is on screen. */
 function selectTarget(target) {
-  const fn = target.includes("#") && fnById(target);
-  if (fn) { selectFn(fn); return; }
-  const [from, to] = target.split(">");
-  const element = to ? cy.edges().filter((e) => e.data("raw").from === from && e.data("raw").to === to)
-    : cy.getElementById(target);
-  if (element.nonempty()) select({ type: element.isNode() ? "node" : "edge", raw: element.data("raw") });
-  else flash(`${target} is not in this step's view`);
+  if (!selectInGraph(target)) flash(`${target} is not in this step's view`);
 }
 
 // ---------- navigation ----------
@@ -249,14 +228,9 @@ function sourceChip(s) {
   return '<span class="chip gen" title="The browser voice reads the step text; the seek bar moves and seeks word by word">Read aloud · seek by words</span>';
 }
 
-function linkHtml(token) {
-  return esc(token).replace(/\[\[([^\]]+)\]\]/g, (_, target) =>
-    `<span class="wl" data-target="${target}" role="link" tabindex="0" title="Select ${target}">${target}</span>`);
-}
-
 /** Word spans: data-s / data-n = the span's first spoken word and how many words it speaks as. */
 function spansHtml(spans) {
-  return spans.map((span) => `<span class="w" data-s="${span.start}" data-n="${span.count}">${linkHtml(span.text)}</span>`).join(" ");
+  return spans.map((span) => `<span class="w" data-s="${span.start}" data-n="${span.count}">${wikiLinksHtml(span.text)}</span>`).join(" ");
 }
 
 /** The list as the server found it (`?q=` searches titles, step text and targets). */
@@ -305,6 +279,7 @@ function stepHtml() {
     <dl><dt>Shows</dt><dd class="chips-row">${s.targets.map((t) => `<span class="wl" data-target="${esc(t)}" tabindex="0" role="link">${esc(t)}</span>`).join("")}</dd>
       ${s.lost_targets?.length ? `<dt>Lost</dt><dd class="chips-row">${s.lost_targets.map((t) => `<span class="chip stale" title="Not in the code any more">${esc(t)}</span>`).join("")}</dd>` : ""}
       ${s.code ? `<dt>Code</dt><dd><code>${esc(s.code.at)}</code> ${s.code.from ? `<span class="muted small">lines ${s.code.from}-${s.code.to} now</span>` : ""}</dd>` : ""}</dl>
+    <section class="comments" id="tourComments" aria-label="Comments"></section>
     <div class="sec">All steps</div>
     <ol class="steplist">${steps().map((x, i) => `<li><button class="go" type="button" data-go="${i}" ${i === tv.cur ? 'aria-current="step"' : ""}><span class="n">${i + 1}</span><span class="nm">${esc(x.title)}</span>${x.ai ? '<span class="chip">AI</span>' : ""}${x.stale ? '<span class="chip stale">!</span>' : ""}</button></li>`).join("")}</ol>
     <details class="cli" id="aiText"><summary>Step as AI text</summary><pre class="md" id="aiTextBody">Loading…</pre><button class="btn small" type="button" data-act="copy-ai">Copy for AI</button> <span class="toast" id="aiToast"></span></details>
@@ -376,6 +351,7 @@ function render() {
   renderList();
   if (has) renderCode(); else $("tourCode").hidden = true;
   $("seekChip").innerHTML = has ? sourceChip(step()) : "";
+  CoderComments.update(tv);  // comments.js: the step's threads, line "+", open-count badges
 }
 
 let toastTimer = 0;
@@ -771,7 +747,7 @@ async function leave() {
   pause();
   tv.stepToken++;
   moveCanvas(document.querySelector("#tabGraph .stage"), $("detailsResizer"));
-  state.focus = null;
+  state.focus = SpecView.graphFocus();  // back to the selected spec's highlight, if any
   Object.assign(state, { level: tv.graph.level, crumbs: tv.graph.crumbs, expanded: tv.graph.expanded, selected: tv.graph.selected });
   await loadView();
 }

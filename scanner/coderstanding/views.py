@@ -353,9 +353,29 @@ def split_focus(graph, focus):
     return classes, pairs, functions
 
 
+def function_neighbours(result, functions):
+    """(ids, line keys) a focused function `A#f` really touches: the other end of each direct
+    line of A holding a call made by f, or a call to f."""
+    near, keys = set(), set()
+    for function in functions:
+        cls, _, name = function.rpartition(FUNCTION_SEP)
+        for key, edge in result.edges.items():
+            made = edge.from_id == cls and any(
+                calling_function(c.from_member) == name
+                for link in edge.direct_links for c in link.calls)
+            received = edge.to == cls and any(
+                called_function(c.member) == name
+                for link in edge.direct_links for c in link.calls)
+            if made or received:
+                near.add(edge.to if made else edge.from_id)
+                keys.add(key)
+    return near, keys
+
+
 def target_focus(result, graph, focus):
-    """DESIGN 7 / 7c: highlight the targets (or what they folded into), one faded layer out.
-    Returns (view, focus json or None when no target is in the graph)."""
+    """DESIGN 7 / 7c: highlight the targets (or what they folded into), one faded layer out
+    (zoom's rule: `focus_on`); the classes a focused function really calls or is called by are
+    shown unfaded. Returns (view, focus json or None when no target is in the graph)."""
     classes, pairs, functions = split_focus(graph, focus)
     core = set().union(*(stand_ins_of(result, cls) for cls in classes)) if classes else set()
     if not core:
@@ -365,7 +385,13 @@ def target_focus(result, graph, focus):
              for b, _ in result.folder.stand_ins(y, "dst")} & set(result.edges)
     data = {"nodes": sorted(core), "edges": sorted(f"{a}{ARROW}{b}" for a, b in edges),
             "functions": sorted(f for f in functions if f.rpartition(FUNCTION_SEP)[0] in core)}
-    return focus_on(core, result.edges, result.folder, result.level), data
+    focused = focus_on(core, result.edges, result.folder, result.level)
+    near, keys = function_neighbours(focused, data["functions"])
+    for key in keys:
+        focused.edges[key].faded = False
+    focused.shown |= near
+    focused.faded -= near
+    return focused, data
 
 
 # --- JSON output ---
@@ -482,7 +508,7 @@ def sort_key(node):
 
 
 def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
-                 focus=None, expand=()):
+                 focus=None, expand=(), badges=None):
     """The view for (level, view, type toggles, optional zoom, optional focus).
 
     zoom: {"from", "to" (None for a node zoom), "level", "via" (optional: found if missing)}.
@@ -492,6 +518,8 @@ def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
     focus: targets as view ids (`A`, `A→B`, `A#f`) to highlight, as specs and tour steps do
     (DESIGN 7, 7c); a function target also opens its class. "focus" in the result lists the
     highlighted ids ({"nodes", "edges", "functions"}), None without a focus in the graph.
+    badges: {view id (`A`, `A→B`): count} of cards linking it (cards.link_index); each shown
+    class and line then gets "cards" = its count (DESIGN 7d).
     """
     ctx = ViewContext(graph, notes or Notes(), view, show)
     if zoom:
@@ -510,11 +538,17 @@ def compute_view(graph, notes=None, *, level=1, view=ALL, show=None, zoom=None,
     nodes += [node_json(ctx, i, True) for i in result.faded]
     edges = sorted(result.edges.items())
     open_ids = expanded_ids(ctx, result, expand)
+    edge_rows = [{**edge_json(ctx, e), "fanned": e.from_id in open_ids or e.to in open_ids}
+                 for _, e in edges]
+    if badges is not None:
+        for row in nodes:
+            row["cards"] = badges.get(row["id"], 0)
+        for row in edge_rows:
+            row["cards"] = badges.get(row["key"], 0)
     return {"level": result.level, "view": view, "zoom": zoom,
             "counts": {"shown": len(result.shown), "total": len(ctx.allowed)},
             "nodes": sorted(nodes, key=sort_key),
-            "edges": [{**edge_json(ctx, e), "fanned": e.from_id in open_ids or e.to in open_ids}
-                      for _, e in edges],
+            "edges": edge_rows,
             "needs_binding": ctx.needs_binding(),
             "focus": focused,
             "expanded": {i: expanded_json(ctx, i) for i in sorted(open_ids)},

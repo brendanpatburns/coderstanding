@@ -1,20 +1,23 @@
-#!/usr/bin/env python3
 """Claude Code hook: nudge the AI to use Coderstanding inside registered repos.
 
 Events: SessionStart (a short note) and PreToolUse on Grep/Glob/Read/Bash (one hint per
 session per app). Never blocks, never fails: any error exits 0 with no output.
-Install: see docs/FOR_CLAUDE.md. Plain stdlib; reuses the app registry from apps.py.
+Run by `coderstanding hook-run`; `coderstanding hook` prints the settings snippet that installs it.
 """
 import json
 import os
 import re
 import shlex
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scanner"))
+from . import userconfig
+from .offline import install as install_offline_guard
 
 SEARCH_COMMANDS = ("grep", "rg", "find", "cat")
+DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")  # C:\code or C:/code
 HINT = ("This repo is in Coderstanding (app `{app}`). Cheaper than grepping/reading blind: "
         "`coderstanding find {app} <words>`, `outline {app} <file>`, `impact {app} <class>`, "
         "`brief {app} <class>`, `graph {app} 1`, `node {app} <class>`.")
@@ -59,11 +62,11 @@ def app_for(path):
 
 def bash_target(command, cwd):
     """The folder a grep/rg/find/cat command works in (first path-like argument), else None."""
-    words = shlex.split(command.split("|")[0].split("&&")[0])
+    words = shlex.split(command.split("|")[0].split("&&")[0], posix=not userconfig.windows())
     if not words or os.path.basename(words[0]) not in SEARCH_COMMANDS:
         return None
     for word in words[1:]:
-        if word[:1] in "/~.":
+        if word[:1] in "/~." or DRIVE_PATH.match(word):
             return cwd / Path(word).expanduser()
     return cwd
 
@@ -82,7 +85,7 @@ def tool_target(data):
 
 
 def state_file(session_id):
-    base = os.environ.get("XDG_RUNTIME_DIR") or "/tmp"
+    base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
     return Path(base) / f"coderstanding-hook-{re.sub(r'[^A-Za-z0-9_-]', '_', session_id)}.json"
 
 
@@ -118,15 +121,28 @@ def handle(data):
     return answer(event, app)
 
 
+def hook_command():
+    """How settings.json should call the hook: the bare command when it is on PATH, else the
+    installed entry point's full path (helper.launch_command)."""
+    from .helper import launch_command
+    if shutil.which("coderstanding"):
+        return "coderstanding hook-run"
+    return " ".join(f'"{word}"' for word in [*launch_command(), "hook-run"])
+
+
+def settings_snippet(command=None):
+    """The `hooks` JSON for ~/.claude/settings.json (merge with existing hooks)."""
+    entry = {"hooks": [{"type": "command", "command": command or hook_command()}]}
+    return json.dumps({"hooks": {"SessionStart": [entry],
+                                 "PreToolUse": [{"matcher": "Grep|Glob|Read|Bash", **entry}]}}, indent=2)
+
+
 def main():
     try:
-        result = handle(json.load(sys.stdin))
+        install_offline_guard()
+        result = handle(json.loads(sys.stdin.buffer.read().decode("utf-8")))
         if result:
             print(json.dumps(result))
     except Exception:
         pass
     return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

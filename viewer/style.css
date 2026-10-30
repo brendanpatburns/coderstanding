@@ -44,7 +44,7 @@ code, .mono { font-family: var(--f-mono); font-size: 0.9em; }
 .resizer:hover::after, .resizer.dragging::after, .resizer:focus-visible::after { opacity: 1; }
 .resizer:focus-visible { outline: none; }
 
-/* Spec sidebar (placeholder until the spec store lands) */
+/* Spec sidebar (DESIGN 7; spec_view.js) */
 .side { border-right: 1px solid var(--line); background: var(--surface); padding: 8px 7px;
   display: flex; flex-direction: column; gap: 10px; overflow: auto; }
 .side-title { writing-mode: vertical-rl; transform: rotate(180deg); align-self: center;
@@ -93,7 +93,7 @@ input[type="range"] { accent-color: var(--accent); width: 150px; }
 .seg.split select { border: none; border-left: 1px solid var(--line); background: var(--surface); color: var(--ink);
   font: 13px var(--f-body); padding: 0 6px; cursor: pointer; }
 .seg.split select:focus-visible, .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.seg button[aria-pressed="true"], .card-tabs button[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); }
 .btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px;
   padding: 6px 11px; font: 13px var(--f-body); cursor: pointer; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
@@ -409,3 +409,109 @@ pre.md { margin: 0 0 6px; font: 11.5px/1.5 var(--f-mono); background: var(--surf
 .apps-list .app-confirm .danger { border-color: var(--error); color: var(--error); }
 .apps-list .rename-input { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 6px; padding: 2px 6px; font: inherit; }
 .apps-list .chip { font: 11px var(--f-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 10px; padding: 0 7px; font-weight: normal; }
+
+/* Specs sidebar: nested boxes, chips, the selected spec's card (spec_view.js) */
+.side-body { display: flex; flex-direction: column; gap: 8px; min-width: 0; font-size: 13px; }
+.side-body .note-input { width: 100%; border: 1px solid var(--line); background: var(--surface); color: var(--ink);
+  border-radius: 6px; padding: 5px 8px; font: inherit; box-sizing: border-box; }
+.side-body .hint { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 8px; }
+.spec-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.spec-level { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.spec-level input[type=range] { flex: 1; min-width: 60px; }
+.spec-level .lvl { min-width: 0; font-size: 12px; }
+.spec-level .check { display: flex; gap: 4px; align-items: center; color: var(--ink); }
+.spec-crumbs { font-size: 12.5px; color: var(--muted); }
+.spec-crumbs:empty { display: none; }
+.spec-crumbs button, .spec-hits button, .linkbtn { border: none; background: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; text-align: left; }
+.spec-crumbs button:hover, .linkbtn:hover { text-decoration: underline; }
+.spec-hits { list-style: none; margin: 0; padding: 0 0 6px; display: grid; gap: 4px; border-bottom: 1px solid var(--line); }
+.spec-hits button { color: var(--ink); width: 100%; border-radius: 6px; padding: 4px 6px; }
+.spec-hits button:hover { background: var(--row); }
+.spec-tree { display: flex; flex-direction: column; gap: 6px; }
+.spec-box { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); padding: 4px 6px; min-width: 0; }
+.spec-box.sel { border-color: var(--hl); box-shadow: 0 0 0 1px var(--hl); }
+.spec-kids { display: flex; flex-direction: column; gap: 5px; margin: 5px 0 2px 8px; }
+.spec-kids > .spec-box { background: var(--bg); }
+.spec-row { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; border-radius: 6px; cursor: grab; }
+.spec-row.spec-drop, .spec-top.spec-drop { outline: 2px dashed var(--accent); outline-offset: 1px; }
+.spec-pick { flex: 1 1 8ch; min-width: 0; text-align: left; border: none; background: none; color: var(--ink); font: 600 13px var(--f-body);
+  padding: 3px 2px; cursor: pointer; overflow-wrap: anywhere; }
+.spec-pick:hover { color: var(--accent); }
+.spec-finer { border: 1px dashed var(--muted); background: none; color: var(--muted); border-radius: 10px; font: 11px var(--f-mono);
+  padding: 0 7px; cursor: zoom-in; }
+.spec-finer:hover { border-color: var(--accent); color: var(--accent); }
+.spec-status, .stage-pick { color: var(--muted); border-color: var(--line); }
+.st-todo { color: var(--accent); border-color: var(--accent); }
+.st-in-progress, .st-review { color: var(--warn); border-color: var(--warn); }
+.st-implemented, .st-done { color: var(--str); border-color: var(--str); }
+.st-dropped { color: var(--faded); border-color: var(--line); text-decoration: line-through; }
+.stage-pick { font: 11px var(--f-mono); border: 1px solid; border-radius: 10px; padding: 0 4px; background: var(--surface); cursor: pointer; max-width: 16ch; }
+.chip.prio { color: var(--muted); border-color: var(--line); }
+.chip.prio.p-high { color: var(--hl); border-color: var(--hl); }
+.chip.prio.p-medium { color: var(--warn); border-color: var(--warn); }
+.card-tabs { display: flex; }
+.card-tabs button { flex: 1; }
+.spec-filters { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.spec-filters .select { min-width: 0; font-size: 12px; }
+.spec-card label.mini { display: flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); }
+.spec-card { display: flex; flex-direction: column; gap: 7px; padding: 6px 2px 4px; border-top: 1px solid var(--line); margin-top: 4px; }
+.spec-card .row { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.spec-card .sec { font: 500 10.5px var(--f-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+.spec-card .field { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+.spec-card textarea.note-input { resize: vertical; }
+.spec-text { line-height: 1.45; overflow-wrap: anywhere; }
+.spec-problem { font-size: 12px; color: var(--warn); }
+.spec-classes { display: flex; flex-wrap: wrap; gap: 4px; }
+.cchip { display: inline-flex; align-items: center; gap: 2px; font: 11.5px var(--f-mono); border: 1px solid var(--accent);
+  border-radius: 10px; padding: 0 2px 0 7px; max-width: 100%; }
+.cchip .wl-like { cursor: pointer; overflow-wrap: anywhere; color: var(--ink); }
+.cchip .wl-like:hover { color: var(--accent); }
+.cchip button { border: none; background: none; color: var(--muted); cursor: pointer; font: 600 12px var(--f-mono); padding: 0 4px; }
+.cchip button:hover { color: var(--error); }
+.cchip.folded { border-style: dashed; border-color: var(--muted); color: var(--muted); padding-right: 7px; }
+.cchip.lost { border-color: var(--error); }
+.cchip.lost .wl-like { color: var(--error); text-decoration: line-through; }
+.spec-picks { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 6px; max-height: 180px; overflow: auto; }
+.spec-picks button { width: 100%; text-align: left; border: none; background: none; color: var(--ink); padding: 4px 7px; cursor: pointer; font: inherit; }
+.spec-picks button:hover { background: var(--row); }
+.spec-actions .mv { width: 26px; color: var(--ink); font-size: 14px; }
+.spec-confirm { border: 1px solid var(--error); border-radius: 6px; padding: 6px 8px; display: grid; gap: 6px; font-size: 12.5px; }
+.btn.danger { border-color: var(--error); color: var(--error); }
+.spec-card .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.spec-top { border: 1px dashed var(--muted); border-radius: 8px; padding: 8px; text-align: center; color: var(--muted); font-size: 12px; }
+.spec-of { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+/* Comments (DESIGN 7d, viewer/comments.js): the step's threads in the tour panel, the line
+   gutter "+", open-count badges on the dots, the step list and the tours list. */
+.tour-panel .comments { display: grid; gap: 8px; }
+.clist { display: grid; gap: 8px; }
+.cthread { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; background: var(--surface); display: grid; gap: 6px; }
+.cthread.resolved { background: var(--bg); }
+.cthread.resolved > summary { cursor: pointer; font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cthread.resolved[open] > summary { margin-bottom: 4px; }
+.cmt + .cmt { border-top: 1px solid var(--line); padding-top: 6px; margin-left: 12px; }
+.chead { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12.5px; }
+.chead .cact { margin-left: auto; display: flex; gap: 4px; }
+.chead .cact button { border: none; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; padding: 0 2px; }
+.chead .cact button:hover { text-decoration: underline; }
+.cbody { font-size: 13.5px; line-height: 1.5; overflow-wrap: anywhere; }
+.cbody p { margin: 2px 0; }
+.cbody code { font: 12px var(--f-mono); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 0 3px; }
+.cwhere { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.cwhere q { color: var(--muted); font-style: italic; }
+.go-step { border: none; background: none; padding: 0; color: var(--accent); font: 500 12px var(--f-body); cursor: pointer; text-align: left; }
+.go-step:hover { text-decoration: underline; }
+.cfoot { display: flex; gap: 6px; }
+.cform { display: grid; gap: 6px; }
+.tour-panel .cform textarea.note-input { min-height: 56px; resize: vertical; }
+pre.code-src .ln { position: relative; }
+pre.code-src .cadd { position: absolute; left: 2px; top: 50%; transform: translateY(-50%); width: 16px; height: 16px; padding: 0;
+  border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); color: var(--accent);
+  font: 600 12px/1 var(--f-mono); cursor: pointer; opacity: 0; }
+pre.code-src .ln:hover .cadd, pre.code-src .cadd:focus-visible { opacity: 1; }
+pre.code-src .ln.has-c { box-shadow: inset 3px 0 var(--accent); }
+pre.code-src .cmark { margin-left: 10px; font: 600 10.5px var(--f-mono); color: var(--accent-ink); background: var(--accent);
+  border-radius: 8px; padding: 0 5px; }
+.cbadge { display: inline-block; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--accent);
+  color: var(--accent-ink); font: 600 10px/16px var(--f-mono); text-align: center; }
+.dots button .cbadge { position: absolute; bottom: -6px; right: -7px; min-width: 14px; height: 14px; line-height: 14px; padding: 0 3px;
+  border: 1px solid var(--surface); }

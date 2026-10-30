@@ -1,6 +1,8 @@
 """Command line: `coderstanding <command> ...`. Add a command with one add_* function."""
 
 import argparse
+import os
+import importlib.metadata
 import shlex
 import sys
 from collections import Counter
@@ -11,12 +13,15 @@ from .textout import short_namer
 from .apps import (AppError, SETTINGS, find_app, find_id, load_graph, parse_target, register,
                    remove_app, rename_app, rescan, selection_id)
 from .graph_json import write_graph
+from .offline import helper_listening, install as install_offline_guard, privacy_report
 from .levels import parse_hub_threshold
 from .checks import RULE_FILTERS, warnings_by_kind
-from .notes import (AI_AUTHOR, clean_value, edge_key, function_key, is_function,
+from .notes import (AI_AUTHOR, HUMAN_AUTHOR, clean_value, edge_key, function_key, is_function,
                     node_key)
+from .setup_cli import SETUP_COMMANDS
 from .scan import default_output, scan_repo
 from .testcode import is_test, files_to_retest
+from .cards import KINDS, PRIORITIES, SORTS, link_index, open_cards
 from .tours import open_tours
 from .views import (CONCRETE, EXPAND_ALL, IMPACT_DEPTH, brief, compute_view, effective_level, find,
                     impact, outline)
@@ -170,6 +175,7 @@ def run_zoom(args):
     add_via(zoom, graph, notes, args)
     view = compute_view(graph, notes, zoom=zoom, **view_options(args))
     print(textout.format_zoom(app.name, view, args.calls, short_namer(graph)))
+    print_linked(app, graph, notes, f"{zoom['from']}→{zoom['to']}")
 
 
 def add_zoom(commands):
@@ -180,6 +186,12 @@ def add_zoom(commands):
     parser.add_argument("--level", type=int, default=1, help="level the line is seen at")
     add_via_arg(parser)
     parser.set_defaults(run=run_zoom)
+
+
+def print_linked(app, graph, notes, view_id):
+    """The specs and memos linking a class or a line `A→B` (cards.link_index)."""
+    for line in textout.linked_lines(link_index(app, graph, notes).get(view_id, [])):
+        print(line)
 
 
 def run_node(args):
@@ -195,6 +207,7 @@ def run_node(args):
         return
     view = compute_view(graph, notes, zoom=zoom, **view_options(args))
     print(textout.format_node(app.name, view, node_id, args.calls, short_namer(graph)))
+    print_linked(app, graph, notes, node_id)
 
 
 def add_node(commands):
@@ -283,6 +296,9 @@ def run_tour(args):
                 raise AppError("--text/--title need --step N")
             return tour_edit(args, tours)
         data = tours.tour_json(tours.get(args.id))
+        if args.comments:
+            found = tours.comments.list_json(f"tour:{args.id}")
+            return print(textout.format_comments(app.name, data, found, show_resolved=args.all))
         if args.md:
             text = textout.tour_markdown(app.name, data)
             if args.output:
@@ -295,6 +311,19 @@ def run_tour(args):
         raise AppError(error.args[0]) from error
     except (ValueError, IndexError) as error:
         raise AppError(str(error)) from error
+
+
+def allow_options_before_positionals(parser):
+    """Make `parser` read positionals that come after an option (what Python 3.12+ does anyway)."""
+    plain = parser.parse_known_args
+
+    def parse(args=None, namespace=None):
+        parser.parse_known_args = plain  # the intermixed reader calls it for each pass
+        try:
+            return parser.parse_known_intermixed_args(args, namespace)
+        finally:
+            parser.parse_known_args = parse
+    parser.parse_known_args = parse
 
 
 def add_tour(commands):
@@ -316,7 +345,190 @@ def add_tour(commands):
     parser.add_argument("--still-true", action="store_true", help="the stale steps (or --step N) "
                         "still match today's code")
     parser.add_argument("--by", help="author name (default: claude, saved as an AI draft)")
+    parser.add_argument("--comments", action="store_true", help="the open comment threads "
+                        "(ids for `comment --reply/--resolve`)")
+    parser.add_argument("--all", action="store_true", help="with --comments: resolved ones too")
+    # Python 3.11's argparse loses positionals that follow an option (`tour app id --draft T A B`).
+    allow_options_before_positionals(parser)
     parser.set_defaults(run=run_tour)
+
+
+# --- cards: specs and memos (DESIGN 7, 7d); one pair of commands per kind ---
+
+def run_cards(args):
+    app, graph, notes = open_app(args)
+    cards = open_cards(app, graph, notes, args.kind)
+    try:
+        data = cards.list_json(args.level, args.zoom, " ".join(args.query), args.stage,
+                               args.priority, args.importance, args.sort)
+    except KeyError as error:
+        raise AppError(error.args[0]) from error
+    except ValueError as error:
+        raise AppError(str(error)) from error
+    print(textout.format_cards(app.name, data))
+
+
+def add_cards(commands, kind, help_text):
+    parser = commands.add_parser(KINDS[kind].folder, help=help_text)
+    app_args(parser, view_options=False)
+    parser.add_argument("query", nargs="*", help="words to find in titles, text and links "
+                        "(any level; prints each path)")
+    parser.add_argument("--level", type=int, help="fold finer ones than this level")
+    parser.add_argument("--zoom", metavar="ID", help="one item and its children")
+    parser.add_argument("--stage", help=f"only this stage ({', '.join(KINDS[kind].stages)})")
+    parser.add_argument("--priority", choices=PRIORITIES, help="only this work priority")
+    parser.add_argument("--importance", choices=PRIORITIES, help="only this importance")
+    parser.add_argument("--sort", choices=SORTS, help="list sorted (priority/importance: high first)")
+    parser.set_defaults(run=run_cards, kind=kind)
+
+
+LIST_FIELDS = ("links", "links+", "links-")
+ALIASES = {"status": "stage", "classes": "links", "classes+": "links+", "classes-": "links-"}
+
+
+def card_value(name, text, old):
+    """A `--set name=value` value as the field's type (`links+=A,B>C`, `links-=A`)."""
+    name = ALIASES.get(name, name)
+    if name in LIST_FIELDS:
+        items = [c.strip() for c in text.split(",") if c.strip()]
+        if name == "links+":
+            return "links", [*old, *items]
+        if name == "links-":
+            return "links", [c for c in old if c not in items]
+        return "links", items
+    if name == "level":
+        return name, int(text) if text else None
+    return name, (text or None) if name in ("stage", "priority", "importance", "parent") else text
+
+
+def card_values(args, old):
+    values = {name: getattr(args, name) for name in ("stage", "priority", "importance", "parent",
+                                                     "text", "level")
+              if getattr(args, name) is not None}
+    if args.links is not None:
+        values["links"] = [c.strip() for c in args.links.split(",") if c.strip()]
+    for item in args.set or []:
+        name, sep, text = item.partition("=")
+        if not sep:
+            raise AppError(f"not key=value: {item}")
+        try:
+            name, value = card_value(name.strip(), text, values.get("links", old))
+        except ValueError as error:
+            raise AppError(f"{item}: {error}") from error
+        values[name] = value
+    return values
+
+
+def run_card(args):
+    app, graph, notes = open_app(args)
+    cards = open_cards(app, graph, notes, args.kind)
+    by, ai = (args.by, False) if args.by else (AI_AUTHOR, True)
+    try:
+        if args.add is not None:
+            card_id = args.id or cards.new_id(args.add)
+            if card_id in cards.cards:
+                raise AppError(f"{args.kind} {card_id} exists: change it with --set")
+            card, kept = cards.write(card_id, {"title": args.add, **card_values(args, [])}, by, ai)
+        elif not args.id:
+            raise AppError(f"give an id (see `coderstanding {cards.kind.folder}`), or --add \"Title\"")
+        elif args.delete:
+            moved = cards.delete(args.id)
+            return print(f"deleted {args.id}" + (f"; moved up: {', '.join(moved)}" if moved else ""))
+        elif args.accept:
+            card, kept = cards.accept(args.id, by=args.by or HUMAN_AUTHOR), []
+        else:
+            values = card_values(args, cards.get(args.id).links)
+            if not values:
+                return print(textout.format_card(app.name, cards.card_json(cards.get(args.id))))
+            card, kept = cards.write(args.id, values, by, ai)
+    except KeyError as error:
+        raise AppError(error.args[0]) from error
+    except ValueError as error:
+        raise AppError(str(error)) from error
+    data = cards.card_json(card)
+    print(f"saved {card.id} by {by}{' (AI draft)' if ai and not args.accept else ''}"
+          + (f"; kept your {', '.join(kept)}" if kept else ""))
+    for problem in data["problems"]:
+        print(f"problem: {problem}")
+
+
+def add_card(commands, kind, help_text):
+    parser = commands.add_parser(kind, help=help_text)
+    app_args(parser, view_options=False)
+    parser.add_argument("id", nargs="?", help="id (with --add: optional, else from the title)")
+    parser.add_argument("--add", metavar="TITLE", help="a new one with this title")
+    parser.add_argument("--parent", help="parent id (\"\" = top level)")
+    parser.add_argument("--links", "--classes", dest="links",
+                        help="classes, connections and functions it links: A,B>C,D#f")
+    parser.add_argument("--stage", help=f"one of {', '.join(KINDS[kind].stages)}")
+    parser.add_argument("--priority", choices=PRIORITIES, help="work priority: how soon")
+    parser.add_argument("--importance", choices=PRIORITIES, help="how much it matters")
+    parser.add_argument("--level", type=int, help="level (default: parent's + 1)")
+    parser.add_argument("--text", help="the text (Markdown, [[wiki links]])")
+    parser.add_argument("--set", nargs="+", metavar="KEY=VALUE",
+                        help="title=, stage=, priority=, importance=, level=, parent=, text=, "
+                             "links=A,B>C, links+=D, links-=A (empty value clears)")
+    parser.add_argument("--delete", action="store_true", help="delete it (children move up)")
+    parser.add_argument("--accept", action="store_true", help="accept its AI draft fields")
+    parser.add_argument("--by", metavar="NAME",
+                        help=f"write as this person (default: AI draft by {AI_AUTHOR})")
+    parser.set_defaults(run=run_card, kind=kind)
+
+
+def add_specs(commands):
+    add_cards(commands, "spec", "the spec tree (the plan, as nested epics); search, filter "
+              "(--stage, --priority, --importance) or sort it")
+    add_card(commands, "spec", "print one spec, or add / change / delete / accept one")
+
+
+def add_memos(commands):
+    add_cards(commands, "memo", "the memo tree (the viewer's Notes: comments and information); "
+              "search, filter or sort it")
+    add_card(commands, "memo", "print one memo, or add / change / delete / accept one")
+
+
+def comment_change(args, comments, by):
+    """--resolve / --reopen ID: the thread; returns the line to print."""
+    comment_id = args.resolve or args.reopen
+    comments.resolve(comment_id, by, done=bool(args.resolve))
+    return f"{'resolved' if args.resolve else 'reopened'} the thread of [{comment_id}] as {by}"
+
+
+def run_comment(args):
+    """Comment on a tour or a step (DESIGN 7d): new, --reply, --line, --resolve, --reopen."""
+    app, graph, notes = open_app(args)
+    tours = open_tours(app, graph, notes)
+    by, ai = (args.by, False) if args.by else (AI_AUTHOR, True)
+    try:
+        if args.resolve or args.reopen:
+            return print(comment_change(args, tours.comments, by))
+        if not args.words or (not args.reply and len(args.words) != 2) or len(args.words) > 2:
+            raise AppError('usage: comment <app> <target> "<text>" [--line N] | '
+                           'comment <app> --reply ID "<text>" | comment <app> --resolve|--reopen ID')
+        target = tours.comment_target(args.words[0]) if len(args.words) == 2 else None
+        comment = tours.comments.add(target, args.words[-1], by, ai, parent=args.reply,
+                                     line=args.line, quote=args.quote)
+        where = f" line {args.line}" if args.line else ""
+        print(f"added [{comment['id']}] on {comment['target']}{where} as {by}"
+              + (" (ai)" if ai else ""))
+    except KeyError as error:
+        raise AppError(error.args[0]) from error
+    except (ValueError, PermissionError) as error:
+        raise AppError(str(error)) from error
+
+
+def add_comment(commands):
+    parser = commands.add_parser("comment", help="comment on a tour or a step (tour:<id>, "
+                                 "tour:<id>#<step N or key>), reply, resolve or reopen a thread")
+    app_args(parser, view_options=False)
+    parser.add_argument("words", nargs="*", help='<target> "<text>" (with --reply: just "<text>")')
+    parser.add_argument("--reply", metavar="ID", help="reply to this comment's thread")
+    parser.add_argument("--line", type=int, help="today's line number in the step's code")
+    parser.add_argument("--quote", help="the words of the step text the comment is about")
+    parser.add_argument("--resolve", metavar="ID", help="resolve the thread of this comment")
+    parser.add_argument("--reopen", metavar="ID", help="reopen the thread of this comment")
+    parser.add_argument("--by", help="author name (default: claude, marked as AI)")
+    parser.set_defaults(run=run_comment)
 
 
 # --- reading commands: outline, find, impact, brief ---
@@ -423,8 +635,12 @@ def run_warnings(args):
     print(textout.format_warnings(app.name, warnings_by_kind(graph, notes, args.all),
                                   unique_namer(graph)))
     tours = open_tours(app, graph, notes)
-    for line in textout.tour_warning_lines(tours.stale_steps(), tours.lost_steps()):
+    for line in textout.tour_warning_lines(tours.stale_steps(), tours.lost_steps(),
+                                           tours.comments.lost("tour:")):
         print(line)
+    for kind in KINDS:
+        for card_id, problem in open_cards(app, graph, notes, kind).all_problems():
+            print(f"{kind} problem: {card_id}: {problem}")
 
 
 def add_warnings(commands):
@@ -613,6 +829,9 @@ def run_serve(args):
         app = find_app(args.app, args.data) if args.app else None
     except AppError as error:
         sys.exit(str(error))
+    if args.service:
+        from .helper import enter_service_mode
+        enter_service_mode()
     serve(app, args.port, allow_origin=args.allow_origin)
 
 
@@ -625,6 +844,9 @@ def add_serve(commands):
                         help="hosted page origin that may use this server as its helper (default: env "
                              "CODERSTANDING_ALLOW_ORIGIN, then \"origin\" in "
                              "~/.config/coderstanding/hosted.json)")
+    parser.add_argument("--service", action="store_true",
+                        help="run as the login helper without a console (Windows): log to the "
+                             "helper log file and record the pid")
     parser.set_defaults(run=run_serve)
 
 
@@ -657,7 +879,7 @@ def add_remove(commands):
                         help="also delete the scan data Coderstanding made (graph.json, cache/, "
                              "layout.json) in its data folder")
     parser.add_argument("--delete-notes", action="store_true",
-                        help="with --delete-data: also delete notes.jsonl, specs/, tours/ and "
+                        help="with --delete-data: also delete notes.jsonl, specs/, memos/, tours/ and "
                              "settings.json in the data folder")
     parser.set_defaults(run=run_remove)
 
@@ -673,18 +895,45 @@ def add_rename(commands):
     parser.set_defaults(run=run_rename)
 
 
+def run_privacy(args):
+    from .server import DEFAULT_PORT, HOST
+    from .userconfig import ALLOW_ORIGIN_ENV, config_dir, hosted_origin
+    port = args.port or DEFAULT_PORT
+    origin = hosted_origin()
+    source = (f"env {ALLOW_ORIGIN_ENV}" if os.environ.get(ALLOW_ORIGIN_ENV)
+              else str(config_dir() / "hosted.json")) if origin else None
+    print(privacy_report(HOST, port, origin, source, helper_listening(HOST, port)))
+
+
+def add_privacy(commands):
+    parser = commands.add_parser("privacy", help="show that Coderstanding works fully offline: "
+                                 "network guard, bind address, allowed origin, voice policy")
+    parser.add_argument("--port", type=int, help="the helper's port (default 8517)")
+    parser.set_defaults(run=run_privacy)
+
+
+def version():
+    try:
+        return importlib.metadata.version("coderstanding")
+    except importlib.metadata.PackageNotFoundError:
+        return "(source checkout)"
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="coderstanding")
+    parser.add_argument("--version", action="version", version=f"coderstanding {version()}")
     commands = parser.add_subparsers(dest="command", required=True)
-    for add in (add_scan, add_add, add_settings, add_graph, add_zoom, add_node, add_view, add_tours,
-                add_tour, add_outline, add_find, add_impact, add_brief, add_tests,
+    for add in (add_scan, add_add, add_settings, add_graph, add_zoom, add_node, add_view,
+                add_specs, add_memos, add_tours, add_tour, add_comment, add_outline, add_find, add_impact,
+                add_brief, add_tests,
                 add_warnings, add_rules, add_curate, add_set, add_serve, add_rescan,
-                add_remove, add_rename):
+                add_remove, add_rename, add_privacy, *SETUP_COMMANDS):
         add(commands)
     return parser
 
 
 def main(argv=None):
+    install_offline_guard()  # before anything else runs (DESIGN 18)
     args = build_parser().parse_args(argv)
     try:
         args.run(args)

@@ -1,7 +1,7 @@
 """Markdown item store (docs/DESIGN.md 7, 7b, 7c): one Markdown file per item in
 `<data>/<kind>/<id>.md`, structure in a front matter block, free text in the body.
 
-Shared by every Markdown kind (tours now; specs and diagrams later). It knows nothing about a
+Shared by every Markdown kind (tours and specs now; diagrams later). It knows nothing about a
 kind's fields: it reads, writes, lists and searches files, parses the front matter, splits the
 body into `## Title` sections, turns wiki links into names, and lists targets the graph no
 longer has (like lost notes). Each kind adds its own fields and checks on top.
@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .apps import AppError, parse_target
-from .notes import is_function
+from .notes import ARROW, FUNCTION_SEP, is_function
 
 FENCE = "---"
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,79}$")
@@ -80,6 +80,10 @@ def parse_flow(text, at=0):
 
 
 def parse_value(text):
+    """A block value: a flow list/map or a quoted string, else the whole line as a plain scalar
+    (as YAML reads `title: Items, carry and looks`)."""
+    if not text.strip().startswith(("[", "{", '"')):
+        return parse_scalar(text)
     value, end = parse_flow(text)
     if text[end:].strip():
         raise ItemError(f"unexpected text after value: {text}")
@@ -227,6 +231,30 @@ def resolve_target(graph, notes, text):
 def unknown_targets(graph, notes, targets):
     """The targets the graph no longer has (listed like lost notes, never dropped)."""
     return [t for t in targets if resolve_target(graph, notes, t) is None]
+
+
+def focus_ids(graph, notes, targets):
+    """The targets as view ids (`A`, `A→B`, `A#f`) for compute_view's focus; unknown ones left
+    out (a tour step's or a spec's highlight)."""
+    ids = []
+    for target in targets:
+        found = resolve_target(graph, notes, target)
+        if found:
+            ids.append({"edge": ARROW, "function": FUNCTION_SEP}.get(found[0], "").join(found[1:]))
+    return ids
+
+
+def slug(title, fallback="item"):
+    """An id made from a title: `Effects pipeline` -> `effects-pipeline`."""
+    return re.sub(r"[^a-z0-9]+", "-", str(title).lower()).strip("-")[:80].strip("-") or fallback
+
+
+def free_id(base, taken):
+    """`base`, or `base-2`, `base-3`... when that id is taken."""
+    item_id, number = base, 2
+    while item_id in taken:
+        item_id, number = f"{base[:76]}-{number}", number + 1
+    return item_id
 
 
 # --- the store ---
