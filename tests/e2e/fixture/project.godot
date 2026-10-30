@@ -1,0 +1,10 @@
+; End-to-end viewer checks (tests/e2e/run.mjs): a small Godot app with a scene, an autoload,
+; a class with a long function list, an unused class, a test and a Python tool using outside code.
+config_version=5
+
+[application]
+config/name="e2e_app"
+run/main_scene="res://main.tscn"
+
+[autoload]
+Bus="*res://src/bus.gd"

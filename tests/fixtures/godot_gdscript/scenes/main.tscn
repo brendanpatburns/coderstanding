@@ -1,0 +1,22 @@
+[gd_scene load_steps=5 format=3 uid="uid://main123"]
+
+[ext_resource type="Script" path="res://src/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://src/player.gd" id="2_player"]
+[ext_resource type="Script" path="res://src/enemy.gd" id="3_enemy"]
+[ext_resource type="PackedScene" path="res://scenes/hud.tscn" id="4_hud"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="Player" type="CharacterBody2D" parent="."]
+script = ExtResource("2_player")
+
+[node name="Enemy" type="Node2D" parent="."]
+script = ExtResource("3_enemy")
+
+[node name="Hud" parent="." instance=ExtResource("4_hud")]
+
+[node name="Button" type="Button" parent="Hud"]
+
+[connection signal="died" from="Enemy" to="Player" method="_on_died"]
+[connection signal="pressed" from="Hud/Button" to="." method="_on_button"]

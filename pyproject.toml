@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coderstanding"
+version = "0.1.0"
+description = "Scan a code base and show its classes and connections as a graph"
+requires-python = ">=3.15"
+dependencies = [
+    "tree-sitter>=0.23",
+    "tree-sitter-c-sharp",
+    "tree-sitter-gdscript",
+    "tree-sitter-python",
+    "tree-sitter-javascript",
+    "tree-sitter-typescript",
+    "tree-sitter-c",
+    "tree-sitter-cpp",
+    "tree-sitter-html",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[project.scripts]
+coderstanding = "coderstanding.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["scanner"]
+
+[tool.pytest.ini_options]
+pythonpath = ["scanner"]
+testpaths = ["tests"]

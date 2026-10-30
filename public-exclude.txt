@@ -1,0 +1,7 @@
+# Paths never exported to the public copy (scripts/export-public.sh). One per line:
+# a trailing "/" means a folder and everything in it; otherwise a glob on the repo path.
+# Lines starting with "#" are comments. Keep personal names out of this file: use globs.
+docs/private/
+deploy/docker-compose.yml
+scripts/deploy-*.sh
+scripts/sync-*.sh

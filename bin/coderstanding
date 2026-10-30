@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Run the Coderstanding CLI with this repo's .venv python (no install needed).
+# In a git worktree without its own .venv, fall back to the main checkout's .venv.
+set -euo pipefail
+repo="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+python="$repo/.venv/bin/python"
+if [[ ! -x "$python" ]]; then
+    main="$(cd "$(git -C "$repo" rev-parse --git-common-dir)/.." && pwd)"
+    python="$main/.venv/bin/python"
+fi
+export PYTHONPATH="$repo/scanner${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python" -m coderstanding "$@"

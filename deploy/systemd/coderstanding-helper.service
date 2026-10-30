@@ -1,0 +1,11 @@
+[Unit]
+Description=Coderstanding local helper (serve on 127.0.0.1:8517)
+
+[Service]
+ExecStart="@REPO@/bin/coderstanding" serve --port 8517
+Restart=on-failure
+RestartSec=5
+Nice=10
+
+[Install]
+WantedBy=default.target

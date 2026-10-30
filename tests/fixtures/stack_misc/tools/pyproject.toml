@@ -1,0 +1,6 @@
+[project]
+name = "tools"
+dependencies = ["PyYAML>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest"]

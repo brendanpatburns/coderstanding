@@ -1,0 +1,9 @@
+; The approved fan-out mock-up's sample (docs/DESIGN.md 12c) as a scannable project, for
+; side-by-side viewer checks: Player, VFX, AudioBus, ParticlePool.
+config_version=5
+
+[application]
+config/name="fanout_mock"
+
+[autoload]
+AudioBus="*res://audio_bus.gd"

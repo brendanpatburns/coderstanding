@@ -1,0 +1,935 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tours mock-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens copied from viewer/style.css, plus --code-hl / --hl-soft for this mock-up. */
+:root {
+  --bg: #f3f5f8; --surface: #ffffff; --ink: #141b24; --muted: #5a6574; --line: #d4dae3;
+  --accent: #2f58cc; --accent-ink: #ffffff; --derived: #b5620c; --hl: #d63f7a; --faded: #8d97a4;
+  --row: #eef2f8; --dim: #b9c1cc; --caution: #f2b705; --caution-ink: #1b1b1b; --error: #b3261e; --warn: #b45309;
+  --code-hl: rgba(214, 63, 122, 0.10); --hl-soft: #fbe9f0; --kw: #7a4fc4; --str: #2f7d32; --com: #8d97a4;
+  --stripe: rgba(240, 180, 0, 0.20);
+  --f-display: "Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --row: #1c2530; --dim: #3a4552; --error: #ff8a80; --warn: #f5b041;
+  --code-hl: rgba(255, 111, 166, 0.13); --hl-soft: #3a1f2c; --kw: #b892ff; --str: #8fd18f; --com: #6f7b89;
+  --stripe: rgba(240, 180, 0, 0.13);
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --row: #1c2530; --dim: #3a4552; --error: #ff8a80; --warn: #f5b041;
+  --code-hl: rgba(255, 111, 166, 0.13); --hl-soft: #3a1f2c; --kw: #b892ff; --str: #8fd18f; --com: #6f7b89;
+  --stripe: rgba(240, 180, 0, 0.13);
+  color-scheme: dark }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--f-body); }
+h1, h2, h3 { font-family: var(--f-display); margin: 0; }
+h1 { font-size: 1.15rem; } h2 { font-size: 1.05rem; } h3 { font-size: .92rem; }
+code, .mono { font-family: var(--f-mono); font-size: .9em; }
+.muted { color: var(--muted); }
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.top { display: flex; align-items: center; gap: 18px; padding: 8px 16px 0; border-bottom: 1px solid var(--line);
+  background: var(--surface); flex-wrap: wrap; }
+.top h1 { padding-bottom: 8px; }
+.appname { font: 12px var(--f-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-bottom: 8px; }
+.tabs { display: flex; gap: 2px; align-self: end; }
+.tabs button { border: 1px solid transparent; border-bottom: none; background: none; color: var(--muted);
+  padding: 7px 14px; font-weight: 500; font-size: 13.5px; cursor: pointer; border-radius: 7px 7px 0 0; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); background: var(--bg); border-color: var(--line); }
+.themebtn { margin-left: auto; margin-bottom: 8px; }
+
+.btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px;
+  padding: 6px 11px; font-size: 13px; cursor: pointer; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { color: var(--muted); cursor: default; opacity: .6; }
+.btn.small { padding: 3px 9px; font-size: 12.5px; }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+.chip { font: 11px var(--f-mono); color: var(--derived); border: 1px solid var(--derived); border-radius: 10px; padding: 0 7px; white-space: nowrap; }
+.chip.human { color: var(--muted); border-color: var(--line); }
+.chip.stale { color: var(--warn); border-color: var(--warn); }
+.tag { font: 11px var(--f-mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; white-space: nowrap; }
+.input { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 5px 8px; width: 100%; min-width: 0; }
+
+/* Page layout: tours list | stage (graph, player, code) | step panel */
+.layout { display: grid; grid-template-columns: 250px minmax(0, 1fr) 350px; min-height: calc(100vh - 47px); }
+.side { border-right: 1px solid var(--line); background: var(--surface); padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.tourlist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.tourlist button { width: 100%; text-align: left; border: 1px solid transparent; background: none; border-radius: 7px; padding: 7px 9px; cursor: pointer; display: grid; gap: 2px; }
+.tourlist button:hover { background: var(--row); }
+.tourlist button[aria-current="true"] { border-color: var(--accent); background: var(--row); }
+.tourlist .t { font-weight: 600; font-size: 13.5px; }
+.tourlist .m { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.side .hint { font-size: 12px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; margin-top: auto; }
+
+.stage { display: flex; flex-direction: column; min-width: 0; }
+.graphwrap { position: relative; border-bottom: 1px solid var(--line); background: var(--bg); }
+.graphwrap.editing { background-image: repeating-linear-gradient(135deg, var(--stripe) 0 14px, transparent 14px 28px); }
+.graph { display: block; width: 100%; height: auto; max-height: 46vh; }
+.legend { position: absolute; left: 12px; bottom: 8px; font-size: 11.5px; color: var(--muted); display: flex; gap: 12px; flex-wrap: wrap; pointer-events: none; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; vertical-align: -1px; }
+.selnote { position: absolute; right: 12px; bottom: 8px; font: 12px var(--f-mono); color: var(--muted); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; }
+
+.node rect.box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+.node text { font: 500 12.5px var(--f-mono); fill: var(--ink); }
+.node .fn { font: 11.5px var(--f-mono); fill: var(--hl); }
+.node .fnrow { fill: var(--hl-soft); }
+.node .file { font: 10px var(--f-mono); fill: var(--muted); }
+.node { cursor: pointer; transition: opacity .25s; }
+.node.target rect.box { stroke: var(--hl); stroke-width: 2.4; fill: var(--hl-soft); }
+.node.near { opacity: .55; }
+.node.rest { opacity: .16; }
+.node.sel rect.box { stroke: var(--accent); stroke-dasharray: 5 3; stroke-width: 2; }
+.edge path { fill: none; stroke: var(--faded); stroke-width: 1.3; transition: opacity .25s; }
+.edge.near path { opacity: .55; }
+.edge.rest path { opacity: .12; }
+.edge.target path { stroke: var(--hl); stroke-width: 2.6; }
+.edge.gen path { stroke-dasharray: none; }
+
+.player { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.player .playbtn { min-width: 84px; }
+.dots { display: flex; gap: 5px; align-items: center; flex-wrap: wrap; }
+.dots button { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--line); background: var(--bg); font: 600 10.5px var(--f-mono); color: var(--muted); cursor: pointer; padding: 0; position: relative; }
+.dots button.done { background: var(--row); color: var(--ink); }
+.dots button[aria-current="step"] { background: var(--hl); border-color: var(--hl); color: #fff; }
+.dots button.stale::after { content: ""; position: absolute; top: -2px; right: -2px; width: 7px; height: 7px; border-radius: 50%; background: var(--warn); border: 1px solid var(--surface); }
+.ctl { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.ctl select { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 6px; max-width: 170px; }
+.ttsnote { flex-basis: 100%; font-size: 12px; color: var(--warn); }
+.seek { flex-basis: 100%; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.seek input[type=range] { flex: 1 1 200px; min-width: 0; accent-color: var(--hl); height: 18px; margin: 0; }
+.seek input[type=range]:disabled { opacity: .4; }
+.seek .t { font: 12px var(--f-mono); color: var(--muted); font-variant-numeric: tabular-nums; min-width: 40px; }
+.simnote { flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
+.chip.gen { color: var(--accent); border-color: var(--accent); }
+.chip.none { color: var(--muted); border-color: var(--line); border-style: dashed; }
+.voicebox { display: grid; gap: 8px; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: var(--surface); }
+.voicebox .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.recdot { color: var(--error); font-weight: 600; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .recdot { animation: none; } }
+.tourlist li { position: relative; }
+.tourlist .mdbtn { position: absolute; right: 6px; top: 6px; border: 1px solid var(--line); background: var(--surface); border-radius: 5px; font: 600 10.5px var(--f-mono); color: var(--muted); padding: 1px 5px; cursor: pointer; width: auto; display: inline; }
+.tourlist .mdbtn:hover { border-color: var(--accent); color: var(--accent); }
+.tourlist button.pick { padding-right: 44px; }
+.cli pre { max-height: 220px; }
+
+.code { flex: 1; display: flex; flex-direction: column; min-height: 0; background: var(--surface); }
+.codehead { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.codehead .path { font: 500 12.5px var(--f-mono); overflow-wrap: anywhere; }
+.codehead .anchor { font-size: 12px; color: var(--muted); }
+.codehead a { margin-left: auto; color: var(--accent); font-size: 12.5px; text-decoration: none; white-space: nowrap; }
+.codehead a:hover { text-decoration: underline; }
+pre.src { margin: 0; padding: 8px 0; overflow-x: auto; font: 12.5px/1.6 var(--f-mono); }
+pre.src .ln { display: block; padding: 0 14px 0 0; white-space: pre; }
+pre.src .ln.hl { background: var(--code-hl); box-shadow: inset 3px 0 var(--hl); }
+pre.src .no { display: inline-block; width: 48px; padding-right: 12px; text-align: right; color: var(--muted); user-select: none; }
+pre.src .ln.hl .no { color: var(--hl); font-weight: 600; }
+.k { color: var(--kw); } .s { color: var(--str); } .c { color: var(--com); font-style: italic; }
+.stalebar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 6px 14px; font-size: 12.5px; color: var(--warn); border-bottom: 1px solid var(--line); background: var(--bg); }
+
+.panel { border-left: 1px solid var(--line); background: var(--bg); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.tourhead { display: grid; gap: 4px; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
+.tourhead .row, .stephead .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.stepno { font: 500 11px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.steptext { font-size: 14.5px; line-height: 1.6; }
+.steptext.speaking { box-shadow: inset 3px 0 var(--hl); padding-left: 10px; }
+.steptext .w { border-radius: 3px; transition: background-color .12s; }
+.steptext .w.now { background: var(--hl-soft); box-shadow: 0 0 0 2px var(--hl-soft); color: var(--ink); }
+.steptext .w.said { color: var(--muted); }
+.steptext .w.said .wl { color: var(--muted); }
+.wl { font: 12.5px var(--f-mono); color: var(--accent); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; cursor: pointer; }
+.wl:hover { border-color: var(--accent); }
+dl.targets { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; }
+dl.targets dt { font: 500 10.5px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding-top: 2px; }
+dl.targets dd { margin: 0; display: flex; gap: 5px; flex-wrap: wrap; }
+.steplist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; counter-reset: s; }
+.steplist li { display: flex; align-items: center; gap: 6px; }
+.steplist .go { flex: 1; min-width: 0; text-align: left; border: 1px solid transparent; background: none; border-radius: 6px; padding: 4px 7px; cursor: pointer; font-size: 13px; display: flex; gap: 7px; align-items: center; }
+.steplist .go:hover { background: var(--row); }
+.steplist .go[aria-current="step"] { background: var(--surface); border-color: var(--hl); }
+.steplist .n { font: 600 11px var(--f-mono); color: var(--muted); width: 16px; }
+.steplist .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.mv { border: 1px solid var(--line); background: var(--surface); border-radius: 5px; width: 24px; height: 24px; cursor: pointer; padding: 0; font: 600 12px var(--f-mono); color: var(--muted); }
+.mv:disabled { opacity: .35; cursor: default; }
+.sec { font: 500 10.5px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 4px; }
+.editbar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--caution); color: var(--caution-ink); border-radius: 7px; font-size: 13px; font-weight: 600; flex-wrap: wrap; }
+.editbar .btn { background: var(--caution); color: var(--caution-ink); border-color: var(--caution-ink); }
+.field { display: grid; gap: 4px; font-size: 12.5px; color: var(--muted); }
+textarea.input { min-height: 110px; resize: vertical; line-height: 1.5; }
+pre.md { margin: 0; font: 11.5px/1.5 var(--f-mono); background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; overflow-x: auto; max-height: 260px; }
+details summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+.kbd { font: 11px var(--f-mono); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 4px; background: var(--bg); }
+.toast { font-size: 12px; color: var(--muted); }
+
+@media (max-width: 1100px) { .layout { grid-template-columns: 210px minmax(0, 1fr) 300px; } }
+@media (max-width: 860px) {
+  .top { padding: 8px 16px 0; }
+  .layout { grid-template-columns: minmax(0, 1fr); min-height: 0; }
+  .side { border-right: none; border-bottom: 1px solid var(--line); padding: 12px 16px; }
+  .side .hint { display: none; }
+  .tourlist { flex-direction: row; overflow-x: auto; padding-bottom: 4px; }
+  .tourlist li { flex: none; width: 200px; }
+  .stage { display: contents; }
+  .graphwrap { order: 1; } .player { order: 2; } .panel { order: 3; } .code { order: 4; border-top: 1px solid var(--line); }
+  .panel { border-left: none; border-top: 1px solid var(--line); padding: 14px 16px; }
+  .player, .codehead { padding-left: 16px; padding-right: 16px; }
+  .graph { max-height: none; }
+  .legend { position: static; padding: 4px 16px 8px; }
+  .selnote { position: static; display: inline-block; margin: 0 16px 8px; }
+  .themebtn { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Coderstanding</h1>
+  <span class="appname">coderstanding</span>
+  <nav class="tabs" role="tablist">
+    <button role="tab" aria-selected="false" title="Mock-up: only the Tours tab works">Graph</button>
+    <button role="tab" aria-selected="false" title="Mock-up: only the Tours tab works">Stack &amp; deps</button>
+    <button role="tab" aria-selected="true">Tours</button>
+  </nav>
+  <button class="btn small themebtn" id="themeBtn" type="button">Theme: auto</button>
+</header>
+
+<div class="layout">
+  <aside class="side" aria-label="Tours">
+    <div class="side-head"><h2>Tours</h2><button class="btn small" id="newTour" type="button">+ New</button></div>
+    <input class="input" id="tourSearch" type="search" placeholder="Search title, step text, class…" aria-label="Search tours">
+    <ul class="tourlist" id="tourList"></ul>
+    <div class="hint">Stored as <code>.coderstanding/tours/&lt;id&gt;.md</code>, committed with the code. The AI lists them with <code>coderstanding tours</code> and reads one with <code>coderstanding tour</code>.</div>
+  </aside>
+
+  <main class="stage">
+    <div class="graphwrap" id="graphWrap">
+      <svg class="graph" id="graph" viewBox="0 0 900 412" role="img" aria-label="Class graph with the step's targets highlighted"></svg>
+      <div class="selnote" id="selNote">click a class to select it</div>
+      <div class="legend"><span><i style="background:var(--hl)"></i>step targets</span><span><i style="background:var(--faded);opacity:.55"></i>one connection away</span><span><i style="background:var(--dim)"></i>rest (spec-focus fade)</span></div>
+    </div>
+
+    <div class="player" id="player">
+      <button class="btn" id="backBtn" type="button" title="Back (Left arrow)">&#9664; Back</button>
+      <button class="btn primary playbtn" id="playBtn" type="button" title="Play / Pause (Space)">&#9654; Play</button>
+      <button class="btn" id="nextBtn" type="button" title="Next (Right arrow)">Next &#9654;</button>
+      <div class="dots" id="dots" aria-label="Steps"></div>
+      <label class="ctl">Speed <select id="speed"><option value="0.8">0.8×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label>
+      <label class="ctl">Voice <select id="voice"><option value="">Browser default</option></select></label>
+      <div class="ttsnote" id="ttsNote" hidden></div>
+      <div class="seek"><span class="t" id="tNow">0:00</span><input type="range" id="seekBar" min="0" max="1000" value="0" aria-label="Seek in this step"><span class="t" id="tDur">0:00</span><span id="srcChipP"></span></div>
+      <div class="simnote" id="simNote" hidden>Simulated in this mock-up: step 2's sample recording is a silent timeline (a browser voice, if any, stands in for it). Record your own in Edit tour to hear a real one.</div>
+    </div>
+
+    <section class="code" aria-label="Code for this step">
+      <div class="codehead">
+        <span class="path" id="codePath"></span>
+        <span class="anchor" id="codeAnchor"></span>
+        <a id="openEditor" href="#">Open in editor &#8599;</a>
+      </div>
+      <div class="stalebar" id="staleBar" hidden></div>
+      <pre class="src" id="src"></pre>
+    </section>
+  </main>
+
+  <aside class="panel" id="panel" aria-label="Step"></aside>
+</div>
+
+<script>
+"use strict";
+const REPO = "/path/to/coderstanding";
+// Real excerpts from the repo at 9040ef2 (built into the mock-up with sed -n).
+const EXCERPTS = {
+ "cli.py:26-34": [
+  "def run_scan(args):",
+  "    root = Path(args.path)",
+  "    if not root.is_dir():",
+  "        sys.exit(f\"not a directory: {root}\")",
+  "    out = Path(args.output) if args.output else default_output(root)",
+  "    cache_dir = out.parent / \"cache\" if args.output else None  # -o keeps the scanned repo untouched",
+  "    graph = scan_repo(root, use_cache=not args.no_cache, cache_dir=cache_dir, **scan_settings(args))",
+  "    write_graph(graph, out)",
+  "    print(f\"{len(graph.nodes)} nodes, {len(graph.edges)} edges -> {out}\")"
+ ],
+ "scan.py:86-93": [
+  "    parsed = parse_files(root, modules, skip_dirs, cache, workers, parallel_min)",
+  "    graph = build_graph(root, parsed, repo=root.name)",
+  "    read_stack(root, graph, skip_dirs)",
+  "    mark_tests(graph)",
+  "    guess_levels(graph, hub_threshold=hub_threshold)",
+  "    check_graph(graph)",
+  "    graph.fingerprints = compute_fingerprints(root, graph)",
+  "    graph.scanned_at = datetime.now(timezone.utc).strftime(\"%Y-%m-%dT%H:%M:%SZ\")"
+ ],
+ "filewalk.py:57-61": [
+  "def assign_files(root, modules, skip_dirs=DEFAULT_SKIP_DIRS):",
+  "    \"\"\"[(rel_path, module)] for every file, once per module whose patterns match it.\"\"\"",
+  "    files = list_files(root, [p for m in modules for p in m.patterns], skip_dirs)",
+  "    return [(rel, module) for rel in files for module in modules",
+  "            if any(matches(rel, p) for p in module.patterns)]"
+ ],
+ "languages/python.py:342-348": [
+  "@register",
+  "class PythonModule(LanguageModule):",
+  "    name = \"python\"",
+  "    patterns = (\"*.py\",)",
+  "",
+  "    def parse(self, ctx):",
+  "        return PythonFile(ctx).read()"
+ ],
+ "resolver.py:137-150": [
+  "def build_graph(root, parsed_files, repo=\"\"):",
+  "    \"\"\"Make the graph: nodes from declarations, then edges from resolved refs.\"\"\"",
+  "    graph = Graph(repo=repo)",
+  "    resolver = Resolver(root, graph)",
+  "    for parsed in parsed_files:",
+  "        add_declarations(graph, resolver, parsed)",
+  "        for name, target in parsed.result.global_aliases.items():",
+  "            resolver.global_aliases[name] = (target, parsed)",
+  "    for parsed in parsed_files:",
+  "        apply_marks(graph, resolver, parsed)",
+  "        for ref in parsed.result.refs:",
+  "            add_ref(graph, resolver, parsed, ref)",
+  "    graph.fold_held_edges()",
+  "    return graph"
+ ],
+ "levels.py:94-108": [
+  "    distance = {node_id: 0 for node_id in top_nodes(graph, children)}",
+  "    if any(is_app_start(n) for n in graph.nodes.values()):",
+  "        for node_id, node in graph.nodes.items():",
+  "            if is_tool(node):",
+  "                distance.setdefault(node_id, TOOL_DISTANCE)",
+  "    distance.update({node_id: 0 for node_id in hubs})",
+  "    queue = deque(distance)",
+  "    while queue:",
+  "        node_id = queue.popleft()",
+  "        for child in children[node_id]:",
+  "            if child not in distance:",
+  "                distance[child] = distance[node_id] + 1",
+  "                queue.append(child)",
+  "    for node_id, node in graph.nodes.items():",
+  "        node.level = min(distance.get(node_id, max_level) + 1, max_level)"
+ ],
+ "graph_json.py:111-115": [
+  "def write_graph(graph, path):",
+  "    path = Path(path)",
+  "    path.parent.mkdir(parents=True, exist_ok=True)",
+  "    path.write_text(json.dumps(graph_to_json(graph), indent=1, ensure_ascii=False) + \"\\n\",",
+  "                    encoding=\"utf-8\")"
+ ]
+};
+
+// ---- Sample graph (subset of Coderstanding's own scanner, real imports) ----
+const W = 128, H = 34;
+const NODES = {
+  cli:          { x: 20,  y: 190, file: "cli.py" },
+  graph_json:   { x: 200, y: 40,  file: "graph_json.py" },
+  scan:         { x: 200, y: 190, file: "scan.py" },
+  filewalk:     { x: 410, y: 14,  file: "filewalk.py" },
+  cache:        { x: 410, y: 72,  file: "cache.py" },
+  language:     { x: 410, y: 132, file: "language.py" },
+  stack:        { x: 410, y: 192, file: "stack.py" },
+  resolver:     { x: 410, y: 252, file: "resolver.py" },
+  levels:       { x: 410, y: 312, file: "levels.py" },
+  checks:       { x: 410, y: 370, file: "checks.py" },
+  PythonModule: { x: 640, y: 132, file: "languages/python.py" },
+  model:        { x: 640, y: 290, file: "model.py" },
+  views:        { x: 640, y: 30,  file: "views.py" },
+  textout:      { x: 760, y: 200, file: "textout.py" },
+};
+const EDGES = [
+  ["cli", "scan"], ["cli", "graph_json"], ["cli", "views"], ["cli", "textout"],
+  ["scan", "filewalk"], ["scan", "cache"], ["scan", "language"], ["scan", "stack"], ["scan", "resolver"],
+  ["scan", "levels"], ["scan", "checks"], ["graph_json", "cache"],
+  ["PythonModule", "language", "gen"], ["resolver", "model"], ["levels", "checks"], ["levels", "model"],
+  ["textout", "views"],
+];
+
+// ---- Tours (the sample tour is complete; the others are list entries only) ----
+const TOURS = [
+  { id: "scan-pipeline", title: "How a scan works", by: "you", ai: false, steps: null },
+  { id: "zoom-derived", title: "Zoom and derived lines", by: "claude", ai: true, count: 5 },
+  { id: "notes-merge", title: "Notes: which value wins", by: "you", ai: false, count: 4 },
+  { id: "new-language", title: "Adding a language module", by: "claude", ai: true, count: 6 },
+  { id: "hosted-helper", title: "Hosted copy and the local helper", by: "you", ai: false, count: 8 },
+];
+const STEPS = [
+  { title: "Where a scan starts", targets: ["cli#run_scan", "cli>scan"], by: "you",
+    code: { file: "cli.py", at: "cli#run_scan", atLine: 26, from: 26, to: 34, mark: [32, 33] },
+    text: "Everything begins with the scan command. [[cli#run_scan]] checks the folder and picks where graph.json goes. Line 32 is the whole scan, handed to [[scan#scan_repo]]; line 33 saves the result." },
+  { title: "The pipeline in eight lines", targets: ["scan#scan_repo"], by: "you",
+    code: { file: "scan.py", at: "scan#scan_repo", atLine: 72, from: 86, to: 93, mark: [86, 87, 88, 89, 90, 91] },
+    text: "[[scan#scan_repo]] is the pipeline: parse every file, build the graph, read the tech stack, mark tests, guess levels and run the checks. The next steps follow these calls in order." },
+  { title: "Which files, read by whom", targets: ["scan>filewalk", "filewalk#assign_files"], by: "you",
+    code: { file: "filewalk.py", at: "filewalk#assign_files", atLine: 57, from: 57, to: 61, mark: [59, 60, 61] },
+    text: "First the file walk. [[filewalk#assign_files]] lists the repo's files, from git when it can, and pairs each one with every language module whose patterns match. One file can be read by more than one module." },
+  { title: "A language module reads one file", targets: ["scan>language", "PythonModule#parse"], by: "claude", ai: true,
+    stale: { was: "339-345", hashWas: "9c41e2", hashNow: "51ab07" },
+    code: { file: "languages/python.py", at: "PythonModule", atLine: 342, from: 342, to: 348, mark: [345, 347, 348] },
+    text: "Each pair goes to a language module. The Python reader, [[PythonModule]], only names its file pattern and parses one file into a FileResult. It never resolves names: that is the shared core's job." },
+  { title: "Declarations become nodes, refs become edges", targets: ["scan>resolver", "resolver#build_graph", "resolver>model"], by: "you",
+    code: { file: "resolver.py", at: "resolver#build_graph", atLine: 137, from: 137, to: 150, mark: [141, 142, 147, 148] },
+    text: "[[resolver#build_graph]] makes the graph in two passes. First every declaration becomes a node. Then every raw reference is resolved into an edge, or into an outside reference when nothing in the repo matches." },
+  { title: "A first guess at levels", targets: ["scan>levels", "levels#guess_levels"], by: "claude", ai: true,
+    code: { file: "levels.py", at: "levels#guess_levels", atLine: 80, from: 94, to: 108, mark: [101, 102, 103, 104, 105, 106, 108] },
+    text: "[[levels#guess_levels]] gives each node a rough level. App starts and hubs are level one; everything else is one more than the node that holds it, found breadth first. Curation fixes the rest later." },
+  { title: "Saved as graph.json", targets: ["cli>graph_json", "graph_json#write_graph"], by: "you",
+    code: { file: "graph_json.py", at: "graph_json#write_graph", atLine: 111, from: 111, to: 115, mark: [114, 115] },
+    text: "Back in the command, [[graph_json#write_graph]] saves the graph as one indented JSON file. The viewer and the slim text CLI both read it from there." },
+];
+TOURS[0].steps = STEPS;
+// Sample audio states. Recordings you make in Edit tour are real (MediaRecorder); step 2's is a stand-in.
+STEPS.forEach((s) => { s.rec = null; });               // no recording: the browser voice reads it, seek counts words
+STEPS[1].rec = { by: "you", sample: true, hash: textHash(spokenText(STEPS[1])), dur: 14 };
+
+// ---- State ----
+let tour = TOURS[0], cur = 0, playing = false, editing = false, selection = null, editIdx = 0;
+let speakToken = 0, timerHandle = null, timerAnim = null, chosenVoice = "";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const isAi = (o) => !!o.ai;
+const authorChip = (o) => isAi(o) ? `<span class="chip" title="by ${esc(o.by)}">AI draft</span>` : `<span class="chip human" title="by ${esc(o.by)}">${esc(o.by)}</span>`;
+
+// ---- Targets: same syntax as the CLI: Name, A>B, Name#function ----
+function parseTarget(t) {
+  if (t.includes(">")) { const [a, b] = t.split(">"); return { edge: [a, b] }; }
+  const [node, fn] = t.split("#");
+  return { node, fn };
+}
+function focusOf(step) {
+  const nodes = new Set(), edges = new Set(), fns = {};
+  for (const t of step.targets) {
+    const p = parseTarget(t);
+    if (p.edge) { edges.add(p.edge.join(">")); nodes.add(p.edge[0]); nodes.add(p.edge[1]); }
+    else { nodes.add(p.node); if (p.fn) fns[p.node] = p.fn; }
+  }
+  return { nodes, edges, fns };
+}
+
+// ---- Graph drawing (inline SVG) ----
+function boxOf(id, fns) { const n = NODES[id]; return { x: n.x, y: n.y, w: W, h: fns[id] ? H + 22 : H }; }
+function clip(a, b) { // point where the line from a's centre to b's centre leaves box a
+  const cx = a.x + a.w / 2, cy = a.y + a.h / 2, dx = b.x + b.w / 2 - cx, dy = b.y + b.h / 2 - cy;
+  const s = Math.min(Math.abs((a.w / 2) / (dx || 1e-9)), Math.abs((a.h / 2) / (dy || 1e-9)));
+  return [cx + dx * s, cy + dy * s];
+}
+function drawGraph() {
+  const step = tour.steps ? tour.steps[cur] : null;
+  const f = step ? focusOf(step) : { nodes: new Set(), edges: new Set(), fns: {} };
+  const near = new Set();
+  for (const [a, b] of EDGES) { if (f.nodes.has(a)) near.add(b); if (f.nodes.has(b)) near.add(a); }
+  let svg = `<defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="var(--faded)" stroke-width="1.5"/></marker>
+    <marker id="arrHl" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M1 1 L9 5 L1 9" fill="none" stroke="var(--hl)" stroke-width="1.7"/></marker>
+    <marker id="tri" viewBox="0 0 12 12" refX="11" refY="6" markerWidth="10" markerHeight="10" orient="auto"><path d="M1 1 L11 6 L1 11 Z" fill="var(--surface)" stroke="var(--faded)" stroke-width="1.3"/></marker>
+  </defs>`;
+  for (const [a, b, kind] of EDGES) {
+    const key = a + ">" + b, A = boxOf(a, f.fns), B = boxOf(b, f.fns);
+    const [x1, y1] = clip(A, B), [x2, y2] = clip(B, A);
+    const cls = f.edges.has(key) ? "target" : (f.nodes.has(a) || f.nodes.has(b)) ? "near" : step ? "rest" : "";
+    const marker = kind === "gen" ? "tri" : cls === "target" ? "arrHl" : "arr";
+    svg += `<g class="edge ${cls} ${kind || ""}"><title>${key}</title><path d="M${x1.toFixed(1)} ${y1.toFixed(1)} L${x2.toFixed(1)} ${y2.toFixed(1)}" marker-end="url(#${marker})"/></g>`;
+  }
+  for (const id of Object.keys(NODES)) {
+    const b = boxOf(id, f.fns), n = NODES[id];
+    const cls = f.nodes.has(id) ? "target" : near.has(id) ? "near" : step ? "rest" : "";
+    svg += `<g class="node ${cls} ${selection && selection.startsWith(id) ? "sel" : ""}" data-id="${id}" tabindex="0" role="button" aria-label="${id}">
+      <rect class="box" x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6"/>
+      <text x="${b.x + 10}" y="${b.y + 21}">${id}</text>`;
+    if (f.fns[id]) svg += `<rect class="fnrow" x="${b.x + 4}" y="${b.y + H - 2}" width="${b.w - 8}" height="20" rx="3"/><text class="fn" data-fn="${f.fns[id]}" x="${b.x + 12}" y="${b.y + H + 12}">${f.fns[id]}()</text>`;
+    svg += `<title>${n.file}</title></g>`;
+  }
+  $("graph").innerHTML = svg;
+}
+$("graph").addEventListener("click", (e) => {
+  const g = e.target.closest(".node"); if (!g) return;
+  const fn = e.target.closest(".fn");
+  selection = fn ? `${g.dataset.id}#${fn.dataset.fn}` : g.dataset.id;
+  $("selNote").textContent = "selected: " + selection;
+  drawGraph(); if (editing) renderPanel();
+});
+$("graph").addEventListener("keydown", (e) => { if (e.key === "Enter" && e.target.closest(".node")) e.target.closest(".node").dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+
+// ---- Code pane: real lines, real numbers ----
+function highlightPy(line) {
+  const re = /(#.*$)|("""[^]*?"""|"[^"]*"|'[^']*')|\b(def|class|return|for|in|if|not|and|or|is|None|True|False|while|with|as|try|except|import|from|else|elif|lambda)\b/g;
+  let out = "", last = 0, m;
+  while ((m = re.exec(line))) {
+    out += esc(line.slice(last, m.index));
+    out += m[1] ? `<span class="c">${esc(m[1])}</span>` : m[2] ? `<span class="s">${esc(m[2])}</span>` : `<span class="k">${m[3]}</span>`;
+    last = re.lastIndex;
+  }
+  return out + esc(line.slice(last));
+}
+function renderCode() {
+  const step = tour.steps[cur], c = step.code, path = "scanner/coderstanding/" + c.file;
+  const lines = EXCERPTS[`${c.file}:${c.from}-${c.to}`];
+  $("codePath").textContent = `${path}:${c.from}-${c.to}`;
+  $("codeAnchor").textContent = `anchored on ${c.at}`;
+  $("openEditor").href = "vscode://file" + encodeURI(`${REPO}/${path}`) + ":" + (c.mark[0] || c.from);
+  $("openEditor").title = `Open ${path} at line ${c.mark[0] || c.from} in VS Code`;
+  $("src").innerHTML = lines.map((l, i) => {
+    const no = c.from + i;
+    return `<span class="ln${c.mark.includes(no) ? " hl" : ""}"><span class="no">${no}</span>${highlightPy(l)}</span>`;
+  }).join("");
+  const bar = $("staleBar");
+  if (step.stale) {
+    bar.hidden = false;
+    bar.innerHTML = `<span class="chip stale">code changed since written</span><span>The anchor <code>${esc(c.at)}</code> still exists; the excerpt moved from lines ${step.stale.was} to ${c.from}-${c.to} and its text changed (hash ${step.stale.hashWas} → ${step.stale.hashNow}). Lines shown are today's.</span><button class="btn small" type="button" data-act="restamp" title="The step still explains this code: store today\'s fingerprint">Still true</button>`;
+  } else bar.hidden = true;
+}
+
+// ---- Step panel (view) and editor ----
+function wikiHtml(text) {
+  return esc(text).replace(/\[\[([^\]]+)\]\]/g, (_, t) => `<span class="wl" data-target="${t}" role="link" tabindex="0" title="Select ${t}">${t}</span>`);
+}
+function speakable(text) { // a function declaration: STEPS setup calls it before this line runs
+  return text.replace(/\[\[([^\]]+)\]\]/g, (_, t) => t.replace(/[#_]/g, " ").replace(">", " to "));
+}
+function spokenText(step) { // what TTS reads: link text without brackets, # and _ as spaces
+  return step.title + ". " + speakable(step.text);
+}
+function followHtml(step) { // step text as word spans; data-s/n = the span's first spoken word and how many it speaks as
+  let at = step.title.split(/\s+/).filter(Boolean).length;
+  return step.text.split(/\s+/).filter(Boolean).map((tok) => {
+    const n = speakable(tok).split(/\s+/).filter(Boolean).length, html = `<span class="w" data-s="${at}" data-n="${n}">${wikiHtml(tok)}</span>`;
+    at += n;
+    return html;
+  }).join(" ");
+}
+function staleCount() { return tour.steps.filter((s) => s.stale).length; }
+function aiCount() { return tour.steps.filter(isAi).length; }
+function renderPanel() {
+  const p = $("panel");
+  if (!tour.steps) {
+    p.innerHTML = `<div class="tourhead"><h2>${esc(tour.title)}</h2><div class="row">${authorChip(tour)}<span class="muted">${tour.count} steps</span></div></div><p class="muted">Only "How a scan works" is filled in for this mock-up.</p>`;
+    return;
+  }
+  const step = tour.steps[cur], n = tour.steps.length;
+  const head = `<div class="tourhead">
+      <h2>${esc(tour.title)}</h2>
+      <div class="row">${authorChip(tour)}<span class="muted" style="font-size:12px">${n} steps · ${aiCount()} AI-draft steps${staleCount() ? ` · ${staleCount()} changed` : ""}</span>
+      <span style="margin-left:auto;display:flex;gap:6px"><button class="btn small" type="button" data-act="md" title="Download ${esc(tour.id)}.md (same export as coderstanding tour --md)">Save as Markdown</button>
+      <button class="btn small ${editing ? "on" : ""}" id="editBtn" type="button">${editing ? "Done" : "Edit tour"}</button></span></div>
+    </div>`;
+  p.innerHTML = head + (editing ? editorHtml() : viewHtml(step, n));
+}
+function viewHtml(step, n) {
+  return `<div class="stephead">
+      <div class="row"><span class="stepno">Step ${cur + 1}/${n}</span>${authorChip(step)}${isAi(step) ? `<button class="btn small" type="button" data-act="accept">Accept</button>` : ""}${step.stale ? `<span class="chip stale" title="The code under this step changed since it was written">changed since written</span>` : ""}</div>
+      <h3 style="font-size:1.05rem;margin-top:4px">${esc(step.title)}</h3>
+    </div>
+    <div class="row" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center"><span class="stepno">Voice</span>${sourceChip(step)}</div>
+    <div class="steptext ${playing ? "speaking" : ""}" id="stepText">${followHtml(step)}</div>
+    <dl class="targets"><dt>Shows</dt><dd>${step.targets.map((t) => `<span class="wl" data-target="${t}" tabindex="0" role="link">${t}</span>`).join("")}</dd>
+      <dt>Code</dt><dd><code>${esc(step.code.at)}</code><span class="muted" style="font-size:12px">lines ${step.code.from}-${step.code.to} now</span></dd></dl>
+    <div class="sec">All steps</div>
+    <ol class="steplist">${tour.steps.map((s, i) => `<li><button class="go" type="button" data-go="${i}" ${i === cur ? 'aria-current="step"' : ""}><span class="n">${i + 1}</span><span class="nm">${esc(s.title)}</span>${isAi(s) ? '<span class="chip">AI</span>' : ""}${s.stale ? '<span class="chip stale">!</span>' : ""}</button></li>`).join("")}</ol>
+    <details class="cli"><summary>Step as AI text</summary><pre class="md" id="cliText">${esc(tourText(cur))}</pre><button class="btn small" type="button" data-act="copycli" style="margin-top:6px">Copy for AI</button> <span class="toast" id="cliToast"></span></details>
+    <p class="muted" style="font-size:12px;margin:0">Keys: <span class="kbd">←</span> <span class="kbd">→</span> step · <span class="kbd">Space</span> play/pause · <span class="kbd">Home</span> first step. Links select their target in the graph.</p>`;
+}
+function editorHtml() {
+  const s = tour.steps[editIdx];
+  return `<div class="editbar">Editing tour <span style="font-weight:400">· saves to .coderstanding/tours/${tour.id}.md</span></div>
+    <button class="btn" type="button" data-act="addsel" ${selection ? "" : "disabled"}>+ Add step from selection${selection ? `: ${esc(selection)}` : ""}</button>
+    ${selection ? "" : '<span class="muted" style="font-size:12px;margin-top:-6px">Click a class or a function row in the graph first.</span>'}
+    <div class="sec">Steps (order)</div>
+    <ol class="steplist">${tour.steps.map((st, i) => `<li>
+      <button class="mv" type="button" data-up="${i}" ${i === 0 ? "disabled" : ""} aria-label="Move up">↑</button>
+      <button class="mv" type="button" data-down="${i}" ${i === tour.steps.length - 1 ? "disabled" : ""} aria-label="Move down">↓</button>
+      <button class="go" type="button" data-edit="${i}" ${i === editIdx ? 'aria-current="step"' : ""}><span class="n">${i + 1}</span><span class="nm">${esc(st.title)}</span>${isAi(st) ? '<span class="chip">AI</span>' : ""}</button>
+      <button class="mv" type="button" data-del="${i}" aria-label="Delete step" title="Delete step">×</button></li>`).join("")}</ol>
+    <div class="sec">Step ${editIdx + 1}</div>
+    <label class="field">Title<input class="input" id="edTitle" value="${esc(s.title)}"></label>
+    <label class="field">Targets (CLI syntax: Name, A&gt;B, Name#function)<input class="input mono" id="edTargets" value="${esc(s.targets.join(", "))}"></label>
+    <label class="field">Code: anchor and lines inside it<span style="display:flex;gap:6px"><input class="input mono" id="edAt" value="${esc(s.code.at)}" style="flex:2"><input class="input mono" id="edLines" value="+${s.code.from - s.code.atLine}..+${s.code.to - s.code.atLine}" style="flex:1" aria-label="Line offsets"></span></label>
+    <label class="field">Text (spoken by Play; [[links]] work)<textarea class="input" id="edText">${esc(s.text)}</textarea></label>
+    ${voiceBoxHtml(s, editIdx)}
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small" type="button" data-act="preview">Preview step</button>${isAi(s) ? '<button class="btn small" type="button" data-act="accept">Accept AI draft</button>' : ""}<button class="btn small" type="button" data-act="aidraft">Ask AI to draft text</button><span class="toast" id="toast"></span></div>
+    <details><summary>File preview</summary><pre class="md" id="mdPreview">${esc(toMarkdown())}</pre></details>`;
+}
+function voiceBoxHtml(s, i) {
+  const src = source(s), recording = rec && rec.step === i;
+  let row;
+  if (recording) row = `<span class="recdot">● Recording</span><span class="mono" id="recTime">0:00</span><button class="btn small primary" type="button" data-act="recstop">Stop</button>`;
+  else if (s.rec) row = `<button class="btn small" type="button" data-act="rec">Re-record</button><button class="btn small" type="button" data-act="recdel">Delete recording</button><span class="muted" style="font-size:12px">${fmt(s.rec.dur)}${s.rec.size ? ` · ${Math.max(1, Math.round(s.rec.size / 1024))} kB · ${esc((s.rec.mime || "").split(";")[0] || "audio")}` : " · sample"}</span>`;
+  else row = `<button class="btn small" type="button" data-act="rec" ${rec ? "disabled" : ""}>● Record</button>`;
+  return `<div class="voicebox"><div class="row"><span class="stepno">Voice</span><span id="srcChipE">${sourceChip(s)}</span></div>
+    <div class="row">${row}</div>
+    <span class="muted" style="font-size:11.5px">Optional. Your recording plays instead of the read-aloud voice; saved as .coderstanding/tours/${esc(tour.id)}/s${i + 1}.rec.webm (named by the step's key, so reordering keeps it). Without one, the browser voice reads the text and the seek bar counts words.</span></div>`;
+}
+function toMarkdown() { // the file format of DESIGN 7c: structure in front matter, text in the body
+  const lines = ["---", `id: ${tour.id}`, `title: ${tour.title}`, `by: ${tour.by}`, "steps:"];
+  for (const s of tour.steps) {
+    const c = s.code, rel = (n) => "+" + (n - c.atLine);
+    lines.push(`  - targets: [${s.targets.join(", ")}]`,
+      `    code: {at: ${c.at}, lines: ${rel(c.from)}..${rel(c.to)}, mark: [${c.mark.map(rel).join(", ")}], fp: ${s.stale ? s.stale.hashWas + "aa" : "3f" + (c.to - c.atLine) + "a2c1b"}}`);
+    if (s.ai) lines.push(`    by: ${s.by}`, "    ai: true");
+  }
+  lines.push("---");
+  for (const s of tour.steps) lines.push("", `## ${s.title}`, s.text);
+  return lines.join("\n");
+}
+
+// ---- Panel events ----
+$("panel").addEventListener("click", (e) => {
+  const t = e.target.closest("button, .wl"); if (!t) return;
+  const d = t.dataset;
+  if (t.id === "editBtn") { editing = !editing; editIdx = cur; $("graphWrap").classList.toggle("editing", editing); render(); return; }
+  if (d.go) return goTo(+d.go);
+  if (d.target) { selection = d.target; $("selNote").textContent = "selected: " + selection; drawGraph(); return; }
+  if (d.edit) { saveEditor(); editIdx = +d.edit; goTo(editIdx); return; }
+  if (d.up || d.down) {
+    saveEditor();
+    const i = +(d.up || d.down), j = d.up ? i - 1 : i + 1, st = tour.steps;
+    [st[i], st[j]] = [st[j], st[i]]; editIdx = j; cur = j; render(); loadTrack(); return;
+  }
+  if (d.del) { if (tour.steps.length > 1) { tour.steps.splice(+d.del, 1); editIdx = Math.min(editIdx, tour.steps.length - 1); cur = editIdx; render(); loadTrack(); } return; }
+  if (d.act === "accept") { const s = tour.steps[editing ? editIdx : cur]; s.ai = false; s.by = "you"; render(); return; }
+  if (d.act === "preview") { saveEditor(); cur = editIdx; render(); loadTrack(); return; }
+  if (d.act === "md") { downloadMarkdown(tour); return; }
+  if (d.act === "copycli") { navigator.clipboard && navigator.clipboard.writeText(tourText(cur)).then(() => { $("cliToast").textContent = "Copied"; }, () => { $("cliToast").textContent = "Copy blocked"; }); return; }
+  if (d.act === "rec") { saveEditor(false); startRecording(editIdx); return; }
+  if (d.act === "recstop") { stopRecording(); return; }
+  if (d.act === "recdel") { deleteRecording(editIdx); return; }
+  if (d.act === "aidraft") { $("toast").textContent = "Mock: the AI would write an AI-draft text from this step's code and calls."; return; }
+  if (d.act === "addsel" && selection) { addStepFromSelection(); return; }
+});
+$("staleBar").addEventListener("click", (e) => { if (e.target.dataset.act === "restamp") { delete tour.steps[cur].stale; render(); } });
+$("panel").addEventListener("input", (e) => {
+  if (!e.target.closest(".field")) return;
+  saveEditor(false);
+  $("mdPreview").textContent = toMarkdown();
+  $("srcChipE").innerHTML = sourceChip(tour.steps[editIdx]); // text changed: a recording goes out of date
+  if (editIdx === cur && !playing) loadTrack(); // new word count, new length
+});
+function saveEditor(redraw = true) {
+  if (!editing || !$("edTitle")) return;
+  const s = tour.steps[editIdx];
+  s.title = $("edTitle").value; s.text = $("edText").value;
+  s.targets = $("edTargets").value.split(",").map((x) => x.trim()).filter(Boolean);
+  s.code.at = $("edAt").value.trim();
+  if (redraw) render();
+}
+function addStepFromSelection() {
+  saveEditor(false);
+  const node = selection.split("#")[0];
+  const fn = selection.includes("#") ? selection : node;
+  const file = NODES[node] ? NODES[node].file : "cli.py";
+  const known = STEPS.find((s) => s.code.file === file) || STEPS[0];
+  tour.steps.splice(editIdx + 1, 0, {
+    title: "New step: " + selection, targets: [selection], by: "you",
+    code: { ...known.code, at: fn, mark: [...known.code.mark] },
+    text: `Explain [[${selection}]] here.`, rec: null, gen: null,
+  });
+  editIdx += 1; cur = editIdx; render(); loadTrack();
+}
+
+// ---- Navigation ----
+function goTo(i) {
+  if (!tour.steps) return;
+  const keepPlaying = playing;
+  cur = Math.max(0, Math.min(tour.steps.length - 1, i));
+  if (editing) editIdx = cur;
+  render();
+  loadTrack(); // stops any audio or speech in progress
+  if (keepPlaying) startTrack(); // Next/Back while playing: play the new step from its start
+}
+function renderDots() {
+  $("dots").innerHTML = tour.steps ? tour.steps.map((s, i) => `<button type="button" data-go="${i}" class="${i < cur ? "done" : ""} ${s.stale ? "stale" : ""}" ${i === cur ? 'aria-current="step"' : ""} title="Step ${i + 1}: ${esc(s.title)}${s.stale ? " (changed since written)" : ""}">${i + 1}</button>`).join("") : "";
+}
+$("dots").addEventListener("click", (e) => { const b = e.target.closest("[data-go]"); if (b) goTo(+b.dataset.go); });
+$("backBtn").onclick = () => goTo(cur - 1);
+$("nextBtn").onclick = () => goTo(cur + 1);
+$("playBtn").onclick = () => (playing ? pause() : play());
+document.addEventListener("keydown", (e) => {
+  if (e.target.closest("input, textarea, select")) return;
+  if (e.key === "ArrowRight") { e.preventDefault(); goTo(cur + 1); }
+  else if (e.key === "ArrowLeft") { e.preventDefault(); goTo(cur - 1); }
+  else if (e.key === "Home") { e.preventDefault(); goTo(0); }
+  else if (e.key === " " && !e.target.closest("button")) { e.preventDefault(); playing ? pause() : play(); }
+});
+
+// ---- Audio per step (DESIGN 7c Audio): your recording, else the browser voice with a word-count seek bar ----
+const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
+let voiceOK = false, track = null, uttToken = 0, clockAnim = null, rec = null;
+function textHash(s) { let h = 2166136261; for (const c of s) { h ^= c.codePointAt(0); h = Math.imul(h, 16777619); } return (h >>> 0).toString(16).padStart(8, "0").slice(0, 8); }
+function stepHash(s) { return textHash(spokenText(s)); }
+function estDur(s) { return Math.max(4, spokenText(s).split(/\s+/).length * 0.4); } // seconds at 1x: a typical speaking pace, refined by the voice's word events
+function source(s) { // what the step plays, and whether its audio still matches the text
+  if (s.rec) return { kind: "rec", stale: s.rec.hash !== stepHash(s) };
+  return { kind: "voice", stale: false };
+}
+function sourceChip(s) {
+  const src = source(s);
+  if (src.kind === "rec") return `<span class="chip human" title="Recorded by ${esc(s.rec.by)}">Your recording · ${esc(s.rec.by)}</span>${src.stale ? '<span class="chip stale" title="The text changed after this was recorded; it still plays">Changed text: recording out of date</span>' : ""}`;
+  return '<span class="chip gen" title="The browser voice reads the step text; the seek bar moves and seeks word by word">Read aloud · seek by words</span>';
+}
+function playMode(s) { // file = your recording; sim = the sample stand-in recording; words = browser voice, seek by word count
+  if (s.rec) return s.rec.url ? "file" : "sim";
+  return "words";
+}
+const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
+function voices() { return synth ? synth.getVoices() : []; }
+function fillVoices() {
+  const list = voices(), sel = $("voice");
+  voiceOK = list.length > 0;
+  sel.innerHTML = list.length ? `<option value="">Browser default</option>` + list.map((v) => `<option value="${esc(v.name)}">${esc(v.name)} (${esc(v.lang)})</option>`).join("") : `<option>No voices found</option>`;
+  if (list.length) sel.value = chosenVoice;
+  sel.disabled = !list.length;
+}
+if (synth) { fillVoices(); synth.addEventListener ? synth.addEventListener("voiceschanged", fillVoices) : (synth.onvoiceschanged = fillVoices); } else fillVoices();
+$("voice").onchange = (e) => { chosenVoice = e.target.value; };
+function rate() { return parseFloat($("speed").value) || 1; }
+$("speed").onchange = () => { if (track && track.audio) track.audio.playbackRate = rate(); };
+function waitForVoices() { // Chromium loads voices late; give it a moment before falling back
+  return new Promise((res) => {
+    if (!synth || voices().length) return res(voices().length > 0);
+    const done = () => { voiceOK = voices().length > 0; res(voiceOK); };
+    synth.addEventListener && synth.addEventListener("voiceschanged", done, { once: true });
+    setTimeout(done, 700);
+  });
+}
+function showNote(t) { const n = $("ttsNote"); n.textContent = t; n.hidden = !t; }
+
+function loadTrack() {
+  stopAll();
+  if (!tour.steps) { track = null; return updateSeek(); }
+  const s = tour.steps[cur], mode = playMode(s);
+  track = { mode, pos: 0, speaking: false, dur: mode === "file" ? s.rec.dur : mode === "sim" ? s.rec.dur : estDur(s) };
+  if (mode === "file") {
+    const au = new Audio(s.rec.url), tr = track; au.preload = "auto"; tr.audio = au;
+    au.onloadedmetadata = () => { if (isFinite(au.duration) && au.duration > 0) { tr.dur = au.duration; updateSeek(); } }; // WebM from MediaRecorder may report Infinity: keep the measured time
+  }
+  updateSeek();
+}
+function updateSeek() {
+  const bar = $("seekBar"), t = track;
+  bar.disabled = !t;
+  bar.value = t ? Math.round((t.pos / t.dur) * 1000) : 0;
+  $("tNow").textContent = fmt(t ? t.pos : 0);
+  $("tDur").textContent = t ? (t.mode === "words" ? "~" : "") + fmt(t.dur) : "0:00";
+  bar.title = t && t.mode === "words" ? "Seek by words: the voice restarts at the word under the slider" : "Seek in this step";
+  if (tour.steps) $("srcChipP").innerHTML = sourceChip(tour.steps[cur]);
+  $("simNote").hidden = !t || t.mode !== "sim";
+  markWord();
+}
+function markWord() { // the follow-along highlight: the word at the slider's word count
+  const t = track, el = $("stepText");
+  if (!t || !el || !tour.steps) return;
+  const total = spokenText(tour.steps[cur]).split(/\s+/).filter(Boolean).length;
+  const w = playing || t.pos > 0 ? Math.min(total - 1, Math.floor((t.pos / t.dur) * total)) : -1;
+  if (el.dataset.w === String(w)) return;
+  el.dataset.w = w;
+  for (const sp of el.querySelectorAll(".w")) {
+    const s = +sp.dataset.s, n = +sp.dataset.n;
+    sp.classList.toggle("now", w >= s && w < s + n);
+    sp.classList.toggle("said", w >= s + n);
+  }
+}
+async function play() {
+  if (!tour.steps || !track) return;
+  playing = true; updatePlayBtn();
+  await waitForVoices();
+  showNote(!voiceOK && track.mode !== "file" ? "No speech voice found: steps without an audio file run silently on their timeline. On Linux, Firefox and Chromium need speech-dispatcher with a voice (e.g. espeak-ng)." : "");
+  if (playing) startTrack();
+}
+function startTrack() {
+  const token = ++speakToken, t = track;
+  renderPanel();
+  if (t.pos >= t.dur - 0.05) t.pos = 0;
+  if (t.mode === "file") {
+    const a = t.audio;
+    a.playbackRate = rate(); a.currentTime = t.pos;
+    a.ontimeupdate = () => { if (token === speakToken) { t.pos = Math.min(a.currentTime, t.dur); updateSeek(); } };
+    a.onended = () => finish(token);
+    a.play().catch((e) => { showNote("Could not play the recording: " + e.message); });
+    return;
+  }
+  if (voiceOK) speakFrom(t.pos, token);
+  startClock(token);
+}
+function speakFrom(pos, token) { // seek by words: the slider is a word count, so read from the word at pos
+  const t = track, words = spokenText(tour.steps[cur]).split(/\s+/).filter(Boolean), total = words.length;
+  const start = Math.min(total - 1, Math.floor((pos / t.dur) * total));
+  t.pos = (start / total) * t.dur;
+  const text = words.slice(start).join(" ");
+  const ut = ++uttToken, u = new SpeechSynthesisUtterance(text);
+  u.rate = rate();
+  const v = voices().find((x) => x.name === chosenVoice); if (v) u.voice = v;
+  u.onboundary = (e) => { // each spoken word moves the slider to its word count
+    if (ut !== uttToken || (e.name && e.name !== "word")) return;
+    const spoken = text.slice(0, e.charIndex).split(/\s+/).filter(Boolean).length;
+    t.pos = ((start + spoken) / total) * t.dur;
+  };
+  u.onend = () => { if (ut !== uttToken) return; t.speaking = false; if (t.mode === "words") finish(token); };
+  u.onerror = (e) => { if (ut !== uttToken || e.error === "interrupted" || e.error === "canceled") return; t.speaking = false; voiceOK = false; showNote(`Speech failed (${e.error}); running on the timeline instead.`); };
+  synth.cancel(); t.speaking = true; synth.speak(u);
+}
+function startClock(token) {
+  const t = track; let last = performance.now();
+  const tick = (now) => {
+    if (token !== speakToken) return;
+    t.pos = Math.min(t.dur, t.pos + ((now - last) / 1000) * rate()); last = now;
+    if (t.mode === "words" && t.speaking) t.pos = Math.min(t.pos, t.dur * 0.98); // estimate only: the voice decides the end
+    updateSeek();
+    if (t.pos >= t.dur && !t.speaking) return finish(token);
+    clockAnim = requestAnimationFrame(tick);
+  };
+  clockAnim = requestAnimationFrame(tick);
+}
+function finish(token) {
+  if (token !== speakToken || !playing) return;
+  cancelAnimationFrame(clockAnim);
+  track.pos = track.dur; updateSeek();
+  if (cur < tour.steps.length - 1) timerHandle = setTimeout(() => { if (token === speakToken && playing) goTo(cur + 1); }, 700);
+  else { playing = false; updatePlayBtn(); renderPanel(); }
+}
+function pause() { playing = false; stopAll(); updatePlayBtn(); renderPanel(); updateSeek(); }
+function stopAll() { // keeps track.pos, so Play resumes where it stopped
+  speakToken++; uttToken++;
+  if (synth) synth.cancel();
+  clearTimeout(timerHandle); cancelAnimationFrame(clockAnim);
+  if (track) { track.speaking = false; if (track.audio) track.audio.pause(); }
+}
+$("seekBar").addEventListener("input", (e) => {
+  const t = track; if (!t) return;
+  t.pos = (e.target.value / 1000) * t.dur;
+  if (t.mode === "file") t.audio.currentTime = t.pos;
+  else if (playing && voiceOK) speakFrom(t.pos, speakToken);
+  updateSeek();
+});
+function updatePlayBtn() { $("playBtn").innerHTML = playing ? "&#10073;&#10073; Pause" : "&#9654; Play"; $("playBtn").setAttribute("aria-pressed", playing); }
+
+// ---- Recording your own voice (MediaRecorder, Opus in WebM) ----
+async function startRecording(i) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) return toast("This browser cannot record audio.");
+  pause();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+  catch (e) { return toast(`No microphone (${e.name}). Allow it in the browser and try again.`); }
+  const type = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm"].find((x) => MediaRecorder.isTypeSupported(x)) || "";
+  const mr = new MediaRecorder(stream, type ? { mimeType: type, audioBitsPerSecond: 32000 } : undefined);
+  const chunks = [];
+  mr.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  mr.onstop = () => {
+    stream.getTracks().forEach((x) => x.stop());
+    const s = tour.steps[i], blob = new Blob(chunks, { type: mr.mimeType || type || "audio/webm" });
+    if (s.rec && s.rec.url) URL.revokeObjectURL(s.rec.url);
+    // MediaRecorder WebM often has no duration header, so keep the measured time
+    s.rec = { by: "you", url: URL.createObjectURL(blob), dur: Math.max(0.5, (performance.now() - rec.start) / 1000), size: blob.size, mime: blob.type, hash: stepHash(s) };
+    clearInterval(rec.timer); rec = null;
+    render(); loadTrack();
+  };
+  rec = { mr, step: i, start: performance.now() };
+  rec.timer = setInterval(() => { const el = $("recTime"); if (el) el.textContent = fmt((performance.now() - rec.start) / 1000); }, 250);
+  mr.start(250);
+  renderPanel();
+}
+function stopRecording() { if (rec) rec.mr.stop(); }
+function deleteRecording(i) {
+  const s = tour.steps[i];
+  if (s.rec && s.rec.url) URL.revokeObjectURL(s.rec.url);
+  s.rec = null; render(); loadTrack();
+}
+function toast(t) { const el = $("toast"); if (el) el.textContent = t; else showNote(t); }
+
+// ---- Exports: Markdown (tour --md) and the lean AI text (tour --step N) ----
+const SRC_ROOT = "scanner/coderstanding/";
+const plainLinks = (text) => text.replace(/\[\[([^\]]+)\]\]/g, "`$1`");
+function excerptOf(s) { const c = s.code; return (EXCERPTS[`${c.file}:${c.from}-${c.to}`] || []).map((l, j) => ({ no: c.from + j, line: l, mark: c.mark.includes(c.from + j) })); }
+function tourMarkdown(t) {
+  const out = [`# ${t.title}`, "", `By ${t.ai ? "AI" : t.by} · ${t.steps.length} steps · exported from Coderstanding (\`coderstanding tour coderstanding ${t.id} --md\`)`];
+  t.steps.forEach((s, i) => {
+    const c = s.code;
+    out.push("", `## ${i + 1}. ${s.title}`, "", plainLinks(s.text));
+    if (s.stale) out.push("", `> Note: the code changed since this step was written (it was lines ${s.stale.was}).`);
+    out.push("", `\`${SRC_ROOT}${c.file}:${c.from}-${c.to}\``, "", "```");
+    for (const x of excerptOf(s)) out.push(`${x.mark ? ">" : " "} ${String(x.no).padStart(4)}  ${x.line}`);
+    out.push("```");
+  });
+  return out.join("\n") + "\n";
+}
+const downloadsReady = window.claude && window.claude.use ? window.claude.use("downloads").catch(() => null) : Promise.resolve(null);
+async function downloadMarkdown(t) {
+  const downloads = await downloadsReady;
+  if (downloads) { // inside claude.ai the frame cannot download directly: the viewer confirms the save
+    try { await downloads.save({ filename: `${t.id}.md`, data: tourMarkdown(t) }); }
+    catch (e) { if (e && e.code !== "declined") showNote("Save as Markdown is not available here (" + (e.code || "error") + ")."); }
+    return;
+  }
+  const url = URL.createObjectURL(new Blob([tourMarkdown(t)], { type: "text/markdown" }));
+  const a = Object.assign(document.createElement("a"), { href: url, download: `${t.id}.md` });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function tourText(i) { // lean slim text for one step (DESIGN 7c CLI)
+  const s = tour.steps[i], c = s.code, fns = s.targets.filter((x) => x.includes("#")).map((x) => x.split("#")[0]);
+  const lines = [`$ coderstanding view coderstanding --focus ${s.targets.join(" ")}${fns.length ? " --expand " + [...new Set(fns)].join(" ") : ""}`,
+    `${i + 1}/${tour.steps.length} ${s.title} {${s.targets.join(", ")}}${s.stale ? " (changed)" : ""}`, s.text, `${SRC_ROOT}${c.file}:${c.from}-${c.to}`];
+  for (const x of excerptOf(s)) lines.push(`${x.mark ? ">" : " "}${String(x.no).padStart(4)} ${x.line}`);
+  return lines.join("\n");
+}
+
+// ---- Tours list ----
+function renderList() {
+  const q = $("tourSearch").value.trim().toLowerCase();
+  const hit = (t) => !q || t.title.toLowerCase().includes(q) || (t.steps || []).some((s) => (s.title + " " + s.text + " " + s.targets.join(" ")).toLowerCase().includes(q));
+  $("tourList").innerHTML = TOURS.filter(hit).map((t) => `<li><button class="pick" type="button" data-tour="${t.id}" ${t === tour ? 'aria-current="true"' : ""}>
+      <span class="t">${esc(t.title)}</span>
+      <span class="m">${t.steps ? t.steps.length : t.count} steps · ${authorChip(t)}${t.steps && t.steps.some((s) => s.stale) ? '<span class="chip stale">1 changed</span>' : ""}</span></button><button class="mdbtn" type="button" data-md="${t.id}" title="${t.steps ? `Save as Markdown (${t.id}.md)` : "Only the sample tour has steps in this mock-up"}" ${t.steps ? "" : "disabled"}>.md</button></li>`).join("") || `<li class="muted" style="font-size:13px">No tour matches.</li>`;
+}
+$("tourSearch").addEventListener("input", renderList);
+$("tourList").addEventListener("click", (e) => {
+  const m = e.target.closest("[data-md]"); if (m) return downloadMarkdown(TOURS.find((t) => t.id === m.dataset.md));
+  const b = e.target.closest("[data-tour]"); if (!b) return;
+  pause(); tour = TOURS.find((t) => t.id === b.dataset.tour); cur = 0; editing = false; $("graphWrap").classList.remove("editing"); render(); loadTrack();
+});
+$("newTour").onclick = () => {
+  pause();
+  const t = { id: "new-tour", title: "New tour", by: "you", ai: false, steps: [{ title: "First step", targets: ["scan"], by: "you", code: { ...STEPS[1].code }, text: "Say what [[scan]] does.", rec: null, gen: null }] };
+  if (!TOURS.find((x) => x.id === t.id)) TOURS.unshift(t);
+  tour = TOURS.find((x) => x.id === t.id); cur = 0; editing = true; editIdx = 0; $("graphWrap").classList.add("editing"); render(); loadTrack();
+};
+
+// ---- Theme switch (auto / light / dark), like ?theme= in the viewer ----
+const THEMES = ["auto", "light", "dark"]; let theme = 0;
+$("themeBtn").onclick = () => {
+  theme = (theme + 1) % 3;
+  if (THEMES[theme] === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.dataset.theme = THEMES[theme];
+  $("themeBtn").textContent = "Theme: " + THEMES[theme];
+};
+
+function render() {
+  const has = !!tour.steps;
+  ["backBtn", "nextBtn", "playBtn"].forEach((id) => ($(id).disabled = !has));
+  if (has) { $("backBtn").disabled = cur === 0; $("nextBtn").disabled = cur === tour.steps.length - 1; }
+  document.querySelector(".code").hidden = !has;
+  drawGraph(); renderDots(); renderPanel(); renderList(); if (has) renderCode();
+}
+const params = new URLSearchParams(location.search); // ?step=4&edit=1 for screenshots
+cur = Math.max(0, Math.min(STEPS.length - 1, (parseInt(params.get("step"), 10) || 1) - 1));
+if (params.get("edit")) { editing = true; editIdx = cur; $("graphWrap").classList.add("editing"); }
+render(); loadTrack();
+</script>
+</body>
+</html>

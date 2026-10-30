@@ -1,0 +1,10 @@
+[gd_scene load_steps=3 format=3 uid="uid://e2emain"]
+
+[ext_resource type="Script" path="res://src/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://src/player.gd" id="2_player"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="Player" type="Node2D" parent="."]
+script = ExtResource("2_player")

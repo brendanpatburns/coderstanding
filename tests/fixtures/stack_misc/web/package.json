@@ -1,0 +1,2 @@
+{"name": "web", "dependencies": {"react": "^18.3.1", "@scope/ui": "1.0.0"},
+ "devDependencies": {"vitest": "2.0.0"}}

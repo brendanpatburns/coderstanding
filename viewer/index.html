@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Coderstanding</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="side" id="side" aria-label="Specs">
+    <button class="iconbtn" id="sideToggle" aria-expanded="false" aria-controls="sideBody"
+            title="Specs">›</button>
+    <h2 class="side-title">Specs</h2>
+    <div class="side-body" id="sideBody" hidden>
+      <p class="muted">Specs arrive with the spec store.</p>
+    </div>
+  </aside>
+  <div class="resizer" id="sideResizer" role="separator" aria-orientation="vertical" tabindex="0"
+       aria-label="Resize the specs sidebar" aria-controls="side"></div>
+
+  <main class="main">
+    <header class="top">
+      <h1 id="repoName">Coderstanding</h1>
+      <div class="appbar">
+        <select id="appPick" class="select" aria-label="App" title="Switch app ([ and ] flick through them)"></select>
+        <button class="btn small" id="appsBtn" title="Every app: scan facts, open, rescan, rename, remove">Apps…</button>
+        <button class="btn small" id="rescanBtn" title="Scan this app again (runs niced in the background)">Rescan</button>
+        <button class="btn small" id="scanFolderBtn" title="Register and scan a repo folder on this computer">Scan a folder…</button>
+        <span class="appmsg" id="appMsg" role="status"></span>
+        <span class="readonly-label" id="readOnlyLabel" hidden></span>
+      </div>
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tabGraphBtn" aria-selected="true" aria-controls="tabGraph">Graph</button>
+        <button role="tab" id="tabStackBtn" aria-selected="false" aria-controls="tabStack">Stack &amp; deps</button>
+        <button role="tab" id="tabToursBtn" aria-selected="false" aria-controls="tabTours">Tours</button>
+      </div>
+      <span class="grow"></span>
+      <span class="scanned muted" id="scanned"></span>
+      <button class="btn" id="themeBtn" title="Theme">Theme: auto</button>
+    </header>
+
+    <dialog class="apps-dialog" id="appsDialog" aria-labelledby="appsTitle">
+      <header><h2 id="appsTitle">Apps on this PC</h2><button class="btn small" id="appsClose" aria-label="Close">Close</button></header>
+      <ul class="apps-list" id="appsList"></ul>
+      <footer><span class="appmsg" id="appsMsg" role="status"></span><span class="grow"></span><button class="btn small" id="appsScanFolder">Scan a folder…</button></footer>
+    </dialog>
+    <form class="scanform" id="scanForm" hidden>
+      <label>Folder <input class="note-input" id="scanPath" placeholder="/home/me/code/my-app" size="42" required></label>
+      <label>Name <input class="note-input" id="scanName" size="18" required></label>
+      <button class="btn small" id="scanGo" type="submit">Scan</button>
+      <button class="btn small" id="scanCancel" type="button">Cancel</button>
+    </form>
+
+    <section id="tabGraph" role="tabpanel" class="graph-tab">
+      <div class="controls">
+        <div class="ctl">
+          <label for="level">Detail</label>
+          <button class="lvl0" id="level0" disabled title="Domain level: arrives when domains exist">0</button>
+          <input type="range" id="level" min="1" max="1" step="1" value="1">
+          <span class="lvl" id="levelOut">Level 1</span>
+        </div>
+        <div class="ctl">
+          <span class="ctl-label">View</span>
+          <div class="seg" role="group" aria-label="View">
+            <button id="viewAll" aria-pressed="true">All types</button>
+            <button id="viewConcrete" aria-pressed="false">Concrete</button>
+          </div>
+        </div>
+        <div class="ctl" role="group" aria-label="Show types">
+          <span class="ctl-label">Show</span>
+          <label class="check"><input type="checkbox" id="showScene" checked> Scenes</label>
+          <label class="check"><input type="checkbox" id="showExternal" checked> Outside code</label>
+          <label class="check" title="Test code: hidden by default, removed rather than folded"><input type="checkbox" id="showTest"> Tests</label>
+          <label class="check off" title="Arrives when domains exist"><input type="checkbox" disabled> Domains</label>
+        </div>
+        <div class="ctl">
+          <label for="filter">Highlight</label>
+          <select id="filter" class="select" title="Dim the classes without this status or tag"></select>
+        </div>
+      </div>
+      <div class="controls actions">
+        <div class="ctl">
+          <span class="ctl-label">Layout</span>
+          <div class="seg" role="group" aria-label="Layout mode">
+            <button id="modeView" aria-pressed="true">View</button>
+            <button id="modeEdit" aria-pressed="false">Edit layout</button>
+          </div>
+          <div class="seg split" role="group" aria-label="Auto layout">
+            <button id="autoBtn" title="Place every unpinned class (a preview in View mode, saved in Edit mode)">Auto layout</button>
+            <select id="autoMethod" aria-label="Auto layout method" title="How Auto layout places classes">
+              <option value="layered">Layered</option>
+              <option value="organic">Organic</option>
+              <option value="hub">Hub</option>
+              <option value="grid">Grid</option>
+            </select>
+          </div>
+        </div>
+        <div class="ctl">
+          <span class="ctl-label">Functions</span>
+          <div class="seg" role="group" aria-label="Functions">
+            <button id="expandAllBtn" title="Open the shown classes into their functions">Expand all</button>
+            <button id="collapseAllBtn" title="Close every open class">Collapse all</button>
+          </div>
+        </div>
+        <div class="ctl">
+          <span class="ctl-label">Copy</span>
+          <div class="seg" role="group" aria-label="Copy">
+            <button id="copyBtn" title="Copy what is on screen as slim text, with the command that prints it">for AI</button>
+            <button id="copyCmdBtn" title="Copy only the command line">command only</button>
+          </div>
+          <span class="muted copy-out" id="copyOut" aria-live="polite"></span>
+        </div>
+      </div>
+      <div class="editbar" id="editbar">
+        Editing layout <span>Moves are saved. Pinned classes can still be moved here; Auto layout leaves them alone.</span>
+        <span class="grow"></span>
+        <button class="btn small" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
+        <button class="btn small" id="redoBtn" title="Redo (Ctrl+Shift+Z)">Redo</button>
+      </div>
+      <nav class="crumbs" id="crumbs" aria-label="Zoom path"></nav>
+      <div class="legend" aria-label="Legend">
+        <span><i class="lg lg-comp"></i>composition</span>
+        <span><i class="lg lg-assoc"></i>association</span>
+        <span><i class="lg lg-dep"></i>dependency</span>
+        <span><i class="lg lg-sig"></i>signal</span>
+        <span><i class="lg lg-gen"></i>generalization</span>
+        <span><i class="lg lg-real"></i>realization</span>
+        <span><i class="lg lg-derived"></i>through hidden classes</span>
+        <span><i class="lg lg-faded"></i>outside the zoom</span>
+        <span><i class="lg lg-internal"></i>call inside the class</span>
+      </div>
+      <div class="stage">
+        <div class="canvas" id="canvas">
+          <svg class="fan-layer" id="fanBack" aria-hidden="true"></svg>
+          <div id="cy"></div>
+          <svg class="fan-layer front" id="fanFront"></svg>
+          <div class="overlay" id="overlay" hidden></div>
+          <div class="copy-box" id="copyBox" hidden>
+            <p>The browser did not allow copying. Select all and copy:</p>
+            <textarea id="copyText" rows="10" readonly aria-label="Text to copy"></textarea>
+            <button class="btn small" id="copyClose">Close</button>
+          </div>
+        </div>
+        <div class="resizer" id="detailsResizer" role="separator" aria-orientation="vertical" tabindex="0"
+             aria-label="Resize the details panel" aria-controls="details"></div>
+        <aside class="details" id="details" aria-live="polite"></aside>
+      </div>
+    </section>
+
+    <section id="tabStack" role="tabpanel" class="stack-tab" hidden>
+      <div id="stack"></div>
+    </section>
+
+    <section id="tabTours" role="tabpanel" class="tours-tab" hidden>
+      <aside class="tours-side" aria-label="Tours">
+        <div class="tours-side-head"><h2>Tours</h2><button class="btn small" id="newTourBtn" type="button">+ New</button></div>
+        <input class="note-input" id="tourSearch" type="search" placeholder="Search title, step text, class…" aria-label="Search tours">
+        <ul class="tour-list" id="tourList"></ul>
+        <div class="hint">Stored as <code>.coderstanding/tours/&lt;id&gt;.md</code>, committed with the code. The AI lists them with <code>coderstanding tours</code> and reads one with <code>coderstanding tour</code>.</div>
+      </aside>
+      <div class="tours-stage">
+        <div class="tour-graph" id="tourGraph"><!-- the graph tab's canvas moves here while Tours is open --></div>
+        <div class="player" id="player">
+          <button class="btn" id="tourBack" type="button" title="Back (Left arrow)">&#9664; Back</button>
+          <button class="btn primary playbtn" id="tourPlay" type="button" title="Play / Pause (Space)" aria-pressed="false">&#9654; Play</button>
+          <button class="btn" id="tourNext" type="button" title="Next (Right arrow)">Next &#9654;</button>
+          <div class="dots" id="tourDots" aria-label="Steps"></div>
+          <label class="ctl">Speed <select class="select" id="tourSpeed"><option value="0.8">0.8×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label>
+          <label class="ctl">Voice <select class="select" id="tourVoice"><option value="">No voices found</option></select></label>
+          <div class="ttsnote" id="ttsNote" role="status" hidden></div>
+          <div class="seek"><span class="t" id="seekNow">0:00</span><input type="range" id="seekBar" min="0" max="1000" value="0" aria-label="Seek in this step"><span class="t" id="seekDur">0:00</span><span id="seekChip"></span></div>
+        </div>
+        <section class="tour-code" id="tourCode" aria-label="Code for this step">
+          <div class="codehead">
+            <span class="path" id="codePath"></span>
+            <span class="anchor" id="codeAnchor"></span>
+            <a id="openEditor" href="#">Open in editor &#8599;</a>
+          </div>
+          <div class="stalebar" id="staleBar" hidden></div>
+          <pre class="code-src" id="codeSrc"></pre>
+        </section>
+      </div>
+      <div class="resizer" id="tourResizer" role="separator" aria-orientation="vertical" tabindex="0"
+           aria-label="Resize the step panel" aria-controls="tourPanel"></div>
+      <aside class="details tour-panel" id="tourPanel" aria-label="Step"></aside>
+    </section>
+  </main>
+</div>
+<script src="vendor/cytoscape.min.js"></script>
+<script src="layout.js"></script>
+<script src="fanout.js"></script>
+<script src="panels.js"></script>
+<script src="field_help.js"></script>
+<script src="lists.js"></script>
+<script src="apps.js"></script>
+<script src="tours.js"></script>
+<script src="app.js"></script>
+<script src="tour_view.js"></script>
+</body>
+</html>
