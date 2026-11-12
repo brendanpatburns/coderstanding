@@ -60,7 +60,7 @@ def test_deleted_file_is_dropped_from_graph_and_cache(tmp_path):
     (tmp_path / "c.fk").unlink()
     graph = scan(tmp_path)
     assert "C" not in graph.nodes
-    assert len(list((tmp_path / ".coderstanding" / "cache").glob("*.json"))) == 2
+    assert len(list((tmp_path / ".coderstanding" / "cache").glob("*.json"))) == 4  # parse + names, a and b
 
 
 def test_version_bump_invalidates(tmp_path, monkeypatch):
@@ -96,7 +96,7 @@ def test_parallel_equals_serial(tmp_path):
 def test_gitignore_written_and_cache_dir_override(tmp_path, monkeypatch):
     write_files(tmp_path, FILES)
     scan(tmp_path)
-    assert (tmp_path / ".coderstanding" / ".gitignore").read_text() == "cache/\ngraph.json\n"
+    assert (tmp_path / ".coderstanding" / ".gitignore").read_text() == "cache/\ngraph.json\n.gitignore\n"
     elsewhere = tmp_path.parent / (tmp_path.name + "-cache")
     monkeypatch.setenv(cache_mod.CACHE_DIR_ENV, str(elsewhere))
     scan(tmp_path)

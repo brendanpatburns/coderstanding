@@ -6,11 +6,13 @@ its own block and never duplicates it.
 
 from pathlib import Path
 
-from . import assets, field_rules
+from . import app_settings, assets, field_rules
 
 BEGIN = "<!-- coderstanding:begin -->"
 END = "<!-- coderstanding:end -->"
 DEFAULT_APP = "<app>"
+SETTINGS_BEGIN = "<!-- settings:begin -->"
+SETTINGS_END = "<!-- settings:end -->"
 FIELDS_BEGIN = "<!-- field-rules:begin -->"
 FIELDS_END = "<!-- field-rules:end -->"
 CUSTOM_LINE = ("- This project has its own rules for writing note fields (hint, description, ...): "
@@ -33,17 +35,27 @@ This repo is in Coderstanding as `{app}`: a local map of its classes, calls, not
 """
 
 
+def between_markers(text, begin, end, body):
+    """`text` with the part between the two markers replaced by `body` (unchanged without markers)."""
+    start, stop = text.find(begin), text.find(end)
+    if not 0 <= start < stop:
+        return text
+    return text[:start + len(begin)] + "\n" + body + "\n" + text[stop:]
+
+
 def with_fields(text, rules):
     """`text` with the part between the field-rules markers replaced by these rules."""
-    start, end = text.find(FIELDS_BEGIN), text.find(FIELDS_END)
-    if not 0 <= start < end:
-        return text
-    return text[:start + len(FIELDS_BEGIN)] + "\n" + field_rules.guide_markdown(rules) + "\n" + text[end:]
+    return between_markers(text, FIELDS_BEGIN, FIELDS_END, field_rules.guide_markdown(rules))
+
+
+def with_settings(text):
+    """`text` with the settings list between the settings markers taken from the settings table."""
+    return between_markers(text, SETTINGS_BEGIN, SETTINGS_END, app_settings.guide_markdown())
 
 
 def guide_text(data_dir=None):
     """The AI guide; with an app's data folder, its field section shows that project's rules."""
-    text = (assets.docs_dir() / "AI_GUIDE.md").read_text(encoding="utf-8")
+    text = with_settings((assets.docs_dir() / "AI_GUIDE.md").read_text(encoding="utf-8"))
     return with_fields(text, field_rules.effective(data_dir)) if data_dir else text
 
 

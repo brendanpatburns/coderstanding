@@ -5,6 +5,7 @@ for (typed / inferred vars, preload names) so calls through it reach the right t
 """
 
 import posixpath
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,11 +14,12 @@ import tree_sitter_gdscript
 from .. import paths
 from ..godot_files import declared_class_name
 from ..language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileContext, FileResult,
-                        LanguageModule, Ref, Target, record_dependency, register,
+                        LanguageModule, Mark, NodeLookup, Ref, Target, record_dependency, register,
                         track_dependencies)
-from ..model import (ANY_SIGNAL, EMIT_DETAIL, LAMBDA_HANDLER, SIGNAL_ARROW, VARIABLE_HANDLER, Member,
+from ..model import (is_public, ANY_SIGNAL, EMIT_DETAIL, LAMBDA_HANDLER, SIGNAL_ARROW, VARIABLE_HANDLER, Member,
                      child_id)
 from . import doc_text, ts_util as ts
+from .stubs import is_stub
 
 PARSER = ts.make_parser(tree_sitter_gdscript.language())
 
@@ -39,6 +41,24 @@ OBJECT = Target(name="Object")  # what an untyped value is: signal names on it s
 def script_id(class_name, res_path):
     """Node id of a script: its class_name if it has one, else its res:// path."""
     return class_name or res_path
+
+
+LOOKUP_CALLS = ("get_node", "get_node_or_null")
+ROOT_RECEIVER = re.compile(r"\broot\b|get_root\(\)")  # `root.`, `get_tree().root.`, `get_root().`
+ROOT_PREFIX = "/root/"
+NODE_NAME = re.compile(r"[A-Za-z_]\w*$")
+MAX_FORM = 60
+
+
+def lookup_of(path, form, line, from_root):
+    """A NodeLookup for a scene-tree path that starts at the tree root (`/root/X/..`, or a
+    relative path looked up from the root node), else None."""
+    if path.startswith(ROOT_PREFIX):
+        path = path[len(ROOT_PREFIX):]
+    elif not from_root:
+        return None
+    name = path.split("/")[0]
+    return NodeLookup(name, form[:MAX_FORM], line) if NODE_NAME.match(name) else None
 
 
 def string_value(node):
@@ -124,16 +144,26 @@ def has_annotation(node, name):
     return any(ts.text(ts.first_child_of_type(a, "identifier")) == name for a in found)
 
 
-def has_rpc_annotation(node):
-    """`@rpc(..)` on the function: in front of it on its own line, or on the same line."""
-    if has_annotation(node, "rpc"):
-        return True
+def rpc_mode(annotation):
+    """The quoted words of `@rpc("any_peer", "call_local", 1)`: "any_peer call_local"; Godot's
+    default `authority` when no mode word is given."""
+    words = re.findall(r"""["']([A-Za-z_]+)["']""", ts.text(annotation))
+    return " ".join(words) if words else "authority"
+
+
+def rpc_annotation(node):
+    """The `@rpc(..)` on the function (in front of it on its own line, or on the same line) as
+    its mode words (`rpc_mode`), else ""."""
+    annotations = ts.first_child_of_type(node, "annotations")
+    found = list(ts.children_of_type(annotations, "annotation")) if annotations else []
     before = node.prev_named_sibling
     while before is not None and before.type == "annotation":
-        if ts.text(ts.first_child_of_type(before, "identifier")) == "rpc":
-            return True
+        found.append(before)
         before = before.prev_named_sibling
-    return False
+    for annotation in found:
+        if ts.text(ts.first_child_of_type(annotation, "identifier")) == "rpc":
+            return rpc_mode(annotation)
+    return ""
 
 
 @dataclass
@@ -193,7 +223,7 @@ class ClassReader:
 
     # --- reading ---
     def collect_all(self):
-        for statement in self.body.named_children:
+        for statement in ts.lifted_children(self.body, named=True):
             self.collect(statement)
         self.find_owned_fields()
 
@@ -201,7 +231,7 @@ class ClassReader:
         self.collect_all()
         for name, target in self.aliases().items():
             self.script.result.aliases.setdefault(name, target)
-        for statement in self.body.named_children:
+        for statement in ts.lifted_children(self.body, named=True):
             self.emit(statement)
 
     def collect(self, node):
@@ -222,10 +252,13 @@ class ClassReader:
                 self.signals.add(name)
             member_kind = {"signal_statement": "signal", "function_definition": "method",
                            "enum_definition": "enum"}[kind]
+            function = kind == "function_definition"
             self.decl.members.append(Member(name, member_kind, "", ts.line(node),
                                             ts.end_line(node),
-                                            rpc=kind == "function_definition"
-                                            and has_rpc_annotation(node)))
+                                            rpc=rpc_annotation(node) if function else "",
+                                            stub=function and name != "_init"
+                                            and is_stub(node.child_by_field_name("body"), node),
+                                            public=kind != "signal_statement" or is_public(name, "gdscript")))
 
     def collect_field(self, node, name):
         type_node = node.child_by_field_name("type")
@@ -241,7 +274,8 @@ class ClassReader:
             self.skip_create.add(value.id)
         created = creation_target(value, self.res_dir)  # `var x := Foo.new()` has type Foo
         field_type = ts.text(type_node).lstrip(":= ") or (created.name if created else "") or ""
-        self.decl.members.append(Member(name, "field", field_type, ts.line(node)))
+        self.decl.members.append(Member(name, "field", field_type, ts.line(node),
+                                        public=is_public(name, "gdscript")))
 
     def collect_const(self, node, name):
         path = loader_path(node.child_by_field_name("value"))
@@ -249,7 +283,8 @@ class ClassReader:
             self.collect_alias(name, path)
         else:
             self.known.add(name)
-        self.decl.members.append(Member(name, "const", "", ts.line(node)))
+        self.decl.members.append(Member(name, "const", "", ts.line(node),
+                                        public=is_public(name, "gdscript")))
 
     def collect_alias(self, name, path):
         self.names[name] = Var("alias", path_target(path, self.res_dir))
@@ -387,9 +422,33 @@ class Walker:
         if callee is not None and callee.type == "identifier":
             name = ts.text(callee)
             self.add_own_call(name, node)
+            if name in LOOKUP_CALLS and string_first_arg(node):
+                self.add_lookup(lookup_of(ts.text(node.named_children[1].named_children[0]).strip("\"'"),
+                                          ts.text(node), ts.line(node), False))
             if name in STRING_SIGNAL_CALLS and (name == "emit_signal" or string_first_arg(node)):
                 self.string_signal(Target(id=self.cls.decl.id), name, node, node)
         self.walk_children(node)
+
+    def on_get_node(self, node):
+        """`$/root/Net`: a global looked up by path."""
+        written = ts.text(node)
+        self.add_lookup(lookup_of(written.lstrip("$").strip("\"'"), written, ts.line(node), False))
+
+    def add_lookup(self, lookup):
+        if lookup:
+            self.cls.script.result.lookups.append(lookup)
+
+    def record_chain_lookup(self, parts, node):
+        """`root.get_node("Media")`, `get_tree().root.get_node("/root/Media")`."""
+        for index, part in enumerate(parts):
+            if part.type == "attribute_call" and member_name(part) in LOOKUP_CALLS:
+                args = ts.first_child_of_type(part, "arguments")
+                first = args.named_children[:1] if args is not None else []
+                if first and first[0].type == "string":
+                    form = ".".join(ts.text(p) for p in parts[:index + 1])
+                    receiver = ".".join(ts.text(p) for p in parts[:index])
+                    self.add_lookup(lookup_of(string_value(first[0]), form, ts.line(node),
+                                              bool(ROOT_RECEIVER.search(receiver))))
 
     def add_own_call(self, name, node):
         """A call to one of this class's own functions: an internal call (a self edge)."""
@@ -402,6 +461,7 @@ class Walker:
             self.add_own_call(member_name(parts[1]), node)
         if len(parts) > 2 and ts.text(parts[0]) == "self":
             parts = parts[1:]
+        self.record_chain_lookup(parts, node)
         target, role, used = self.chain_head(parts)
         rest = parts[used:]
         if target is None:
@@ -570,6 +630,9 @@ class ScriptReader:
             doc=doc_text.file_doc(root, DOC_MARKERS, HEADER_TYPES, MEMBER_TYPES),
         )
         self.result.declarations.append(decl)
+        self.result.parse_error_line = ts.first_error_line(root)
+        if class_name:
+            self.result.marks.append(Mark(Target(id=decl.id), [], class_name, "class_name"))
         self.top = ClassReader(self, decl, root)
         self.read_class(self.top, top_extends(root), names_only)
         return self.result

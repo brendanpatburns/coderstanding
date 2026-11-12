@@ -148,9 +148,13 @@ coderstanding curate <app>            classes needing levels/domains/hints, comp
 coderstanding set <app> <id> key=value ... | --file <batch>
 ```
 
-Registered apps live in `~/.config/coderstanding/apps.json` (name → path). **Manual refresh only**
-(decided 2026-10-30 by the user): nothing scans by itself. Text commands and the server read the
-saved `graph.json`; a project is scanned only by the viewer's Refresh (`POST /api/rescan`), by
+Registered apps live in `~/.config/coderstanding/apps.json` (name → path). **Manual refresh in the viewer**
+(decided 2026-10-30 by the user): the server and viewer never scan by themselves; they read the
+saved `graph.json`. **Text commands never answer from a stale map** (2026-11-01, trial: `uses` said 0 from an old
+map): `open_app` compares the files' signature (names, sizes, mtimes + scan settings, recorded at
+each scan in `worktree.json` in the map folder) and rescans incrementally first when it changed,
+with one stderr line; if it cannot (read-only data, missing folder) it prints "map is older than
+the files (N changed): rescan". Cost: about 3 ms for 200 files, 30 ms for 1800. A project is scanned by the viewer's Refresh (`POST /api/rescan`), by
 `coderstanding rescan <app>`, or when it is added in the viewer. A project with no graph says "never
 scanned: press Refresh"; one written by an older scanner still loads with a note ("made by an older scanner: press
 Refresh"; only an unknown graph.json format refuses). `coderstanding add` does the first scan. The server only
@@ -158,7 +162,10 @@ Refresh"; only an unknown graph.json format refuses). `coderstanding add` does t
 helper (which has no console on Windows) starts `git` only for a scan. Every child process
 (git, the rescan child, taskkill) starts through `procs.py` so no console window opens.
 The helper is a single instance: it binds its port exclusively, `serve` exits if a helper
-already answers, and `helper install|start` start none when one does.
+already answers, and `helper install|start` start none when one does. Under systemd socket
+activation systemd owns the port and starts at most one service; `serve` adopts the passed socket
+(LISTEN_FDS/LISTEN_PID, fd 3, loopback only) and skips the "already running" check, which would
+otherwise wait on its own socket.
 
 Layout: one module per language, all producing the same model; shared steps are their own
 modules (see `docs/COMPONENTS.md` once built).
@@ -179,8 +186,8 @@ modules (see `docs/COMPONENTS.md` once built).
 
 - **Per-file cache**: each file's parse result (declarations + raw refs) is cached in
   `.coderstanding/cache/` keyed by path + content hash + scanner version. A rescan only
-  re-parses changed files, then re-runs resolve/levels (cheap, whole-graph). Text commands
-  rescan automatically, so this keeps them fast.
+  re-parses changed files, then re-runs resolve/levels (cheap, whole-graph), so a manual Refresh stays fast.
+  Nothing rescans by itself (0.2.2): commands read the saved graph.
 - **Parallel first scan**: files are parsed in a process pool (one worker per core).
 - **Viewer cap**: past ~1500 visible boxes the viewer asks you to raise the level or zoom
   instead of drawing everything.
@@ -195,9 +202,12 @@ modules (see `docs/COMPONENTS.md` once built).
   `Outer.Inner`.
 - GDScript: `class_name` names are global. Path references (`extends "res://x.gd"`,
   `preload("res://x.gd")`) resolve by path. Autoload names resolve to the autoload's script.
-- A class referring to itself (own-function calls, a field of its own type) keeps that as an
-  edge from the node to itself. Views, levels and warnings ignore self edges; the function
-  fan-out shows their calls inside an open class. An inheritance self reference is dropped.
+- A class or module referring to itself (own-function calls, a field of its own type) keeps that
+  as an edge from the node to itself. Own-function calls (`Ref.own_call`): a module's functions
+  calling each other (Python, JS/TS, C, shell) and `self.x()` / `this.x()` / plain method calls
+  in a class (Python, JS/TS, C++, GDScript). Views, levels and warnings (hubs, cycles, god
+  classes) ignore self edges; the function fan-out shows their calls inside an open class, and
+  impact/ripple/`tests --diff` walk them function by function. An inheritance self reference is dropped.
 - Ambiguous name → edge kept, marked `"unsure": true`, viewer marks it with a `?`.
 
 ### 4.2 C# (plain and Godot)
@@ -379,8 +389,9 @@ language-specific resolution: Java interop works through shared ids once both re
   `from_member` (`<init>` for `init` blocks, initializers and enum entries).
 - **Imports:** `import a.b.C` and `import a.b.C as D` are file aliases, `import a.b.*` an import
   prefix. Same-package types resolve through the scope chain. Unresolved ones are outside
-  refs (a Gradle `group:artifact` dependency claims names by its group, or its artifact read as a
-  package); `kotlin.*`, `java.*`, `javax.*` and the default collection names are standard.
+  refs (a Gradle `group:artifact` dependency claims names by its group, its artifact read as a
+  package, a small known table (`okhttp3`, `okio` for okhttp) or the last group segment; `libs.versions.toml`
+  libraries count as dependencies too); `kotlin.*`, `java.*`, `javax.*` and the default collection names are standard.
 - **Entry:** top-level `fun main` is `program-main`, as is a class with `@JvmStatic fun main`
   and an Android `Application` subclass (Activities are not flagged: the manifest decides).
   `*.kts` scripts are `script-main`; `*.gradle.kts` build scripts are left to the stack reader.
@@ -495,12 +506,51 @@ folder tree.
   "Net") but they stay hidden until you accept, rename, merge or drop them. You can also make
   domains by hand and drag classes into them. Stored in notes.
 - One domain per class. A class with none is fine.
-- **Drawn as cards** behind their classes, with the domain name on the card.
 - **Domain level**: an extra step at the top of the ruler (level 0; its column is disabled until domains exist). Each domain becomes one
-  card and lines between domains merge all the calls between their classes, by the same fold
-  rule as section 5 (a class folds into its domain). Zoom into a domain-to-domain line to see
-  the classes on each side.
+  card (the fold card look below) and lines between domains merge all the calls between their
+  classes, by the same fold rule as section 5 (a class folds into its domain). Zoom into a
+  domain-to-domain line to see the classes on each side; double-click a card to show only it.
 - Text: `coderstanding graph mygame 0` prints domain-to-domain lines.
+
+**Domain frames (built 2026-10-31, approved mock-up `docs/mockups/domain-blocks.html`)**: the
+Show › **Domains** toggle (live whenever the app has domains) sorts every box at the current level
+(any level >= 1, also inside a zoom; level 0 stays the card view) into one frame per
+domain, plus a dashed grey **Unsorted** frame for classes without one. Boxes glide into their
+frames and back in 400 ms (none with reduced motion) and the camera fits the frames.
+- **Inside a frame**: the layered layout (`viewer/layout.js`) run on that domain's classes only.
+  Blocks are ordered by a layered layout of the domain-to-domain graph (callers first) and
+  shelf-packed into rows about the canvas's shape (`viewer/domains.js`, pure).
+- **Lines**: inside a frame they draw as usual. Between frames, a "Between frames: Bundled /
+  Every line" switch (greyed while Domains is off). **Bundled** = one line per pair of frames,
+  thicker with more lines, an arrowhead for each direction present and a count badge ("27 ⇄"
+  when both ways); hovering it shows the split and the busiest lines (by calls), draws those
+  lines in the highlight colour and dims the rest.
+- **Fold**: click a frame's header to fold it into a card (its boxes glide into the card and
+  fade; lines attach to the card, merged per class with a count in Every line mode); click the
+  card to open it. Turning Domains off opens every frame.
+- **Drag** a frame by its body, a box in it or its header; the last one dragged is on top.
+  Block moves are never saved (View-mode rule: they snap back when Domains or the view changes),
+  and while frames show, Edit-mode drags and Auto layout leave the saved layout alone (Auto
+  layout says to switch Domains off). Headers sit above the lines so they stay clickable.
+- Each domain has a soft tint (a hue from its name, the same everywhere); both themes use the
+  page tokens. Hovering a box keeps the usual details.
+- The toggle and the Bundled/Every choice are remembered per app (like the hidden types);
+  URL options `?domains=1|0`, `?between=every|bundled`.
+- **Opening a class keeps the picture** (fix 2026-10-31): frames are laid out and packed with
+  closed box sizes and every class line (also the fanned ones), so opening or closing a class
+  re-sorts nothing; only the open box's own frame grows right and down to fit it (it may
+  overlap a neighbour, like an open box covers boxes outside frames). The domain focus lays out
+  closed too and keeps its ring of cards.
+
+**Domain focus (built 2026-10-31)**: double-click a frame (header, body or folded card), or a
+domain card, to see **just that domain**: the engine's `domain` view (`compute_view(domain=)`,
+`/api/view?domain=`, `coderstanding view --domain`; `Unsorted` = classes without a domain)
+shows that domain's classes at the current level (at least 1) with the normal layered layout
+in a frame; every other class folds into its domain's card (the fold card), faded on a ring
+around it, each near the classes it talks to, with one bundle per card (hover shows its lines).
+The ruler keeps working inside it (more or fewer of that domain's classes); zooms work as
+usual. The breadcrumb shows `level › domain`: the level (or Esc) goes back to the frames.
+URL option `?domain=<name>`.
 
 ## 7. Specs (built 2026-10-30, with full add/edit in the viewer)
 
@@ -689,7 +739,23 @@ anchors, stale, authors, audio files), `compute_view(focus=...)`, CLI `tours` / 
   differ from the tour's. A real tour of this repo, `.coderstanding/tours/scan-pipeline.md`, is
   committed (the rest of `.coderstanding/` stays untracked) and `tests/test_sample_tour.py`
   fails when one of its steps goes lost or changed, so it stays true.
-- API: `GET /api/tours?app=[&q=]` -> `{"tours":[{id,title,by,ai,steps,changed,ai_steps}]}`;
+- Start tours: front matter `start: true` marks a Start-here path (readability idea 6): a short tour
+  from an entry class. `views.start_paths` picks it (begin at an entry class, then follow the best
+  outgoing line: hinted lines first, then most calls, skipping hubs, outside code and visited classes;
+  stop at 6 steps or a dead end; paths under 2 steps are dropped); `Tours.draft_starts` writes them as
+  AI drafts (CLI `tour <app> --draft-start`). The viewer's Start here button (graph tab) opens one in
+  the Tours tab and `start_here.js` numbers its classes on the boxes.
+- View options (built 2026-11-11): front matter `view: {lines: all, selfcalls: false, hide_kind: [signal]}`
+  (option URL names and values from the viewer's one table, `viewer/view_options.js`; only the
+  options marked `tour` there apply) for the whole tour, and a step row's own `view:` over it. While
+  a step plays its graph uses them (URL > step > tour > the user's remembered/preset switches >
+  default); leaving the Tours tab restores the user's own. Optional both ways: tour JSON and PUT
+  carry `view` on the tour and each step; a PUT without `view` keeps the stored one (an older page),
+  unknown names are kept and ignored by the viewer, bad shapes are dropped on read and refused on
+  write. Not spoken content: changing it keeps authors and fingerprints. Tour editor: a View section
+  (Whole tour / This step only, Use current graph settings = the graph tab's switches that differ
+  from the defaults). CLI `tour <app> <id> [--step N] --view key=value ...` (`key=` removes).
+- API: `GET /api/tours?app=[&q=]` -> `{"tours":[{id,title,by,ai,start,steps,changed,ai_steps}]}`;
   `GET /api/tours/<id>` -> `{id,title,by,ai,steps:[{key,title,text,targets,by,ai,stale,lost,
   lost_targets,code:{at,path,first,from,to,mark,lines,was} | null,audio:{rec:null|{by,dur,stale,url}},
   level,focus,expand}]}` (`code.lines` = today's source lines from..to, `mark` absolute, `first` = the anchor's first line, so `lines` offsets are `from - first`; `focus`
@@ -768,6 +834,28 @@ anchors, stale, authors, audio files), `compute_view(focus=...)`, CLI `tours` / 
   `#tour=<id>&step=N` in the URL. **Edit tour** (yellow edit bar like Edit layout): add a step
   from the current selection (class, line or function row), reorder, delete, edit title,
   targets, anchor/lines and text, file preview; saves through the shared store.
+- **Guide on the graph** (built 2026-11-11): a step's view asks `near=1` (`compute_view(open_near=True)`):
+  the classes a focused function really calls or is called by open too. In the Tours tab
+  (`state.tourStep`) an open box lists only the step's functions (focused ones and the other ends
+  of their lines; the rest fold into "▸ N more", no filter box), the focused functions and all
+  their lines are lit (hover another function to see its own), and the rest of the lines dim. The
+  step gets its own compact layout (`CoderLayout.focusLayout`: targets in the middle, callers left,
+  callees right, faded neighbours in the outer columns, boxes lined up on the column edge facing
+  the middle) and camera (`focusFrame`: the whole step when it reads at the readable zoom, else
+  the targets and what they call; 0.4..1.2). Moving between steps, boxes still shown glide from
+  their old spots, new ones fade in, and the camera eases to the new frame (520 ms; a jump with
+  reduced motion). Nothing is saved; leaving the tab puts the graph back.
+- **Line notes** (built 2026-11-11): short popup callouts on lines of a step's code, pointing things
+  out as the step plays. File: `notes: [{lines: +a..+b, text, cue}]` on the step (offsets like
+  `mark`; `cue` = words of the step text). API: `notes: [{from, to, text, cue}]` per step in today's
+  line numbers (`from` None when the anchor is gone), PUT takes the same (a lost anchor keeps the
+  old notes); a notes change makes the step the editor's like any edit. Viewer: a callout under the
+  note's last line, its lines marked; all show while browsing, and while playing each pops up
+  when the narration reaches its cue (else spread in order over the text; `CoderTours.lineNoteCues`),
+  synced to the player's word. Editor: one note per line, `50-51: text @ cue words`. CLI: `tour`
+  prints `note 50-51: text (at "cue")`; `--step N --note 50-51 "text" [--cue WORDS]` adds or
+  replaces (same lines), `--drop-note 50-51` removes (AI drafts unless `--by`); `--md` quotes them.
+- **Read notes aloud** (player bar checkbox, per viewer in localStorage, default off): with the browser voice, when a note pops up at its cue the step pauses at that word, the voice speaks the note (same voice and speed; the popup is marked "reading"), then the step goes on from that word; the clock and seek bar hold meanwhile. Notes at one word read in order; each is read once per play-through (seeking back before its cue allows it again); Pause mid-note resumes the rest of the note; seeking cancels it. A recording is paused for the note (no voice: the note only shows). `StepPlayer.setNotes/readNotes/readingNote` in `tours.js`.
 - **Play** (steps with an audio file play it instead, see Audio below): the browser's `speechSynthesis` reads `title. text` (links read as their name),
   advances when the utterance ends, Pause cancels it; Next/Back cancel speech and, while
   playing, read the new step. No voice (or a speech error) = timed advance by word count with
@@ -853,6 +941,7 @@ step text, without needing any audio file: the seek bar counts words (user, 2026
 - **Hosted page**: works like the local page (every call goes to the local helper, `apiBase`).
 - **Exports**: `--md` and "Save as Markdown" leave audio out; the lean `tour` text prints
   `audio: rec (stale)` on a step's title line only when asked (`--audio`).
+- **Step view**: tours keep the compact step view (user decision, 2026-11-11).
 
 ## 7d. Comments (built 2026-10-30)
 
@@ -900,6 +989,138 @@ target exists and which class/function a line comment anchors on). Tours do this
   Reopen, Edit / Delete on your own; a hover "+" in the code gutter starts a line comment, lines
   with open comments get a mark; open counts on the progress dots, the step list, the tour head
   and the tours list.
+
+## 7e. Location refs (backend built 2026-11-11)
+
+A ref is one text line naming a place in an app, copied in the viewer and pasted to an AI chat,
+a person or another program (like an editor pasting a location instead of the lines).
+`scanner/coderstanding/refs.py` is the only place that parses, writes, resolves and prints one.
+
+- **Text form**: `@<app> <target> [(<hint>)]`. App names match the registry ignoring case.
+  Targets: `path:A-B` / `path:A` (lines of any repo file), `Class` / `Class#function` (the
+  `views.resolve_target` forms), `doc.md#Heading`, `tour <id> [step N [lines A-B]]` (N is 1-based,
+  `lines` = file line numbers of a line note or a selected excerpt), `comment <id>`, `spec <id>`,
+  `memo <id>`. Examples in `tests/fixtures/refs.json` (the viewer's JS tests read the same file).
+- **Hint for `path:A-B`**: the enclosing unit and the lines' offsets below the unit's first line:
+  `(Class#function +3..+17)`, or `(Class +3..+17)` outside functions. If the file changed so the
+  unit moved, the offsets find the lines again and a `warning` says so; without offsets (or when
+  the unit is unknown) the lines stay as written and a `warning` says when they left the unit.
+  Other hints are free text and ignored.
+- **Link form** for other apps: `http://127.0.0.1:8517/?app=<app>&ref=<urlencoded ref text>`.
+- **API**: `GET /api/ref?app=<app>&ref=<text>` -> `{ok: true, kind: lines|node|function|heading|
+  tour|step|comment|spec|memo, app, path?, lines?: [A, B], target?, tour?, step?, comment?, card?,
+  view: {...}, warning?}`; `view` = the viewer URL options that show it (`select`; `file` + `hl`
+  A-B for lines; `tab=tours&tour=&step=` (+ `hl`, `comment`); `specs=1&spec=`; `notes=1&note=`).
+  A miss is 404 `{ok: false, error, did_you_mean: [...]}`.
+- **CLI**: `coderstanding ref "<pasted text>"` finds every `@app ...` line (junk around it and
+  backticks are fine; `-` reads stdin) and prints what `read`, `tour --step`, `tour --comments`,
+  `spec` / `memo` print; `read <app> "@app ..."` does the same. A ref that no longer resolves
+  prints `error:` and the nearest targets, the others still print.
+
+## 7f. Planned work: planned and added-manually items, stubs (built 2026-11-11)
+
+Mock-up `docs/mockups/unbuilt.html` (approved 2026-11-11). Things the scan cannot show: work not
+built yet, and real things it cannot see.
+- **Kinds** (UI words): **Planned** = not in the code yet; **Added manually** = real, but outside
+  what the scan reads (loaded by name, generated code, an outside service; `where` says where).
+  Loaded-by lines (9b) stay their own thing.
+- **Store** (notes.jsonl, `planned.py`): `node:<name>` with `made: planned|manual` (+ `hint`,
+  `tags`, `level` like any note, and `stage` / `priority` / `importance` with the spec words of 7a,
+  `spec` = a spec id, `where`); `node:<Class>#<fn>` with `made: planned` = a planned function on a
+  real or planned class; `edge:A→B` with `made` = a planned (dotted) or hand-added (solid) line.
+  Same authors / AI drafts / human-wins rules as every note; notes never touch graph.json, so they
+  survive every rescan, and `Notes.key_exists` counts them (never "lost").
+- **Stage**: an item's own stage, else its linked spec's (`stage_from: spec`), else `idea`.
+- **View engine**: `ViewContext` puts them into its copy of the graph (`planned.hand_graph`, one
+  step, the way loaded-by lines are added); show key `planned` (False: planned items left out;
+  manual ones stay). Class rows get `made, made_label, where, stage, stage_from, priority,
+  importance, spec, made_by, made_ai, matches {exact, close}`; function rows `stub` or `made` +
+  stage and `matches`; lines kind `planned` / `manual`; the view `plan` = counts.
+- **Stubs** (`languages/stubs.py`, one rule for every reader, `Member.stub`, in graph.json only
+  when true): a body that is empty / `pass` / `...` with no comment or a TODO/FIXME comment, or
+  one "not built" statement (`raise NotImplementedError`, `throw new NotImplementedException /
+  NotImplementedError / UnsupportedOperationException`, Kotlin `TODO()`, GDScript `push_error("not
+  implemented")`, any throw/raise whose message says "not implemented"). A docstring is not a
+  statement. Never stubs: bodiless (abstract, interface) functions, constructors, Python
+  `@abstractmethod` / `@overload`. Readers: Python, GDScript, C#, Java, Kotlin, JS/TS, C/C++.
+  Test code is left out of the counts and the list.
+- **Built** = `planned.is_built(item)`: not planned and not a stub (a Node, Member or view row);
+  the one predicate later features (progress tracks) use.
+- **Names that match real code** (`matches`): exact = the same id, name or last dotted part (a
+  function: the same name on its class); close = the same words (`node_store` / `NodeStore`) or
+  nearly the same letters. Adding an item whose name matches asks first (CLI stops, API answers
+  `{ask}`); `--anyway` adds it. A planned function whose class gets a real function of the same
+  name is built: same notes key, so its notes carry over with no copying. A planned class whose
+  name is real now shows a "built now" banner (Merge = `plan --link`, Keep both = rename to
+  `<name> (planned)`, Later); close names are only offered.
+- **CLI**: `plan <app>` lists; `--add NAME [--on CLASS] [--kind] [--note] [--stage] [--priority]
+  [--importance] [--spec] [--where] [--tags] [--level] [--links A>B,...] [--anyway] [--by]`,
+  `--drop T`, `--link PLANNED REAL`, `--keep-both NAME`, `--accept T`; `set` edits fields. Text
+  marks: `Name [planned]`, `Name [manual]`, `A ..> B`, `f [stub]`, `f [planned todo]`, `NOT IN CODE`
+  on `node`; `--no-planned` on view commands.
+- **API**: `GET /api/plan`; `POST /api/plan` `{name, on?, made?, fields?, links?, anyway?}` ->
+  `{key}` or `{key, ask}`; `POST /api/plan/drop|link|keep|accept`; plan fields through `PUT
+  /api/notes`; `?planned=0` on `/api/view`; `/api/meta` `plan: {stages, priorities}`.
+- **Viewer** (`plan_view.js`): view option `planned` = hide | show (default) | only, remembered
+  per project (view_options.js), a select at the end of the legend row beside the count; dashed plan-colour box with a hatched header and a "Planned" tab
+  (pink while an AI draft), double-outline "Added manually" box with `where:`; dotted planned lines,
+  solid manual lines; planned rows dashed and marked "planned", stub rows marked "stub"; toolbar
+  count (click: only planned work); details: banner, Plan group (stage / work / importance
+  pickers, spec), "built now?" links, Accept, + Planned function, Keep both, Delete; Edit mode
+  "Add box" form (kind, name, what it's for, tags, plan, spec, a line from / to) that asks first on
+  a matching name.
+
+## 7g. Progress tracks (approved 2026-11-11, core + CLI + API built 2026-11-11)
+
+Generic "how much is done" numbers for any project ("Draft 50% complete", a decomp's "78% proven").
+- **Track** (`progress.py`, the one place that computes the numbers; CLI, API and view engine use
+  it) = `name` + `of` (what it counts) + `done` (when one of them is done). Per project in
+  settings.json `tracks` (a list; no rescan); a setting with a built-in name replaces it; a bad one
+  is left out and listed (`note: track N: ...`), never fatal.
+  - `of` (all optional, all must match): `units` `classes` (default) | `functions`; `files` (repo
+    glob, `*` / `**`), `domain`, `tag` (the architecture rules' sides, `checks.side_matcher`);
+    `file_kind` (one or a list; default: code and scenes, not supporting files); `lang`; `tests`
+    (true: count test code too; default left out). Outside code is never counted.
+  - `done` (exactly one): `{"tag": T}`; `{"field": F}` (the note field is filled, AI drafts too;
+    `"by": "person"`: only a person's value); `{"fact": F}`: `tested` (a class: a test file has a
+    line to it, `testcode.covering_tests`; a function: a test calls it,
+    `testcode.function_test_index`), `built` (`planned.is_built`), `no_warnings` (no shown
+    warnings; a function: its class's).
+  - Built in, no setup: **Described** (classes, hint filled), **Tested** (classes, tested),
+    **Built** (functions, built; planned functions count as not built).
+- **Project truth stays outside**: a project's own script tags items through `set --file` (one
+  `Class#fn tags=proven` line each). No project formats in Coderstanding.
+- **History** (`<map folder>/progress.jsonl`, beside graph.json): every rescan adds a row
+  `{scan, scanned_at, tracks: {name: [done, total]}}` (`scan` = graph.json's mtime in ns; the same
+  scan replaces its row; last 200 kept). "Since last scan" = now minus the newest row of another
+  scan; the trend = the rows of one track.
+- **CLI**: `progress <app>` = one line per track: `Proven 26.9% (67/249) · +3 since last scan
+  functions in game/** · done: tag proven`; `--track NAME` adds a line per domain, the trend and
+  the items not done (40, `--all`); `--spec ID` counts a spec's (and its finer specs') linked
+  classes and functions: a class link counts its functions on a functions track, a function link
+  its class on a classes track, only units the track's `of` counts, lines ignored.
+- **API**: `GET /api/progress[?track=NAME][&cards=specs|memos]` = `{tracks: [{name, of, done_rule,
+  builtin, done, total, percent, delta}], problems, track, domains: [{domain, done, total,
+  percent}], trend: [{scanned_at, done, total, percent}], cards?: {id: numbers}}`; `/api/view?track=NAME`
+  gives each box `progress {done, total, percent}` (its own units plus the hidden classes folded
+  into it; units hidden by filters not counted; boxes counting nothing get none), each level 0
+  overview domain `progress`, and the view `progress {track, done, total, percent}`. `/api/meta`
+  `tracks` = [{name, builtin, of, done_rule}] (the picker's list, no numbers).
+  The served view's `progress` also carries `delta` and `trend` (`progress.history_numbers`; the
+  history is the app's, so `Api.view` adds them, not the view engine).
+- **Viewer** (`progress_view.js`; goals written before building, all checked by the e2e step
+  "Progress tracks"): (1) a "Progress" select in the legend row beside Planned work: none, the
+  built-in tracks, the project's own; view option `track` (`?track=Proven`, remembered per
+  project, presets leave it alone but show Custom); (2) with a track, every box that counts at
+  least one unit (domain cards too) gets a pill on its bottom edge, right side: a ring (done arc in
+  `--done`) and "33%" (rounded down below 100, so only all done reads 100%); tooltip "Proven: 1 of
+  3 done (33%)"; boxes counting nothing get none; (3) beside the select the whole project's
+  "27% (67/242) · +3 since last scan" (tooltip: the last 8 scans' percents, the trend); (4) a click on a pill = a click on its box (selects it);
+  the details panel shows the box's bar on top; (5) level 0 overview: a bar under each domain
+  card's header ("Proven 55% · 32/58"); (6) the Specs | Notes sidebar: a chip "50% Proven" on
+  every card whose (and whose finer cards') links count something; (7) choosing none removes
+  pills, number and chips; (8) light, dark, contrast and extreme themes: `--done` per theme
+  (contrast tests), ring and text checked in each.
 
 ## 8. Tech stack and external dependencies
 
@@ -957,6 +1178,17 @@ like any other line. A toolbar switch hides all outside nodes.
 - **The Godot engine API** would connect to almost every class, so it is not a node by
   default; each class's details list the engine types it uses.
 
+- **Library code inside the repo** (built 2026-11-11). A decompiled or vendored C project has statically
+  linked libraries (C runtime, graphics, sound) in the same folders as the game. The per-app
+  `library` setting lists rules (path glob, `name:`, `tag:`, `domain:`; `library.py`). Decision:
+  applied at **view time** (when the map is loaded, `App.checked`), not at scan time, because tag and
+  domain rules read the notes, and a rule change then needs no rescan. A marked node becomes an
+  `external` node with the `library` flag (kept in memory only; `graph.library_kinds` remembers the old
+  kind so a changed rule list undoes it). The viewer's outside-code switch and `--all` already handle
+  external nodes. When the marks change, `guess_levels` and `check_graph` run again over the own code,
+  so library nodes give no hub, god, cycle or unused warning and no level to anything; their notes and
+  domains stay (folder-rule domains too). Costs one pass per mark change, nothing per request.
+
 ### Communications nodes (built 2026-10-30)
 
 Sockets and network endpoints are their own nodes, so "what talks to the network" is one look.
@@ -984,9 +1216,31 @@ refs and field members against one fixed table, `COMM_TYPES` (`comm_for` looks a
   `create_client`/`request` = connects, both = both), else from the type (servers listen, HTTP and
   client types connect), else none. Default name: `_server · TCPServer (listens)`; give it your own
   with a `hint` note on `node:<id>` like any node.
-- **Messages**: GDScript `@rpc` functions set `Member.rpc`; they are listed on the *class* (details
-  "Remote calls", text `rpc Class: f, g`), since an RPC belongs to the declaring class, not to a peer.
+- **Messages**: GDScript `@rpc` functions set `Member.rpc` to their mode words (`any_peer call_local`;
+  no mode word = Godot's `authority`); they are listed on the *class* (details "Remote calls", text
+  `rpc Class: f, g`), since an RPC belongs to the declaring class, not to a peer.
   JS/TS event names read by the reader (`this.sock.on("message")`) are the comm node's `messages`.
+- **Network messages (RPC)** (`rpc_messages.py`, a text pass after the HTTP one, built 2026-11-11): each
+  class with remote-callable functions gets one message node per sending class, `comm:<class>#<sender>`
+  ("Net messages ← Chat", comm type `rpc`; messages with no known sender share `comm:<class>#(not sent)`;
+  a message sent from two classes is a row in both; a box over `SPLIT_BOX_ROWS` (25) rows is split by the sending function,
+  `comm:<class>#<sender>#<function>`, each message in the box of the function sending the most of them) whose function members are the messages that sender sends (a real app: 181 rows in 1 box per
+  handler became 48 boxes, the biggest 102) (line = the handler's definition; `comm.directions` =
+  name -> direction). Lines: sender `dependency` message node (calls = (sending function, message), detail
+  `rpc`, through `link_caller`, shared with the HTTP clients), message node `dependency` handler (one
+  call per message, message row -> handler function). Like every comm node it is always shown; it opens
+  like a class (`expand=<id>`, never by `*`/Expand all) into one row per message, so the map reads
+  sender -> message -> handler, and folded it is one box per handling class. A comm node is never a
+  hidden class's owner (`ViewContext.owner`). **Direction** from the mode alone (Godot, and C#'s
+  `RpcMode` words): `any_peer` = client→server, or `any` when a sender broadcasts it (`.rpc()`,
+  `rpc("f")`); else server→client. Names (`_c_`/`_s_`) are not read. **Senders**: every mention of a
+  message's name outside comments except its `func` line and plain local calls `f(...)`: `f.rpc_id(..)`,
+  `f.rpc(..)`, `rpc_id(1, "f")`, an exact `"f"` string (send helpers like `_send(peer, "f", args)`),
+  `f` as a Callable value. A name handled by several classes goes to the sender's own, else to the only
+  one the sender already has a line to, else stays unresolved. Readers per file type in `SEND_READERS`
+  (GDScript now). Text: `node` prints `sends:` / `handles:`, the message node `messages (N):`; `find`
+  hints `message client→server`. Viewer: rows show `c→s`, `s→c`, `⇄`; details "Sends messages",
+  "Remote calls" with directions.
 - **Switch**: `show.comm` (default on; CLI `--no-comm`, API `comm=0`, viewer "Communications"), apart
   from Outside code. Text tags the node `[comm]` and adds `comm <node>: owner X, role, messages ...`.
 - **HTTP routes and clients** (`http_routes.py`, a text pass after the stack reader; literals only, no
@@ -1091,7 +1345,7 @@ field from every other author's line, so the newest human edit is the value.
 was written for. When written, the line also stores `"fp":{"hint":"<hash>"}`: a short hash of
 that code *now*. `fingerprints.py` computes them at scan time (each source file read once) and
 puts them in graph.json (`fingerprints`: note key -> hash), so a stale check needs
-no source read. Per key: a class = its own source lines (modules/scripts: the whole file); a
+no source read. Per key: a class = its own source lines (modules/scripts: the file's lines outside its classes); a
 function `node:A#f` = lines from its first line to the next member; a connection `edge:A→B` =
 the lines where it is made (its `at` and call sites), which is cheaper than hashing both
 endpoints and does not flag a note when unrelated code of the classes changes. All
@@ -1105,6 +1359,24 @@ names) on nodes, connections and function rows; `node`/`zoom`/`view` print `(sta
 value, and `warnings` lists them as `stale`.
 
 `layout.json` uses the same style, one line per class: `{"key":"VFX","x":760,"y":130,"pinned":true}`.
+
+**Nicknames (built 2026-11-11).** Decompiled, minified and old code has useless names
+(`F_243e0`, `a.b`). The `nickname` field (`node:` keys only: classes and functions; one word,
+no spaces or target separators) gives one a readable name; it is a plain note, so a human value
+is never overwritten by an AI write, a renamed target's note is lost like any other, and it is
+not fingerprinted (the name stays right when the code changes). One text form, `views.display_name`:
+`update_world (F_243e0)`; every text command (graph/zoom/node via `textout.labels`, find/outline/
+impact/brief/tests/warnings/hotspots/find via `views.NickNamer`, which also knows the sole-function title; the hub list and the domain `key:` lists too) prints names through it, always `title (id)`, never the title alone. The viewer shows the nickname as
+the box's (or function row's) main name and the real name small on the box's second line (a
+row: `update_world() · F_243e0`); views carry `nickname` on node and function rows. The target
+resolver takes a nickname after the real names (`find_id` for classes, `Class#nickname`, a bare
+function nickname; several list the targets; misses suggest close nicknames), and `find`
+scores it like a name. Name tables are imported by the project's own script that writes a
+`set --file` batch; Coderstanding reads no project-specific name formats.
+
+A module file with exactly one function and no classes is titled by that function (node rows carry
+`title` = nickname, else `views.sole_function`; text and viewer both read it; the file name goes on
+the box's second line, `find` matches the function name on the module too). Ids and notes keys do not change.
 
 Ids are stable across scans (C# full name, GDScript `class_name` or path). When a rescan no
 longer has an id that notes mention (rename, delete), the viewer lists those notes under
@@ -1213,10 +1485,10 @@ selected item. "Copy command only" copies just that first line, which Claude can
   count and code location, the via path with calls per hop, long description. Node: file,
   kind, flags, level (editable), singleton toggle, bindings (interfaces), lines in and out,
   specs, engine types used, long description. Hint and description are editable here.
-- Domain cards (section 6b) and an outside-code switch.
+- Domain frames, domain focus and domain cards (section 6b) and an outside-code switch.
 - **Layout: View and Edit modes.**
   - Every class has one spot, the same at every level, so the graph doesn't jump when the
-    slider moves. Domain cards size themselves around their classes.
+    slider moves. Domain frames (6b) arrange the boxes for as long as they show, never saved.
   - **View mode** (default): you can drag classes to look around, but nothing is saved; they
     snap back when the level, view, zoom or page changes (opening or closing a class keeps them).
   - **Edit layout mode**: drags are saved. The mode is unmistakable: yellow construction stripes
@@ -1268,8 +1540,14 @@ Built against the approved mock-up (`docs/mockups/tours.html`) and the tours JSO
   chips, highlight attached classes, edit and add specs.
 - Search box that also forces a matching hidden node visible.
 - Panels: Needs binding, Lost notes.
-- **Type toggles** in the toolbar: Outside code, Communications, Tests, Domains (scenes and any other file type: the types strip, 12d) (more types can join later).
+- **Type toggles** in the toolbar: Outside code, Communications, Tests (scenes and any other file type: the types strip, 12d) (more types can join later).
+  **Self calls** (on by default, built 2026-10-31): off = the lines between functions of the same
+  open class (the dashed "call inside the class" arcs, `internal` fan-out links) are not drawn and
+  take no label space; nothing moves. Viewer only (the view is unchanged), remembered per app like
+  the hidden types; the legend entry toggles it too; URL `?selfcalls=0|1`.
   A type switched off folds into its owners like a hidden level, so no connection is lost.
+  **Domains** (live when the app has domains) is not a filter: it sorts the shown boxes into
+  domain frames, with the "Between frames: Bundled / Every line" switch beside it (6b).
 - Edits save to `notes.jsonl` through the server right away.
 
 Later: filter by edge kind, drafting hints and descriptions with Claude
@@ -1294,6 +1572,17 @@ Repulsion and the minimum gap scale with box size. The first fit never zooms bel
 0.82 (box names ~11px): if the whole graph doesn't fit, it fits the classes without outside code,
 else the start and hubs, else centres on the app's start; the user pans for the rest. Class-line
 bends never take a detour longer than 1.4x the straight line (+60): such lines stay straight.
+
+Readability pass (2026-11-11, measured with `tests/e2e/layout_bench.mjs` on three real apps;
+`CoderLayout.measure` gives the numbers): crossing sweeps keep the best order seen; rows inside
+a band line up with their neighbours (median, order kept, one shared row grid); a tall column
+folds by where the classes it uses sit in earlier bands, and each band below the first slides
+sideways by the median gap to those classes, so lines between bands are shorter and cross less;
+bends may run straight out of the end boxes down the gap between columns, or down one gap,
+across and down the next (still within the 1.4x limit), and lines that share a gap are spread
+a few pixels apart (never past the limit). Tried and dropped: gap keepers for lines that skip
+columns (bands grew 3x taller), swap passes (no gain), pulling classes used from above to the
+top of their column (no gain).
 
 ### Start node (requested 2026-10-29)
 
@@ -1320,6 +1609,12 @@ Built by the view engine (it is view data, not scan data); text output prints
   (connections far above the repo's norm), part of a dependency cycle, unsure or unresolved
   references. Shown as a warning chip and listed in `node` output and a `warnings` command.
 - **Size**: line count and member count on every node, shown subtly.
+- **Source links** (built 2026-11-01): the details panel of a class (file row) and of a function
+  (File row) has **Open in editor** (`vscode://file/<abs path>:<line>`) and, when the repo has a
+  usable http(s) or ssh git remote, **View on Forgejo** (web URL + `/src/commit/<sha>/<path>#L<line>`;
+  GitHub hosts use `/blob/`; no link without a remote). `/api/meta` `source` = `{root, web}`, read
+  from git's files without subprocess (`worktrees.file_link_base`), so it works on the hosted page
+  through the helper. Links only; nothing is run.
 - **Built (2026-10-29)**:
   - Test rule in one place (`testcode.py`): folders `test`, `tests`, `__tests__`, `*.Tests`,
     `*.Test`; files `test_*.*`, `*_test.*`, `*.test.*`, `*.spec.*`, `*Tests.cs`; C# projects
@@ -1328,14 +1623,15 @@ Built by the view engine (it is view data, not scan data); text output prints
     "Tested by" = test files with a line to the node or to a node it is nested in (a test
     of a module covers its classes).
   - Size: classes with a tree-sitter span (C#, Python, JS/TS classes, GDScript inner classes)
-    use their own lines; files (modules, scripts, scenes) use the file's lines (`span` false,
+    use their own lines; files (modules, scripts, scenes) use the file's lines outside the file's types, counted once (`span` false,
     printed `(file)`). Members = the node's member list.
   - Warnings (`checks.py`, at scan, stored in graph.json v2): unused = no incoming line from
     non-test code, skipping entry/autoload/test/outside nodes; god = distinct neighbours
     >= max(20, 6 x repo median); cycle = strongly connected set > 1 over non-inheritance
     lines; degree and cycles ignore tests, outside code and type/nested-type pairs; unsure =
-    outgoing unsure lines; unresolved = outside refs that are no package, engine API or
-    Python standard library. Static reading misses dynamic loads, so `unused` is a hint.
+    outgoing unsure lines; unresolved = outside refs that are no package, engine API,
+    standard library or "outside" name (host-program modules like `bpy`, asset files like `.glb`:
+    counted apart in the stack's `outside` bucket, never warned). Static reading misses dynamic loads, so `unused` is a hint.
   - Note fields have one set of rules each (who it is for, what goes in, what does not, a good and
     a bad example), built in as `docs/field_rules.json`; a project may override any part, and add
     house rules for AI notes, in `<data>/fields.md` (beside tours; shared through git; a section per
@@ -1486,7 +1782,20 @@ New warning kinds in `checks.py` for Godot apps, from reader data that exists or
 - **Polish (2026-10-29)**: box faces drawn like the mock-up (header 46, rows 24, fields 18,
   tinted header, bold mono name, "N functions · M fields", drawn accent triangle toggle with
   aria-expanded); open boxes list every function (over 20: the list scrolls inside the box with a
-  filter box, off-screen rows' lines attach to the list edge with "↑/↓ N more lines"). Fan-out lines: one per function pair, as the mock
+  filter box, off-screen rows' lines attach to the list edge with "↑/↓ N more lines").
+  **Folded groups (2026-10-31)**: under the functions, private functions and properties each fold into
+  one row ("▸ 3 private", "▸ 12 properties"; click or Enter opens its list, scrolling as before; open
+  groups are kept per box for the session). Private = a `_name` (GDScript / Python convention;
+  the scanner marks nothing private), except Godot engine callbacks (`_ready`, `_process`, ... :
+  `GODOT_CALLBACKS` in `fanout.js`, the one list) and Python `__dunder__` methods, which are entry
+  points and stay in the list. Lines to a folded private function attach to its group row. The
+  filter box narrows the private group too ("▸ 30 private · 3 matching"). Properties = the fields other code can use
+  (`Member.public`, set by `model.is_public`: C#/Java need `public` (interface and record members
+  are public); Kotlin is public unless private/protected/internal; GDScript and Python hide `_name`;
+  JS/TS hide `#name`, `_name`, private/protected; C++ readers track no access sections, so nothing is
+  hidden). Functions and messages (RPC rows) are never filtered by it; `coderstanding outline` marks
+  hidden fields "[not public]". Field lines stay on the
+  class header as before (no line attaches to a field). Fan-out lines: one per function pair, as the mock
   (cubic, dx = max(50, half the gap)); 4+ lines between one class pair share a trunk that splits
   near its ends. Calm views label every line like the mock; busy ones (over 16 lines or 10
   labels) show only ×N counts until a function or line is hovered or selected. Labels are placed
@@ -1533,6 +1842,12 @@ New warning kinds in `checks.py` for Godot apps, from reader data that exists or
   `--hide-kind KIND` (repeatable, in the command line, with a `hidden kinds:` line in the text),
   `view["hidden_kinds"]`. Saved per app like hidden types (`savedToggles` in `app.js`). The
   non-kind entries (through hidden classes, outside the zoom, call inside the class) are plain.
+- **Tag chips** (built 2026-11-11): the `tags` notes of the drawn classes as `#tag N` chips after
+  the file-kind chips; a click hides that tag's classes (`show["hide_tags"]`, server `hide_tag`,
+  CLI `--hide-tag TAG`, `hidden tags:` line, `view["tags"]` / `view["hidden_tags"]`). `--tag TAG`
+  (server `tag`, view option `onlyTags` / `?tag=`, no chip) keeps only classes with one of the
+  tags (`view["only_tags"]`). Both remove classes like hidden types (`ViewContext.tag_removed`);
+  both are rows of `viewer/view_options.js`.
 
 ## 12b. Hosting on your own server
 
@@ -1559,15 +1874,16 @@ was left in place for the user to clear.
   code), still behind the login gate. The repo's own
   `viewer/hosted.json` says `{"helper": null}`: a local `serve` page talks to its own server.
 - **Helper first**: the page reads `hosted.json`; when it names a helper, the page probes
-  `<helper>/api/apps` (1.5 s) and then sends **every** API call there: app list, views, node,
+  `<helper>/api/apps` (1.5 s, then once more with 8 s for a cold start through the socket) and then sends **every** API call there: app list, views, node,
   stack, tours, layout, notes, scans and writes. `CoderApps.apiBase(hosted, helper)` is the one
   decider and `CoderApps.url()` / `CoderApps.request()` use it for every request. The page shows
   the PC's own registry, and the toolbar label reads "Running on this PC". Big apps cost only
   the PC's memory.
 - **No helper** (phone, PC off, helper stopped): no data and no read-only copy, just an empty
-  state: "Open this page on your PC with Coderstanding running", how to start the helper
-  (`systemctl --user start coderstanding-helper` or the tray icon), to allow the browser's local
-  network prompt, and how to install it once (`scripts/install-helper.sh`).
+  state: "Open this page on your PC with Coderstanding running", a **Start helper** button
+  (`coderstanding://start`; the page then probes every second for up to 15 s and reloads when it
+  answers), to allow the browser's link and local network prompts, and how to install it once
+  (`coderstanding helper install` / `scripts/install-helper.sh`) for when nothing answers.
 - **Deploy** = the lab's deploy script: rsync `viewer/` + `deploy/hosted.json` to `web/`,
   `docker compose up`, one health check of `/hosted.json`. Quick, no data step.
 - **Security** (local server, unchanged; offline guarantee in 18): binds 127.0.0.1 only. CORS for exactly one origin,
@@ -1578,9 +1894,33 @@ was left in place for the user to clear.
   when an Origin header is present and is neither the server's own `http://127.0.0.1|localhost:<port>`
   nor the allowed one, and with 415 unless the body is `application/json` (tour recordings: raw
   audio). Requests whose Host is not 127.0.0.1/localhost are refused (DNS rebinding).
-- **Run at login**: the helper runs as the systemd user unit `coderstanding-helper.service`;
-  `coderstanding-tray.service` shows a tray icon polling `/api/apps` (green up, amber scanning,
-  grey down; tooltip: app count, scans, scan errors), installed by `coderstanding helper install` (`scripts/install-helper.sh`), which also starts the helper and
+- **On demand, nothing at login** (2026-11-01, user: "nothing Coderstanding should run at login,
+  only while a page is open"): every helper the system starts runs `serve --idle-exit 10 --tray`.
+  - Idle exit: the page (local and hosted, same `apps.js`) calls `GET /api/alive` every 3 s. The
+    helper exits 10 s after the last request from a page (any request without the
+    `X-Coderstanding-Monitor` header, which the tray and CLI checks send), also 10 s after start
+    when no page comes, never while a scan runs or a request (an upload) is in flight. A
+    hand-started `serve` without the flag runs until stopped. Hidden tabs throttle timers, so the
+    helper may quit under a background tab: a failed call or the tab becoming visible re-probes
+    (which wakes the Linux socket), retries the call once, else shows the Start helper state.
+  - Linux: `helper install` writes and enables `coderstanding-helper.socket`
+    (`ListenStream=127.0.0.1:8517`, `WantedBy=sockets.target`; the only thing enabled at login,
+    not a process) and `coderstanding-helper.service` (no `[Install]`, `Requires=` the socket). `helper
+    start` starts the socket; `helper stop` stops socket and service, so nothing listens until
+    `helper start`, the link or the next login. Install stops a running (old login-started) service
+    so the socket can take the port.
+  - `coderstanding://start` link (Linux `.desktop` with `MimeType=x-scheme-handler/coderstanding`
+    + `xdg-mime default`; Windows `HKCU\Software\Classes\coderstanding` via `reg add`) runs
+    `coderstanding helper url-start`: start the helper (as `helper start`) unless one answers. The URL
+    is never used: on Linux it is one ignored argument after `--`, on Windows it is not passed at all.
+    `uninstall` removes it.
+  - Tray: no longer at login. The helper starts `coderstanding tray --attached` as a child when Qt is
+    installed, with a pipe on its stdin; it closes the pipe before it stops answering, and the tray
+    then stops polling at once (a poll could wake the socket again) and quits. One tray at a time
+    (a lock file). Menu: open pages, restart, stop, log (no "start": it lives only while the helper does).
+  - Migration: install removes older login entries (Linux `default.target.wants` link of the
+    service, the tray unit and its link; Windows Startup `.cmd` files for helper and tray).
+- **Install**: `coderstanding helper install` (`scripts/install-helper.sh`) also starts the helper and
   verifies it (polls `/api/apps` through the no-proxy opener for ~8 s; on failure prints the last 10 log
   lines and the log path; `helper start` verifies the same way, `--no-start` skips). `serve` starts with
   zero projects (empty state, `/api/apps` lists none); `serve --service` startup errors go to the log and
@@ -1617,7 +1957,8 @@ Replaced by v3: reads and writes all go to the helper, nothing is pushed.
 ### Lab setup (still current)
 
 - **Public behind a login** (2026-10-29; was LAN-only earlier that day): the reverse proxy
-  sends the host to the login proxy, which passes only allowed emails; own TLS certificate,
+  sends the host to the login proxy, which passes any signed-in Forgejo user
+  (Forgejo sign-up is closed; until 2026-11-11 only listed emails); own TLS certificate,
   Force SSL + HSTS. The maintainer's setup: `docs/private/LAB.md`.
 - **Scanning never happens on the lab**; it happens on the PC that opens the page (Refresh and
   Add project go to the helper). A browser-only scanner (Pyodide) could come later.
@@ -1706,7 +2047,9 @@ The user runs it at work on company code: it must make **zero** outside calls (u
 - **Speech**: only voices with `localService === true` (`tours.js` `localVoices`, used by the
   picker, the default choice and the player's "voice ready" check). Chrome's "Google …" and
   Edge's "Microsoft … Online (Natural)" voices send the text away and are never used; no local
-  voice = the silent timeline with the usual note.
+  voice = the silent timeline with the usual note. If a browser reports no on-device voice at all,
+  the picker lists what it has, marked "online", with "Choose a voice (online)" selected: an online
+  voice is used only after you pick it by name, never by default (2026-11-11). "Online" = the name looks like a network voice (`Online`, `Google …`, WaveNet) and `localService` is not true; espeak-ng via speech-dispatcher is reported non-local by Chromium but is on the device, so it is not labelled online and may be auto-picked. The picker shows the best 8 for the page language (tiers: Natural/Neural/Piper/Siri, other plain, espeak base, then espeak `+variants` and robots, exact language first) with "More voices..." for the full list; the top-ranked is auto-picked, a remembered name wins, and an espeak-only best voice shows a hint to install a better one (2026-11-11).
 - **Hosted page**: the deliberate exception. With no `~/.config/coderstanding/hosted.json` (and
   no `--allow-origin` / env) there is no cross-origin access at all: the **work setting**.
 - **Tray**: polls `127.0.0.1:8517` through a no-proxy opener (an `HTTP_PROXY` at work never sees

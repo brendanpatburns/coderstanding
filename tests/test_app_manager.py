@@ -68,7 +68,7 @@ def test_delete_data_keeps_notes_tours_specs_and_everything_outside(tmp_path):
     app = scanned(tmp_path)
     (tmp_path / "beside.txt").write_text("mine")
     result = remove_app("one", delete_data=True)
-    assert set(result["deleted"]) == {"graph.json", "cache", "layout.json"}
+    assert set(result["deleted"]) == {"graph.json", "names.json", "cache", "layout.json", "worktree.json", "progress.jsonl"}
     assert sorted(p.name for p in app.data.iterdir()) == ["notes.jsonl", "settings.json", "specs", "tours"]
     assert (tmp_path / "beside.txt").exists() and (app.root / "a.py").exists()
 

@@ -13,13 +13,13 @@ from pathlib import Path
 
 from . import language, model
 
-SCANNER_VERSION = 15  # bump to invalidate every cache entry
+SCANNER_VERSION = 29  # bump to invalidate every cache entry
 CACHE_DIR_ENV = "CODERSTANDING_CACHE_DIR"
-GITIGNORE_TEXT = "cache/\ngraph.json\n"
+GITIGNORE_LINES = ("cache/", "graph.json", ".gitignore")  # the last one: a folder of only generated files stays invisible to git
 
 _TYPES = {cls.__name__: cls for cls in (
     language.Target, language.Ref, language.Declaration, language.Mark,
-    language.FileResult, model.Member)}
+    language.FileResult, language.NodeLookup, model.Member)}
 
 
 def encode(value):
@@ -57,12 +57,16 @@ def default_cache_dir(root):
 
 
 def write_gitignore(root):
-    """Keep the cache and graph.json out of the scanned repo's git."""
+    """Keep the cache and graph.json (and this file itself) out of the scanned repo's git; adds
+    lines an older scan's file lacks. Notes kept in the folder stay visible to git."""
     folder = Path(root) / ".coderstanding"
     folder.mkdir(exist_ok=True)
     marker = folder / ".gitignore"
-    if not marker.exists():
-        marker.write_text(GITIGNORE_TEXT, encoding="utf-8")
+    text = marker.read_text(encoding="utf-8") if marker.exists() else ""
+    missing = [line for line in GITIGNORE_LINES if line not in text.splitlines()]
+    if missing:
+        separator = "" if not text or text.endswith("\n") else "\n"
+        marker.write_text(text + separator + "\n".join(missing) + "\n", encoding="utf-8")
 
 
 class ScanCache:

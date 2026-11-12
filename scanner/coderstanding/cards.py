@@ -29,8 +29,9 @@ lines to the cards that link them (`link_index`), so links are stored only on th
 from dataclasses import dataclass, field
 
 from .apps import AppError, find_id
-from .items import (Item, ItemError, ItemStore, check_id, focus_ids, free_id, resolve_target,
+from .items import (Item, ItemError, ItemStore, check_id, focus_ids, free_id, stored_target,
                     slug, unknown_targets)
+from .tours import open_tours
 from .notes import AI_AUTHOR, ARROW, FUNCTION_SEP, HUMAN_AUTHOR
 
 PRIORITIES = ("high", "medium", "low")  # work priority and importance share one scale
@@ -269,6 +270,12 @@ class Cards:
             return sorted(hits, key=lambda c: (priority_rank(getattr(c, sort)), self.tree_key(c)))
         return sorted(hits, key=self.tree_key)
 
+    def tree_focus(self, card_id):
+        """View ids (`A`, `A→B`, `A#f`) the card and its finer cards link: what a spec's
+        progress counts (progress.Progress.links_summary)."""
+        card = self.get(card_id)
+        return focus_ids(self.graph, self.notes, [link for c in (card, *self.descendants(card.id)) for link in c.links])
+
     def link_keys(self, card):
         """The classes and lines a card links, as view ids: `A`, `A→B` (a function: its class)."""
         keys = []
@@ -349,7 +356,7 @@ class Cards:
 
     def short_link(self, text):
         """A class link as the file keeps it: its short name when that is unique, else as given."""
-        found = resolve_target(self.graph, self.notes, text)
+        found = stored_target(self.graph, self.notes, text)
         if not found or found[0] != "node":
             return text
         name = self.graph.nodes[found[1]].name
@@ -483,3 +490,20 @@ def link_index(app, graph, notes):
             for key in cards.link_keys(card):
                 index.setdefault(key, []).append(cards.hit_json(card))
     return index
+
+
+def linked_texts(app, graph, notes):
+    """class id -> [(title, text)] of every spec, memo and tour step linking it (a function
+    link counts for its class): what `find` searches beside the notes."""
+    texts = {}
+    for kind in KINDS:
+        cards = open_cards(app, graph, notes, kind)
+        for card in cards.cards.values():
+            for key in cards.link_keys(card):
+                texts.setdefault(key, []).append((card.title, card.text))
+    tours = open_tours(app, graph, notes)
+    for tour in tours.all():
+        for step in tour.steps:
+            for key in {t.partition(FUNCTION_SEP)[0] for t in tours.focus_of(step)}:
+                texts.setdefault(key, []).append((step.title or tour.title, step.text))
+    return texts

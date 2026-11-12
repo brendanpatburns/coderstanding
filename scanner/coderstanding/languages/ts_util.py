@@ -39,3 +39,29 @@ def descendants(node, stop=()):
         yield child
         if child.type not in stop:
             stack.extend(child.children[::-1])
+
+
+def lifted_children(node, named=False):
+    """The children of `node`, with the children of any ERROR node (the grammar could not parse
+    that part) put in its place, so declarations the grammar half-understood are still read.
+    `named=True` keeps only named nodes (like `named_children`)."""
+    found = []
+    for child in node.children:
+        if child.type == "ERROR":
+            found.extend(lifted_children(child, named))
+        elif child.is_named or not named:
+            found.append(child)
+    return found
+
+
+def first_error_line(root):
+    """Line of the first syntax error in a parsed file (an ERROR or missing node), 0 if none."""
+    if not root.has_error:
+        return 0
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if node.type == "ERROR" or node.is_missing:
+            return line(node)
+        stack.extend(reversed([child for child in node.children if child.has_error or child.is_missing]))
+    return 0

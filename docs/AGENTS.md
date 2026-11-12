@@ -7,9 +7,16 @@
 - Collapse, concrete-view and zoom logic lives only in the view engine (`scanner/coderstanding/views.py`).
   The viewer and text CLI call it; they never compute views themselves.
 - Update `docs/COMPONENTS.md` in the same commit when you add or widen a component.
-- Add tests for your work and run only those test files.
+- Add tests for your work. Before committing run `coderstanding tests <app> --diff` and run the test
+  files it lists (your tests plus the existing tests of what you changed and its dependents): "run only
+  the tests for what you changed" means that list, never just the new tests. No full suite.
 - Work on your own branch; do not merge to main or push.
 - Be token-efficient: grep, read line ranges, terse report.
+- Working on the tool itself in a worktree: run `<worktree>/bin/coderstanding ... --repo <worktree>` (the
+  `coderstanding` on PATH runs main's code and prints a hint). Notes, tours and specs written there land in
+  the worktree's own `.coderstanding/`. Tests never touch the real `apps.json` (conftest sets temp
+  `CODERSTANDING_REGISTRY` and `CODERSTANDING_DATA_HOME`; a session guard fails the run if it changes).
+- `add`/`rescan` keep data out of the scanned repo (`~/.local/share/coderstanding/<name>`) unless `--data`.
 - Product UI text says AI, not Claude; stored data keeps the real author name.
 - Offline only (DESIGN 18): never add a call to another machine (no web APIs, CDNs, online
   voices, telemetry). `tests/test_offline.py` scans for network APIs; a new loopback-only use goes
@@ -51,7 +58,9 @@ or guesses levels: the shared core does that (`scanner/coderstanding/`, see COMP
      (lambdas and local functions count as their enclosing one), `language.INIT_MEMBER`
      (`<init>`) for initializers and top-level code, `language.FIELD_MEMBER` (`<field>`) for a
      field's type reference; None for bases, imports and scene files. The core counts calls
-     per (from_member, member) pair. Bump `cache.SCANNER_VERSION` when a reader's output changes.
+     per (from_member, member) pair. A call to one of the owner's own functions (same module,
+     `self.x()`) is `Ref.own_call(owner_id, function, line, from_member)`: a self edge.
+     Bump `cache.SCANNER_VERSION` when a reader's output changes.
    - `Target`: exactly one of `name` (as written, e.g. `List`'s arg `Foo`, `Outer.Inner`),
      `path` (`res://x.gd`, `./util`, repo-relative), or `id`; optional `member` for a child
      (`import {Foo} from './a'` = `Target(path="./a", member="Foo")`).

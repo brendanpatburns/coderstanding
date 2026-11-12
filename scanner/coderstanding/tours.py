@@ -9,6 +9,9 @@ excerpt when written: a different digest today = the step is stale ("code change
 written") until it is re-saved, accepted or confirmed (`still true`), like notes (10).
 Authors follow the notes model: `by` / `ai` per tour and per step; a human edit or accept
 turns an AI draft into the human's step.
+Line notes (`notes: [{lines: +a..+b, text, cue}]` on a step with code) are short callouts on
+lines of the excerpt, offsets like `mark`; the viewer pops them up as the narration reaches
+`cue` (words of the step text), else in order through the step. They belong to the step's author.
 
 """
 
@@ -18,10 +21,10 @@ from dataclasses import dataclass, field
 
 from .comments import Comments
 from .fingerprints import SourceLines, class_end, digest, function_spans
-from .items import (Item, ItemError, ItemStore, check_id, focus_ids, join_sections,
-                    resolve_target, split_sections, unknown_targets)
+from .items import (Item, ItemError, ItemStore, check_id, focus_ids, join_sections, parse_scalar,
+                    stored_target, split_sections, unknown_targets)
 from .notes import AI_AUTHOR, ARROW, FUNCTION_SEP, HUMAN_AUTHOR, edge_key, function_key, node_key
-from .views import effective_level
+from .views import ViewContext, effective_level, start_paths, unique_namer
 
 KIND = "tours"
 COMMENT_KIND = "tour"  # comment targets `tour:<id>` and `tour:<id>#<step key>`
@@ -29,6 +32,7 @@ AUDIO_TYPES = {"audio/webm": "webm", "audio/ogg": "ogg"}  # upload type -> file 
 MAX_AUDIO_BYTES = 5 * 1024 * 1024  # about 20 minutes of 32 kbps Opus
 DRAFT_LINES = 8  # excerpt length of an AI draft's step
 OFFSETS = re.compile(r"^\+?(\d+)(?:\.\.\+?(\d+))?$")
+VIEW_NAME = re.compile(r"^[a-z][a-z0-9_]{0,39}$")  # a view option's URL name (viewer/view_options.js)
 
 
 # --- the model ---
@@ -44,6 +48,14 @@ class Code:
 
 
 @dataclass
+class LineNote:
+    first: int  # offsets from the code anchor's first line, like Code.mark
+    last: int
+    text: str
+    cue: str = None  # words of the step text the note pops up at (None: in order through the step)
+
+
+@dataclass
 class Step:
     key: str
     title: str = ""
@@ -54,6 +66,8 @@ class Step:
     ai: bool = False
     rec: dict = None  # recording: {by, fp (digest of the spoken text), dur, ext}
     level: int = None
+    notes: list = field(default_factory=list)  # LineNote callouts on the code lines
+    view: dict = field(default_factory=dict)  # view options for this step only (over the tour's)
 
 
 @dataclass
@@ -63,6 +77,48 @@ class Tour:
     by: str = HUMAN_AUTHOR
     ai: bool = False
     steps: list = field(default_factory=list)
+    start: bool = False  # a "Start here" path: a short tour from an entry class (views.start_paths)
+    view: dict = field(default_factory=dict)  # view options while it plays: URL names -> values
+
+
+def clean_view(data, strict=False):
+    """A `view:` map: option URL names (`lines`, `selfcalls`, `hide_kind`) -> a scalar or a list of
+    scalars. The viewer's table (viewer/view_options.js) knows the names and values and skips the
+    ones it does not know, so a newer or older tour still loads; `strict` (writes) raises on a bad
+    shape, else bad entries are dropped."""
+    if data in (None, ""):
+        return {}
+    if not isinstance(data, dict):
+        if strict:
+            raise ValueError(f"view must be a map of option names to values, got {data!r}")
+        return {}
+    out = {}
+    for name, value in data.items():
+        scalar = (str, int, float, bool)
+        ok = VIEW_NAME.match(str(name)) and (isinstance(value, scalar) or (
+            isinstance(value, list) and all(isinstance(v, scalar) for v in value)))
+        if ok:
+            out[str(name)] = value
+        elif strict:
+            raise ValueError(f"bad view option {name!r}: {value!r}")
+    return out
+
+
+def parse_view_pairs(pairs):
+    """CLI `--view key=value ...` -> {key: value}; `a,b` is a list, `key=` (empty) removes it (None)."""
+    out = {}
+    for pair in pairs or []:
+        name, sep, text = pair.partition("=")
+        if not sep or not VIEW_NAME.match(name.strip()):
+            raise ValueError(f"--view takes key=value, got {pair!r}")
+        text = text.strip()
+        if not text:
+            out[name.strip()] = None
+        elif "," in text:
+            out[name.strip()] = [parse_scalar(t) for t in text.split(",") if t.strip()]
+        else:
+            out[name.strip()] = parse_scalar(text)
+    return out
 
 
 def parse_offsets(text):
@@ -112,6 +168,22 @@ def code_to_meta(code):
     return data
 
 
+def notes_from_meta(rows):
+    notes = []
+    for row in rows or []:
+        if not isinstance(row, dict) or not str(row.get("text") or "").strip():
+            raise ItemError(f"a line note needs lines and text: {row!r}")
+        first, last = parse_offsets(row.get("lines", "+0"))
+        cue = str(row["cue"]).strip() if row.get("cue") else None
+        notes.append(LineNote(first, last, str(row["text"]).strip(), cue or None))
+    return notes
+
+
+def notes_to_meta(notes):
+    return [{"lines": offsets_text(n.first, n.last), "text": n.text, **({"cue": n.cue} if n.cue else {})}
+            for n in notes]
+
+
 def tour_from_item(item):
     meta = item.meta
     by, ai = str(meta.get("by") or HUMAN_AUTHOR), bool(meta.get("ai", False))
@@ -129,8 +201,10 @@ def tour_from_item(item):
         steps.append(Step(key, title, text, [str(t) for t in row.get("targets") or []],
                           code_from_meta(row.get("code")), str(row.get("by", by)),
                           bool(row.get("ai", ai if "by" not in row else False)),
-                          rec if isinstance(rec, dict) else None, row.get("level")))
-    return Tour(item.id, str(meta.get("title") or item.id), by, ai, steps)
+                          rec if isinstance(rec, dict) else None, row.get("level"),
+                          notes_from_meta(row.get("notes")), clean_view(row.get("view"))))
+    return Tour(item.id, str(meta.get("title") or item.id), by, ai, steps,
+                bool(meta.get("start", False)), clean_view(meta.get("view")))
 
 
 def tour_to_item(tour):
@@ -139,8 +213,12 @@ def tour_to_item(tour):
         row = {"key": step.key, "targets": step.targets}
         if step.code:
             row["code"] = code_to_meta(step.code)
+        if step.notes:
+            row["notes"] = notes_to_meta(step.notes)
         if step.level is not None:
             row["level"] = step.level
+        if step.view:
+            row["view"] = step.view
         if step.by != tour.by:
             row["by"] = step.by
         if step.ai != (tour.ai if step.by == tour.by else False):
@@ -148,7 +226,9 @@ def tour_to_item(tour):
         if step.rec:
             row["audio"] = {"rec": step.rec}
         rows.append(row)
-    meta = {"title": tour.title, "by": tour.by, **({"ai": True} if tour.ai else {}), "steps": rows}
+    meta = {"title": tour.title, "by": tour.by, **({"ai": True} if tour.ai else {}),
+            **({"start": True} if tour.start else {}), **({"view": tour.view} if tour.view else {}),
+            "steps": rows}
     return Item(tour.id, meta, join_sections([(s.title, s.text) for s in tour.steps]))
 
 
@@ -176,7 +256,7 @@ class Excerpt:
 def anchor_span(graph, notes, at):
     """(file, first line, end line exclusive or None = file end) of a class or function target;
     None when it is gone (or names a connection or outside code)."""
-    found = resolve_target(graph, notes, at)
+    found = stored_target(graph, notes, at)
     if not found or found[0] == "edge":
         return None
     node = graph.nodes[found[1]]
@@ -199,6 +279,33 @@ def excerpt(graph, notes, source, code):
     high = min(max(first + code.last, low), last_line)
     return Excerpt(path, first, low, high, [first + m for m in code.mark if low <= first + m <= high],
                    source.span(path, low, high + 1))
+
+
+def parse_line_range(text):
+    """`50-51` -> (50, 51); `50` -> (50, 50): today's line numbers (CLI notes)."""
+    match = re.fullmatch(r"\s*(\d+)(?:\s*-\s*(\d+))?\s*", str(text))
+    if not match:
+        raise ValueError(f"lines must look like 50 or 50-52, got {text!r}")
+    low, high = int(match.group(1)), int(match.group(2) or match.group(1))
+    if high < low:
+        raise ValueError(f"lines end before they start: {text!r}")
+    return low, high
+
+
+def note_at(start, code, low, high, text, cue=None):
+    """A line note on today's lines low..high of an excerpt whose anchor starts at `start`,
+    clipped to the step's lines."""
+    first = min(max(low - start, code.first), code.last)
+    last = min(max(high - start, first), code.last)
+    cue = str(cue).strip() if cue else None
+    return LineNote(first, last, text.strip(), cue or None)
+
+
+def notes_json(step, found):
+    """The step's line notes in today's line numbers (None when the anchor is gone), in line order."""
+    start = found.start if found else None
+    return [{"from": None if start is None else start + n.first, "to": None if start is None else start + n.last,
+             "text": n.text, "cue": n.cue} for n in step.notes]
 
 
 # --- the store of one app ---
@@ -308,10 +415,10 @@ class Tours:
             rec = {"by": step.rec.get("by"), "dur": step.rec.get("dur"),
                    "stale": step.rec.get("fp") != spoken_fp(step), "url": url}
         return {"key": step.key, "title": step.title, "text": step.text, "targets": step.targets,
-                "by": step.by, "ai": step.ai, "stale": stale,
+                "by": step.by, "ai": step.ai, "stale": stale, "notes": notes_json(step, found),
                 "lost": self.is_lost(step, found), "lost_targets": self.lost_targets(step),
                 "code": code, "audio": {"rec": rec},
-                "level": self.level_of(step, focus), "focus": focus,
+                "level": self.level_of(step, focus), "focus": focus, "view": dict(step.view),
                 "expand": sorted({f.rpartition(FUNCTION_SEP)[0] for f in focus
                                   if ARROW not in f and f not in self.graph.nodes})}
 
@@ -322,11 +429,11 @@ class Tours:
         steps = [{**self.step_json(tour, s, app_name), "comments": counts.get(f"{target}#{s.key}", 0)}
                  for s in tour.steps]
         return {"id": tour.id, "title": tour.title, "by": tour.by, "ai": tour.ai,
-                "comments": sum(counts.values()), "steps": steps}
+                "start": tour.start, "view": dict(tour.view), "comments": sum(counts.values()), "steps": steps}
 
     def row_json(self, tour):
         return {"id": tour.id, "title": tour.title, "by": tour.by, "ai": tour.ai,
-                "steps": len(tour.steps), "changed": sum(self.is_stale(s) for s in tour.steps),
+                "start": tour.start, "steps": len(tour.steps), "changed": sum(self.is_stale(s) for s in tour.steps),
                 "ai_steps": sum(s.ai for s in tour.steps),
                 "comments": sum(self.comments.open_counts(f"{COMMENT_KIND}:{tour.id}").values())}
 
@@ -370,8 +477,34 @@ class Tours:
                 code.mark = old.code.mark
         key = data.get("key") if isinstance(data.get("key"), str) and data.get("key") else None
         step = Step(key or new_key(taken), title.strip(), text.strip(), targets, code,
-                    level=data.get("level") if isinstance(data.get("level"), int) else None)
+                    level=data.get("level") if isinstance(data.get("level"), int) else None,
+                    view=clean_view(data["view"], strict=True) if "view" in data
+                    else dict(old.view) if old else {})  # an older editor sends no view: kept
+        step.notes = self.notes_from_body(data.get("notes"), code, old)
         return step
+
+    def notes_from_body(self, rows, code, old):
+        """Line notes from the editor: `[{from, to, text, cue?}]` in today's line numbers. A lost
+        anchor keeps the step's old notes (their lines cannot be placed)."""
+        if not code:
+            if rows:
+                raise ValueError("line notes need the step's code")
+            return []
+        span = anchor_span(self.graph, self.notes, code.at)
+        if not span:
+            return old.notes if old and old.code and old.code.at == code.at else []
+        if not rows:
+            return []
+        if not isinstance(rows, list):
+            raise ValueError("notes must be a list")
+        notes = []
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("from"), int) \
+                    or not isinstance(row.get("text"), str) or not row["text"].strip():
+                raise ValueError("a line note needs {from, to, text}")
+            to = row.get("to") if isinstance(row.get("to"), int) else row["from"]
+            notes.append(note_at(span[1], code, row["from"], to, row["text"], row.get("cue")))
+        return notes
 
     def put(self, tour_id, body, by=HUMAN_AUTHOR):
         """The whole tour from the editor. Steps keep their keys; a new or changed step is the
@@ -391,6 +524,7 @@ class Tours:
                 raise ValueError(f"step key {step.key} used twice")
             taken.add(step.key)
             if before and same_content(before, step):
+                before.view = step.view  # view options are no spoken content: no new author or fp
                 step = before
             else:
                 step.by, step.ai = by, False
@@ -398,7 +532,9 @@ class Tours:
                 self.stamp(step)
             steps.append(step)
         title = body["title"].strip()
-        tour = Tour(tour_id, title, old.by if old else by, old.ai if old else False, steps)
+        view = clean_view(body["view"], strict=True) if "view" in body else dict(old.view) if old else {}
+        tour = Tour(tour_id, title, old.by if old else by, old.ai if old else False, steps,
+                    old.start if old else bool(body.get("start")), view)
         if old and title != old.title:
             tour.by, tour.ai = by, False
         self.save(tour)
@@ -440,10 +576,7 @@ class Tours:
     def edit_step(self, tour_id, number, by=AI_AUTHOR, ai=True, **fields):
         """`tour --step N --text ...`: change a step's title/text as `by` (an AI edit makes it an
         AI draft again); re-stamps it."""
-        tour = self.get(tour_id)
-        if not 1 <= number <= len(tour.steps):
-            raise ValueError(f"{tour_id} has steps 1-{len(tour.steps)}, not {number}")
-        step = tour.steps[number - 1]
+        tour, step = self.numbered(tour_id, number)
         for name, value in fields.items():
             if value is not None:
                 setattr(step, name, value.strip())
@@ -452,16 +585,58 @@ class Tours:
         self.save(tour)
         return tour, step
 
-    def draft(self, tour_id, title, targets, by=AI_AUTHOR):
+    def edit_note(self, tour_id, number, lines, text=None, cue=None, by=AI_AUTHOR, ai=True):
+        """`tour --step N --note A-B TEXT [--cue WORDS]` / `--drop-note A-B`: add, change (same
+        lines) or, with text None, remove a line note as `by`; lines are today's numbers."""
+        tour, step = self.numbered(tour_id, number)
+        found = self.excerpt(step)
+        if not found:
+            raise ValueError(f"step {number} has no code to put a note on")
+        low, high = parse_line_range(lines)
+        keep = [n for n in step.notes if (found.start + n.first, found.start + n.last) != (low, high)]
+        if text is None and len(keep) == len(step.notes):
+            raise ValueError(f"step {number} has no note on lines {lines}")
+        if text is not None:
+            if not found.from_ <= low <= high <= found.to:
+                raise ValueError(f"lines {lines} are outside step {number}'s code ({found.range})")
+            keep.append(note_at(found.start, step.code, low, high, text, cue))
+        step.notes = sorted(keep, key=lambda n: (n.first, n.last))
+        step.by, step.ai = by, ai
+        self.save(tour)
+        return tour, step
+
+    def set_view(self, tour_id, values, number=None):
+        """`tour --view k=v ...` (the tour) or `--step N --view k=v ...` (that step only): set
+        options, None removes one. Not content: authors and fingerprints stay."""
+        tour, step = self.numbered(tour_id, number) if number else (self.get(tour_id), None)
+        target = step or tour
+        view = dict(target.view)
+        for name, value in values.items():
+            if value is None:
+                view.pop(name, None)
+            else:
+                view[name] = value
+        target.view = clean_view(view, strict=True)
+        self.save(tour)
+        return tour, target.view
+
+    def numbered(self, tour_id, number):
+        tour = self.get(tour_id)
+        if not 1 <= number <= len(tour.steps):
+            raise ValueError(f"{tour_id} has steps 1-{len(tour.steps)}, not {number}")
+        return tour, tour.steps[number - 1]
+
+    def draft(self, tour_id, title, targets, by=AI_AUTHOR, start=False):
         """An AI draft along the targets, in the given order: one step per target, anchored on
         its function (a connection: on the calling function, at the call), text from notes and
-        code docs. Saved as `by` with ai: true until a human accepts it."""
+        code docs. Saved as `by` with ai: true until a human accepts it; `start` flags it as a
+        Start-here path."""
         check_id(tour_id)
         if self.store.exists(tour_id):
             raise ValueError(f"tour {tour_id} exists: edit it with --step or in its file")
         steps, taken = [], set()
         for target in targets:
-            found = resolve_target(self.graph, self.notes, target)
+            found = stored_target(self.graph, self.notes, target)
             if found is None:
                 raise ValueError(f"unknown target: {target}")
             step = Step(new_key(taken), target, self.draft_text(target, found), [target],
@@ -469,9 +644,26 @@ class Tours:
             taken.add(step.key)
             self.stamp(step)
             steps.append(step)
-        tour = Tour(tour_id, title, by, True, steps)
+        tour = Tour(tour_id, title, by, True, steps, start)
         self.save(tour)
         return tour
+
+    def draft_starts(self, title=None):
+        """AI-draft one start tour (`start: true`) per start path (views.start_paths), named
+        `start-<entry>`: ([drafted tours], [ids that already exist and were left alone]).
+        `title` names the first one; the others are "Start here: <entry>"."""
+        namer = unique_namer(self.graph)
+        drafted, kept = [], []
+        for path in start_paths(ViewContext(self.graph, self.notes)):
+            entry = namer(path[0]["id"])
+            tour_id = "start-" + (re.sub(r"[^a-z0-9]+", "-", entry.lower()).strip("-") or "here")
+            if self.store.exists(tour_id):
+                kept.append(tour_id)
+                continue
+            name = title if title and not drafted else f"Start here: {entry}"
+            drafted.append(self.draft(tour_id, name, [namer(step["id"]) for step in path],
+                                      start=True))
+        return drafted, kept
 
     def draft_text(self, target, found):
         kind, *ids = found
@@ -589,14 +781,40 @@ class Tours:
         """[(tour id, step number)] of steps whose anchor or targets are gone."""
         return [(t.id, n) for t in self.all() for n, s in enumerate(t.steps, 1) if self.is_lost(s)]
 
+    def steps_over(self, units):
+        """[(tour id, step number)] of steps whose code window covers a unit (class id, function or
+        None): the steps that may go stale when that code changes."""
+        spans = [span for span in map(self.unit_span, units) if span]
+        return [(tour.id, number) for tour in self.all() for number, step in enumerate(tour.steps, 1)
+                if step.code and self.window_covers(step.code, spans)]
+
+    def unit_span(self, unit):
+        """(file, first line, end line exclusive or None = file end) of a unit; None when unknown."""
+        node_id, function = unit
+        node = self.graph.nodes[node_id]
+        if function:
+            found = function_spans(node).get(function)
+            return (node.file, *found[0]) if found else None
+        return (node.file, node.line, class_end(node)) if node.file else None
+
+    def window_covers(self, code, spans):
+        """True when the step's code lines (offsets from its anchor) overlap one of the spans."""
+        anchor = anchor_span(self.graph, self.notes, code.at)
+        if anchor is None:
+            return False
+        file, first, end = anchor
+        low, high = first + code.first, first + code.last
+        return any(file == span_file and low < (span_end or high + 1) and span_first <= high
+                   for span_file, span_first, span_end in spans)
+
 
 def same_content(old, new):
     """True when the editor sent a step back unchanged (title, text, targets, code, level)."""
     def code_of(step):
         c = step.code
         return (c.at, c.first, c.last, c.mark) if c else None
-    return ((old.title, old.text, old.targets, code_of(old), old.level)
-            == (new.title, new.text, new.targets, code_of(new), new.level))
+    return ((old.title, old.text, old.targets, code_of(old), old.level, old.notes)
+            == (new.title, new.text, new.targets, code_of(new), new.level, new.notes))
 
 
 def open_tours(app, graph, notes):

@@ -1,9 +1,12 @@
-"""The local helper (`coderstanding serve`) at login, per platform: the one module that knows what
-each platform's login entries contain, and how to install, remove, start, stop and inspect them.
+"""The local helper (`coderstanding serve`) on demand, per platform: the one module that knows what
+each platform's entries contain, and how to install, remove, start, stop and inspect them.
 
-Linux: two systemd user units (helper, tray). Windows: two `.cmd` files in the user's Startup folder
-(chosen over a Task Scheduler task because it needs no admin rights and no extra tool, only a file,
-and is easy to see in Task Manager's Startup tab; `pythonw` keeps the server itself windowless).
+Nothing runs at login; the helper runs only while a page uses it (`serve --idle-exit`, DESIGN v3)
+and shows the tray icon while it runs (`serve --tray`, when Qt is installed).
+Linux: a systemd user socket (`coderstanding-helper.socket`, enabled at login, not a process) that
+starts `coderstanding-helper.service` on the first connection, plus a `coderstanding://` link
+handler (.desktop file). Windows: the `coderstanding://` link handler in the user's registry
+(HKCU, no admin rights); the page's Start helper button opens it. `pythonw` keeps it windowless.
 The platform switch is `backend()`; everything else (CLI, tray) calls the functions below.
 """
 
@@ -30,8 +33,14 @@ LOCAL_URL = f"http://127.0.0.1:{PORT}/"
 # No proxy, even when HTTP_PROXY is set: the poll goes straight to loopback, never to a
 # (company) proxy (DESIGN 18).
 LOCAL_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-SERVE_ARGS = ["serve", "--port", str(PORT)]
+IDLE_EXIT = 10  # seconds without an open page before the helper exits
+# The one way a helper is started (unit, link, `helper start`): idle exit and the tray icon.
+SERVE_ARGS = ["serve", "--port", str(PORT), "--idle-exit", str(IDLE_EXIT), "--tray"]
 WINDOWS_SERVE_ARGS = [*SERVE_ARGS, "--service"]  # --service: log to the log file, write the pid file
+# Requests carrying this header (tray polls, CLI checks) never keep an idle helper up.
+MONITOR_HEADER = "X-Coderstanding-Monitor"
+SCHEME = "coderstanding"  # coderstanding://start: the page's Start helper link
+LINK_ARGS = ["helper", "url-start"]  # what the link runs; the URL itself is never used
 DETACHED_FLAGS = 0x00000008 | 0x00000200  # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
 LOG_BYTES, LOG_FILES = 1_000_000, 3
 VERIFY_TRIES = 8  # one try per second
@@ -90,62 +99,100 @@ def cmd_quote(text):
     return '"' + text.replace("%", "%%") + '"'
 
 
+def desktop_quote(text):
+    """One Exec= word of a .desktop file (Desktop Entry spec: quote, backslash-escape, %%)."""
+    escaped = "".join("\\" + ch if ch in '"`$\\' else ch for ch in text)
+    return '"' + escaped.replace("\\", "\\\\").replace("%", "%%") + '"'
+
+
 class SystemdUser:
-    """Linux: user units under ~/.config/systemd/user."""
+    """Linux: user units under ~/.config/systemd/user and a link handler in
+    ~/.local/share/applications."""
     name = "systemd"
+    SOCKET, SERVICE = f"{HELPER}.socket", f"{HELPER}.service"
+    DESKTOP = f"{SCHEME}-url.desktop"
 
     def folder(self):
         base = os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config"
         return Path(base) / "systemd" / "user"
 
+    def apps_folder(self):
+        base = os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share"
+        return Path(base) / "applications"
+
     def _exec(self, *args):
         return "ExecStart=" + " ".join(systemd_quote(word) for word in [*launch_command(), *args])
 
-    def files(self, tray):
-        env = "".join(f"Environment={systemd_quote(f'{k}={v}')}\n" for k, v in launch_env().items())
-        helper = (f"[Unit]\nDescription=Coderstanding local helper (serve on 127.0.0.1:{PORT})\n\n"
-                  f"[Service]\n{self._exec(*SERVE_ARGS)}\n{env}Restart=on-failure\nRestartSec=5\nNice=10\n\n"
-                  "[Install]\nWantedBy=default.target\n")
-        files = {self.folder() / f"{HELPER}.service": helper}
-        if tray:
-            files[self.folder() / f"{TRAY}.service"] = (
-                "[Unit]\nDescription=Coderstanding helper tray icon\nPartOf=graphical-session.target\n"
-                f"After=graphical-session.target\n\n[Service]\n{self._exec('tray')}\n{env}"
-                "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=graphical-session.target\n")
-        return files
+    def _desktop_exec(self):
+        env = [f"{k}={v}" for k, v in launch_env().items()]
+        words = [*(["env", *env] if env else []), *launch_command(), *LINK_ARGS]
+        # `--` and %u last: whatever the URL holds is one ignored argument, never an option.
+        return "Exec=" + " ".join(desktop_quote(word) for word in words) + " -- %u"
 
-    def after_install(self, tray):
-        units = [f"{HELPER}.service", *([f"{TRAY}.service"] if tray else [])]
-        return [self._ctl("daemon-reload"), self._ctl("enable", *units)]
+    def files(self):
+        env = "".join(f"Environment={systemd_quote(f'{k}={v}')}\n" for k, v in launch_env().items())
+        socket_unit = (f"[Unit]\nDescription=Coderstanding local helper socket (127.0.0.1:{PORT})\n\n"
+                       f"[Socket]\nListenStream=127.0.0.1:{PORT}\n\n[Install]\nWantedBy=sockets.target\n")
+        # No [Install]: the service never starts at login, only through the socket.
+        service = (f"[Unit]\nDescription=Coderstanding local helper (serve on 127.0.0.1:{PORT})\n"
+                   f"Requires={self.SOCKET}\nAfter={self.SOCKET}\n\n"
+                   f"[Service]\n{self._exec(*SERVE_ARGS)}\n{env}Restart=on-failure\nRestartSec=5\nNice=10\n")
+        desktop = ("[Desktop Entry]\nType=Application\nName=Coderstanding helper\n"
+                   "Comment=Starts the Coderstanding local helper (coderstanding:// links)\n"
+                   f"{self._desktop_exec()}\nMimeType=x-scheme-handler/{SCHEME};\n"
+                   "NoDisplay=true\nTerminal=false\n")
+        return {self.folder() / self.SOCKET: socket_unit, self.folder() / self.SERVICE: service,
+                self.apps_folder() / self.DESKTOP: desktop}
+
+    def old_entries(self):
+        """Login entries of older installs: the login-started helper's link, the tray unit."""
+        return [self.folder() / "default.target.wants" / self.SERVICE,
+                self.folder() / "graphical-session.target.wants" / f"{TRAY}.service",
+                self.folder() / f"{TRAY}.service"]
+
+    def after_install(self):
+        # stop: an old login-started helper (or a running one) frees the port for the socket.
+        # One unit per stop: systemctl refuses the whole stop when any unit is not loaded
+        # (the old tray unit is gone by now).
+        commands = [self._ctl("daemon-reload"), self._ctl("stop", self.SERVICE),
+                    self._ctl("stop", f"{TRAY}.service"), self._ctl("enable", self.SOCKET)]
+        if shutil.which("xdg-mime"):
+            commands.append(["xdg-mime", "default", self.DESKTOP, f"x-scheme-handler/{SCHEME}"])
+        return commands
 
     def before_uninstall(self):
-        return [self._ctl("disable", "--now", f"{HELPER}.service", f"{TRAY}.service")]
+        return [self._ctl("disable", "--now", self.SOCKET, self.SERVICE, f"{TRAY}.service")]
 
     def after_uninstall(self):
         return [self._ctl("daemon-reload")]
 
     def all_files(self):
-        return [self.folder() / f"{unit}.service" for unit in (HELPER, TRAY)]
+        return [*self.files(), *self.old_entries()]
 
     def _ctl(self, *args):
         return ["systemctl", "--user", *args]
 
     def status_lines(self):
         lines = []
-        for unit in (HELPER, TRAY):
-            if not (self.folder() / f"{unit}.service").exists():
+        for unit in (self.SOCKET, self.SERVICE):
+            if not (self.folder() / unit).exists():
                 lines.append(f"{unit}: not installed")
                 continue
             state = [self._answer("is-enabled", unit), self._answer("is-active", unit)]
             lines.append(f"{unit}: {', '.join(state)}")
-        return lines
+        link = (self.apps_folder() / self.DESKTOP).exists()
+        return [*lines, f"{SCHEME}:// link: {'installed' if link else 'not installed'}"]
 
     def _answer(self, query, unit):
         done = run_quiet(self._ctl(query, unit), capture_output=True, text=True)
         return done.stdout.strip() or done.stderr.strip() or "unknown"
 
     def control(self, action):
-        run_quiet(self._ctl(action, HELPER), check=False)
+        """start: listen on the socket (the helper itself starts with the first page);
+        stop: close the socket and stop the helper (nothing listens until start, a
+        coderstanding://start link or the next login)."""
+        units = [self.SOCKET] if action == "start" else [self.SOCKET, self.SERVICE]
+        run_quiet(self._ctl(action, *units), check=False)
 
     def recent_log(self, lines):
         """(last log lines, where the whole log is)"""
@@ -162,38 +209,47 @@ class SystemdUser:
         print(f"no terminal found; run: {follow}")
 
 
-class WindowsStartup:
-    """Windows: `.cmd` files in the user's Startup folder, started at every login."""
-    name = "windows"
+def windows_quote(text):
+    return '"' + text + '"'
 
-    def folder(self):
+
+class WindowsUser:
+    """Windows: the coderstanding:// link handler under HKCU\\Software\\Classes (no admin rights),
+    written with reg.exe. The helper starts from the link or `helper start`, never at login."""
+    name = "windows"
+    KEY = rf"HKCU\Software\Classes\{SCHEME}"
+
+    def startup_folder(self):
         appdata = os.environ.get("APPDATA") or Path.home() / "AppData" / "Roaming"
         return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
 
-    def _script(self, what, *args):
-        env = "".join(f'set "{k}={v}"\r\n' for k, v in launch_env().items())
-        command = " ".join(cmd_quote(word) for word in [*launch_command(windowless=True), *args])
-        return (f"@echo off\r\nrem {what} at login (written by `coderstanding helper install`)\r\n"
-                f'{env}start "" {command}\r\n')
+    def link_command(self):
+        """The registry's open command. The URL (%1) is left out: nothing from it reaches a
+        command line. A checkout (no entry point) sets PYTHONPATH through cmd first."""
+        command = " ".join(windows_quote(w) for w in [*launch_command(windowless=True), *LINK_ARGS])
+        env = "".join(f'set "{k}={v}"&& ' for k, v in launch_env().items())
+        return f'cmd.exe /d /s /c "{env}{command}"' if env else command
 
-    def files(self, tray):
-        files = {self.folder() / f"{HELPER}.cmd": self._script("Coderstanding local helper",
-                                                                *WINDOWS_SERVE_ARGS)}
-        if tray:
-            files[self.folder() / f"{TRAY}.cmd"] = self._script("Coderstanding tray icon", "tray")
-        return files
+    def files(self):
+        return {}
 
-    def after_install(self, tray):
-        return []
+    def old_entries(self):
+        """Startup `.cmd` files of older installs (helper and tray at login)."""
+        return [self.startup_folder() / f"{unit}.cmd" for unit in (HELPER, TRAY)]
+
+    def after_install(self):
+        return [["reg", "add", self.KEY, "/ve", "/d", "URL:Coderstanding helper", "/f"],
+                ["reg", "add", self.KEY, "/v", "URL Protocol", "/d", "", "/f"],
+                ["reg", "add", rf"{self.KEY}\shell\open\command", "/ve", "/d", self.link_command(), "/f"]]
 
     def before_uninstall(self):
-        return []
+        return [["reg", "delete", self.KEY, "/f"]]
 
     def after_uninstall(self):
         return []
 
     def all_files(self):
-        return [self.folder() / f"{unit}.cmd" for unit in (HELPER, TRAY)]
+        return self.old_entries()
 
     def pid_file(self):
         return userconfig.log_dir() / "helper.pid"
@@ -202,11 +258,9 @@ class WindowsStartup:
         return userconfig.log_dir() / "helper.log"
 
     def status_lines(self):
-        lines = []
-        for unit in (HELPER, TRAY):
-            installed = (self.folder() / f"{unit}.cmd").exists()
-            lines.append(f"{unit}: {'installed (starts at login)' if installed else 'not installed'}")
-        return [*lines, f"log: {self.log_file()}"]
+        done = run_quiet(["reg", "query", self.KEY], capture_output=True, text=True, check=False)
+        link = "installed" if done.returncode == 0 else "not installed"
+        return [f"{SCHEME}:// link: {link}", f"log: {self.log_file()}"]
 
     def control(self, action):
         if action in ("stop", "restart"):
@@ -237,7 +291,7 @@ class WindowsStartup:
 
 def backend():
     """The one platform switch."""
-    return WindowsStartup() if userconfig.windows() else SystemdUser()
+    return WindowsUser() if userconfig.windows() else SystemdUser()
 
 
 # --- actions (CLI and tray call these) ---------------------------------------------------------
@@ -249,22 +303,31 @@ def _run(commands, dry_run):
             run_quiet(command, check=False)
 
 
-def install(tray=None, dry_run=False, platform=None, start=True):
-    """Write the login entries and enable them, then start the helper and check it answers
-    (`start` False: leave it stopped). `tray` None = with tray when Qt is importable.
-    Returns False when the helper was started but did not answer."""
+def _remove(paths, dry_run):
+    for path in paths:
+        if path.exists() or path.is_symlink():
+            print(("would remove " if dry_run else "removed ") + str(path))
+            if not dry_run:
+                path.unlink()
+
+
+def install(dry_run=False, platform=None, start=True):
+    """Write the on-demand entries (Linux socket + service + link handler, Windows link handler),
+    remove older installs' login entries (helper and tray at login), then start the helper and
+    check it answers (`start` False: leave it stopped). Returns False when the helper was started
+    but did not answer."""
     platform = platform or backend()
-    with_tray = qt_available() if tray is None else tray
-    for path, text in platform.files(with_tray).items():
+    for path, text in platform.files().items():
         print(("would write " if dry_run else "wrote ") + str(path))
         if dry_run:
             print("".join(f"    {line}\n" for line in text.splitlines()), end="")
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding="utf-8", newline="")
-    _run(platform.after_install(with_tray), dry_run)
-    if not with_tray:
-        print(f"No tray icon set up (needs Qt: {tray_install_hint()}, then run this again).")
+    _remove(platform.old_entries(), dry_run)
+    _run(platform.after_install(), dry_run)
+    if not qt_available():
+        print(f"No tray icon (needs Qt: {tray_install_hint()}; the helper shows it once Qt is there).")
     if dry_run:
         return True
     if not start:
@@ -279,18 +342,31 @@ def install(tray=None, dry_run=False, platform=None, start=True):
 def uninstall(dry_run=False, platform=None):
     platform = platform or backend()
     _run(platform.before_uninstall(), dry_run)
-    for path in platform.all_files():
-        if path.exists():
-            print(("would remove " if dry_run else "removed ") + str(path))
-            if not dry_run:
-                path.unlink()
+    _remove(platform.all_files(), dry_run)
     _run(platform.after_uninstall(), dry_run)
+
+
+def start_from_link(*_url):
+    """`helper url-start` (the coderstanding:// link): start the helper unless one answers.
+    Whatever the URL holds is ignored; it never reaches a command."""
+    if not helper_running():
+        backend().control("start")
+
+
+def start_tray(qt=None):
+    """`serve --tray`: the tray icon as a child that quits when this helper exits (its stdin
+    closes). None without Qt. A second tray quits by itself (tray.py's lock)."""
+    if not (qt_available() if qt is None else qt):
+        return None
+    return popen_quiet([*launch_command(windowless=True), "tray", "--attached"], stdin=subprocess.PIPE,
+                       env={**os.environ, **launch_env()})
 
 
 def fetch_listing(opener=None, port=PORT):
     """The helper's parsed /api/apps, or None when it does not answer."""
+    request = urllib.request.Request(f"http://127.0.0.1:{port}/api/apps", headers={MONITOR_HEADER: "1"})
     try:
-        with (opener or LOCAL_OPENER).open(f"http://127.0.0.1:{port}/api/apps", timeout=2) as response:
+        with (opener or LOCAL_OPENER).open(request, timeout=2) as response:
             return json.load(response)
     except (OSError, ValueError):
         return None
@@ -389,7 +465,7 @@ def enter_service_mode():
     """Send stdout/stderr to the rotating log file and record our pid (so `helper stop` finds us).
     Returns the console's stderr it replaced, or None when there is no console (pythonw)."""
     console = sys.stderr
-    log = WindowsStartup()
+    log = WindowsUser()
     sys.stdout = sys.stderr = LogStream(log.log_file())
     pid_file = log.pid_file()
     pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -408,5 +484,5 @@ def report_service_failure(error, console):
 
 def log_line(text):
     """One line into the helper log (service mode, before it owns the log and pid file)."""
-    stream = LogStream(WindowsStartup().log_file())
+    stream = LogStream(WindowsUser().log_file())
     stream.write(text + "\n")

@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.0 (2026-11-12)
+
+- Progress tracks: per-box progress rings, a project number with its trend since the last scan,
+  overview bars, spec chips; `coderstanding progress` and `/api/progress`. Settings can set tracks
+  (`=`, `+=`, `-=`).
+- Planned work: planned and manually added items, stub detection, `is_built`; `coderstanding plan`
+  and a Planned work view in the viewer.
+- Location refs: `coderstanding ref`, `GET /api/ref`, Copy text / Copy location menus, `?ref=` links.
+- Network messages: one message node per RPC-handling class (sender -> message -> handler); big
+  message boxes split by sending function.
+- File kinds (Code, Scene, Configuration, Data, Build, Web page, Docs) with chips and a filter;
+  non-code files start one level lower. Nickname note field and tag filter.
+- New readers and reader work: C (compiler words, `function_macros`, typedefs), Gradle package names
+  and version catalogs, Kotlin soft keywords, best-effort parsing with a parse-error warning, `include`
+  setting for gitignored folders; scans skip vendored files.
+- Own calls: same-module and same-class calls as self edges; JS IIFE functions as module members;
+  one-function modules titled by their function.
+- One view options table for every graph switch, a calmer toolbar with presets; `curate --redo/--path`;
+  `tests --diff` finds every affected test file, tour step and viewer check.
+- Safety: worktree writes stay in the worktree, add/rescan keep data out of the repo, tests use a
+  temporary registry.
+- Fixes: specs view stage filter no longer overwritten by a stale load; tour framing on a resized canvas.
+- `settings` edits the folder rule lists `domains` and `loaded_by` (`domains+=glob=Name`, `-=`), and the new
+  `library` setting marks statically linked library code (by path glob, name, tag or domain) as outside
+  code, so it is hidden by default and left out of hubs, levels and warnings.
+- Shell reader (`*.sh`, `*.bash`): scripts as modules with their functions (stubs found), calls
+  between functions, `source` and running other repo scripts as links; `git`, `docker` and other
+  outside commands are platform names, not warnings. Needs `tree-sitter-bash`.
+
 ## 0.2.3 (2026-10-30)
 
 - TypeScript projects: far fewer classes that look unconnected. Imports now resolve through

@@ -14,7 +14,8 @@ import os
 import subprocess
 from pathlib import Path
 
-from .checks import DOMAIN_PREFIX, WARNING_KINDS, glob_regex
+from .library import LIBRARY_FLAG
+from .checks import DOMAIN_PREFIX, WARNING_KINDS, first_rule_match, glob_regex
 from .model import function_names
 from .offline import GIT_OFFLINE, GIT_OFFLINE_ENV
 from .procs import run_quiet
@@ -25,19 +26,27 @@ USER_ENV = "CODERSTANDING_USER"  # overrides the human's name (tests, shared mac
 FIELDS = {"hint": str, "description": str, "level": int, "domain": str,
           "bindings": list, "singleton": bool, "status": str, "tags": list, "rules": str,
           "review": str,
+          "nickname": str,  # a readable name for a badly named class or function (`F_243e0`)
           "loaded_by": list,  # ids of classes that load this one by name (a registry, a tool)
           "loaded_how": str,  # short text for how: "auto-loaded by the language registry"
           "ignore_warnings": list,
+          # hand-made items (planned.py, DESIGN 7f): planned | manual, the spec stage words,
+          # work priority and importance, a spec id, where an added-manually thing lives
+          "made": str, "stage": str, "priority": str, "importance": str, "spec": str, "where": str,
           "fp": dict}  # field -> fingerprint of the code when that field was written
-TEXT_FIELDS = ("hint", "description", "status", "tags", "rules", "review", "loaded_by",
+TEXT_FIELDS = ("nickname", "hint", "description", "status", "tags", "rules", "review", "loaded_by",
                "loaded_how")  # edited in the viewer
 FINGERPRINTED = ("hint", "description", "rules", "review")  # fields that get a code fingerprint
-WRITABLE_FIELDS = (*TEXT_FIELDS, "ignore_warnings")  # the viewer may write these
+PLAN_WRITABLE = ("stage", "priority", "importance", "spec", "where")  # a planned box's Plan group
+WRITABLE_FIELDS = (*TEXT_FIELDS, "ignore_warnings", *PLAN_WRITABLE)  # the viewer may write these
 STATUSES = ("stable", "wip", "fragile", "deprecated")
 NODE_PREFIX = "node:"
 EDGE_PREFIX = "edge:"
 ARROW = "→"
 FUNCTION_SEP = "#"
+RULE_AUTHOR = "rule"  # `domain_by` of a domain that comes from a folder rule in settings.json
+NICKNAME_BANNED = set("#>→,") | {" ", "\t", "\n"}  # a nickname must work as a target
+OVERVIEW_NAME = "*"  # the pseudo domain that holds the level 0 overview sentence
 
 
 def node_key(node_id):
@@ -58,6 +67,11 @@ def domain_id(name):
     return DOMAIN_PREFIX + name
 
 
+def overview_id():
+    """View id of the pseudo domain `domain:*`: its `description` is the overview's flow sentence."""
+    return domain_id(OVERVIEW_NAME)
+
+
 def check_value(name, value):
     """Raise ValueError for an unknown field or a value of the wrong type."""
     if name not in FIELDS:
@@ -71,8 +85,13 @@ def check_value(name, value):
         raise ValueError(f"status must be one of {', '.join(STATUSES)}, got {value!r}")
     if name == "tags" and not all(type(t) is str and t for t in value):
         raise ValueError(f"tags must be non-empty strings, got {value!r}")
+    if name == "nickname" and (not value or NICKNAME_BANNED & set(value)):
+        raise ValueError(f"nickname must be one word without spaces, #, >, → or commas, got {value!r}")
     if name == "loaded_by" and not all(type(t) is str and t for t in value):
         raise ValueError(f"loaded_by must be class ids, got {value!r}")
+    if name in ("made", "stage", "priority", "importance"):
+        from .planned import check_plan_value  # planned.py builds on this module
+        check_plan_value(name, value)
     if name == "fp" and not all(k in FINGERPRINTED and type(v) is str for k, v in value.items()):
         raise ValueError(f"fp must map {', '.join(FINGERPRINTED)} to hashes, got {value!r}")
     if name == "ignore_warnings" and not all(k in WARNING_KINDS for k in value):
@@ -123,6 +142,9 @@ class Notes:
         self.layers = []  # the app's architecture rules (same)
         self.levels = None  # the app's saved {count, names} (same; views.level_scale)
         self.loaded_rules = []  # the app's "loaded by" pattern rules (same; checks.parse_loaded_rule)
+        self.domain_rules = []  # the app's default-domain folder rules {files, domain} (same)
+        self.tracks = []  # the app's progress tracks as saved (same; progress.app_tracks checks them)
+        self.data_dir = None  # the app's data folder (same): planned items read their spec's stage
 
     def is_ai(self, key, by):
         return (key, by) in self.ai
@@ -178,8 +200,19 @@ class Notes:
         """Warning kinds the node's notes say to ignore."""
         return self.value(node_key(node_id), "ignore_warnings", [])
 
-    def domain_of(self, node_id):
-        return self.value(node_key(node_id), "domain")
+    def domain_of(self, node):
+        """The node's domain: a note (AI or human) wins, else the first folder rule that matches
+        its file."""
+        return self.domain_and_author(node)[0]
+
+    def domain_and_author(self, node):
+        """(domain, author): the note's author, `RULE_AUTHOR` for a folder rule, None for no domain."""
+        domain, by = self.get(node_key(node.id), "domain")
+        if domain is None and (node.kind != "external" or LIBRARY_FLAG in node.flags):
+            rule = first_rule_match(self.domain_rules, node.file)
+            if rule:
+                return rule["domain"], RULE_AUTHOR
+        return domain, by
 
     def tags_of(self, node_id):
         return self.value(node_key(node_id), "tags", [])
@@ -284,8 +317,11 @@ class Notes:
         return [key for key in self.keys() if not self.key_exists(key, graph)]
 
     def key_exists(self, key, graph):
-        """True if the key names a graph node, a domain card, or an edge between two of them."""
-        known = set(graph.nodes) | {domain_id(d) for d in self.domains()}
+        """True if the key names a graph node, a domain card, an edge between two of them, or a
+        hand-made item (planned.py)."""
+        if self.value(key, "made"):
+            return True
+        known = set(graph.nodes) | {domain_id(d) for d in self.domains()} | {overview_id()}
         if key.startswith(NODE_PREFIX):
             node_id = key[len(NODE_PREFIX):]
             return node_id in known or is_function(graph, node_id)
@@ -294,11 +330,35 @@ class Notes:
             return from_id in known and to in known
         return False
 
+    def nicknames(self):
+        """{notes key: nickname} of every class and function that has one (the shown value)."""
+        found = {}
+        for key in self.keys():
+            nickname = self.value(key, "nickname") if key.startswith(NODE_PREFIX) else None
+            if nickname:
+                found[key] = nickname
+        return found
+
+    def nicknamed(self, graph, nickname):
+        """(class id, function or None) of the graph's classes and functions called `nickname`."""
+        units = []
+        for key, value in self.nicknames().items():
+            target = key[len(NODE_PREFIX):]
+            if value != nickname:
+                continue
+            if target in graph.nodes:
+                units.append((target, None))
+            elif is_function(graph, target):
+                node_id, _, function = target.rpartition(FUNCTION_SEP)
+                units.append((node_id, function))
+        return units
+
     def tags(self):
         return sorted({t for e in self.entries.values() for t in e.get("tags", [])})
 
     def domains(self):
-        return sorted({e["domain"] for e in self.entries.values() if e.get("domain")})
+        named = {e["domain"] for e in self.entries.values() if e.get("domain")}
+        return sorted(named | {rule["domain"] for rule in self.domain_rules})
 
     def to_lines(self):
         lines = []

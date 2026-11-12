@@ -18,3 +18,8 @@ func tick():
 func take_hit():
 	health -= 1
 	Bus.announce("hit")
+	_clamp_health()
+
+
+func _clamp_health():
+	health = max(health, 0)

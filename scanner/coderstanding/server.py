@@ -8,9 +8,11 @@ every read and write, and refuses writes from any other site. Maps never leave t
 """
 
 import json
+import os
 import re
 import socket
 import threading
+import time
 from collections import Counter
 from functools import partial
 from http import HTTPStatus
@@ -18,7 +20,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from . import assets, field_rules, userconfig
+from . import assets, field_rules, refs, userconfig
+from .helper import MONITOR_HEADER, start_tray
 from .checks import WARNING_HELP
 from .graph_json import external_to_json, member_to_json, write_graph
 from .layout import read_layout, update_layout
@@ -28,14 +31,18 @@ from .offline import is_loopback
 from .notes import (FINGERPRINTED, NODE_PREFIX, STATUSES, TEXT_FIELDS, WRITABLE_FIELDS, clean_value,
                     human_author)
 from .textout import format_tour, tour_markdown, view_text
-from .cards import BY_FOLDER, FIELDS as CARD_FIELDS, Card, link_index, open_cards
+from .cards import BY_FOLDER, FIELDS as CARD_FIELDS, PRIORITIES, SPEC, Card, link_index, open_cards
 from .tours import AUDIO_TYPES, MAX_AUDIO_BYTES, open_tours
+from . import planned, progress
 from .userconfig import hosted_origin
-from .views import SCENE_TYPE, compute_view, effective_level, find, level_scale, note_json, with_code_doc
+from .worktrees import file_link_base
+from .views import ALL_LINES, EXPLAINED, LINES, SCENE_TYPE, compute_view, effective_level, find, level_scale, note_json, with_code_doc
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8517
 HUB_ROUTES = ("/api/apps", "/api/rescan")  # writes that need no per-app Api
+ALIVE_PATH = "/api/alive"  # the open page's heartbeat (idle exit)
+SD_LISTEN_FDS_START = 3  # systemd socket activation: the first passed socket's fd
 LOCAL_HOSTS = (HOST, "localhost")
 JSON_TYPE = "application/json"
 APP_PATH = re.compile(r"^/api/apps/([^/]+)$")  # the app manager: DELETE (remove), PATCH (rename)
@@ -80,17 +87,35 @@ def hidden_types(params):
     return hidden + [SCENE_TYPE] if not _flag(params, "scene") and SCENE_TYPE not in hidden else hidden
 
 
+def lines_arg(params):
+    """`lines=explained|all` (optional: a page without it gets every line equal)."""
+    value = params.get("lines", [""])[0]
+    return {LINES: value} if value in (EXPLAINED, ALL_LINES) else {}
+
+
+def list_param(params, name):
+    """A list option: repeated (`?tag=a&tag=b`) or comma separated (`?tag=a,b`)."""
+    return [item.strip() for value in params.get(name, []) for item in value.split(",") if item.strip()]
+
+
 def view_args(params):
     """compute_view keyword arguments from /api/view query parameters (`expand` repeats)."""
     return {"level": int(params.get("level", ["1"])[0]),
             "view": params.get("view", ["all"])[0],
             "show": {"external": _flag(params, "external"), "comm": _flag(params, "comm"),
                      "test": _flag(params, "test", default=False),
+                     "planned": _flag(params, "planned"),
                      "hide_types": hidden_types(params),
-                     "hide_kinds": [k for k in params.get("hide_kind", []) if k]},
+                     "hide_file_kinds": [k for k in params.get("hide_file_kind", []) if k],
+                     "hide_kinds": [k for k in params.get("hide_kind", []) if k],
+                     "tags": list_param(params, "tag"), "hide_tags": list_param(params, "hide_tag"),
+                     **lines_arg(params)},
             "zoom": _zoom(params),
+            "domain": params.get("domain", [""])[0] or None,
             "expand": [i for i in params.get("expand", []) if i],
-            "focus": [i for i in params.get("focus", []) if i]}
+            "focus": [i for i in params.get("focus", []) if i],
+            "open_near": _flag(params, "near", default=False),
+            "track": params.get("track", [""])[0] or None}
 
 
 def _edge_ref(graph, edge, other_id):
@@ -141,7 +166,11 @@ class Api:
         return {"repo": self.graph.repo, "scannedAt": self.graph.scanned_at,
                 "levels": {str(k): v for k, v in sorted(levels.items())},
                 "max_level": scale["count"], "scale": scale, "domains": bool(notes.domains()),
-                "statuses": list(STATUSES), "tags": notes.tags(), "warning_help": WARNING_HELP}
+                "source": {"root": str(self.app.root), "web": file_link_base(self.app.root)},
+                "statuses": list(STATUSES), "tags": notes.tags(), "warning_help": WARNING_HELP,
+                "plan": {"stages": list(SPEC.stages), "priorities": list(PRIORITIES)},
+                "tracks": [{"name": t["name"], "builtin": t["builtin"], "of": progress.of_text(t),
+                            "done_rule": progress.done_text(t)} for t in progress.app_tracks(notes.tracks)[0]]}
 
     def refresh(self):
         """Pick up a graph.json a Refresh or `coderstanding rescan` wrote since (one stat; never
@@ -155,28 +184,37 @@ class Api:
         notes = self.notes
         badges = {k: len(v) for k, v in link_index(self.app, self.graph, notes).items()} \
             if _flag(params, "badges", False) else None
-        return compute_view(self.graph, notes, badges=badges, **view_args(params))
+        view = compute_view(self.graph, notes, badges=badges, **view_args(params))
+        if view["progress"]:  # the history is the app's, not the view engine's
+            view["progress"].update(progress.history_numbers(
+                progress.read_history(self.app.map_dir or self.app.data), self.graph_stamp, view["progress"]))
+        return view
 
     def text(self, params):
         """The view as slim text, first line the CLI command (the viewer's Copy for AI)."""
         self.refresh()
         args = view_args(params)
+        args.pop("track")  # progress rings: the viewer's drawing
+        args.pop("open_near")  # a tour step's opened boxes: the viewer's drawing, not the text
         return view_text(self.app.name, self.graph, self.notes,
                          select=params.get("select", [""])[0] or None, **args)
 
     def node(self, node_id):
-        node = self.graph.nodes.get(node_id)
+        graph = self.graph
+        if node_id not in graph.nodes:  # a planned or added-manually box has its info too
+            graph = planned.hand_graph(graph, self.notes)
+        node = graph.nodes.get(node_id)
         if node is None:
             return None
-        edges = self.graph.edges.values()
+        edges = graph.edges.values()
         return {"id": node.id, "name": node.name, "kind": node.kind, "lang": node.lang,
                 "file": node.file, "line": node.line, "flags": node.flags,
                 "base": node.base, "namespace": node.namespace, "level": node.level, "doc": node.doc,
                 "members": [member_to_json(m) for m in node.members], "comm": node.comm,
                 "external_refs": [external_to_json(e)
                                   for _, e in sorted(node.external_refs.items())],
-                "out": [_edge_ref(self.graph, e, e.to) for e in edges if e.from_id == node_id],
-                "in": [_edge_ref(self.graph, e, e.from_id) for e in edges if e.to == node_id]}
+                "out": [_edge_ref(graph, e, e.to) for e in edges if e.from_id == node_id],
+                "in": [_edge_ref(graph, e, e.from_id) for e in edges if e.to == node_id]}
 
     def note_key(self, notes, body):
         """The body's note key, if it names something in the graph (ValueError otherwise)."""
@@ -202,6 +240,58 @@ class Api:
                       graph=self.graph)
             self.app.save_notes(notes)
             return self.merged_note(notes, key)
+
+    # --- planned and added-manually items (DESIGN 7f) ---
+
+    def plan(self):
+        """GET /api/plan: what is not built (planned.plan_rows)."""
+        self.refresh()
+        return planned.plan_rows(self.graph, self.notes)
+
+    def progress(self, params):
+        """GET /api/progress[?track=NAME][&cards=specs|memos]: every track's numbers (progress.py);
+        a track adds its domains and trend; `cards` adds {card id: numbers} of that track."""
+        self.refresh()
+        notes = self.notes
+        tracks = progress.Progress(self.graph, notes)
+        name = params.get("track", [""])[0] or None
+        answer = tracks.json(name, progress.read_history(self.app.map_dir or self.app.data), self.graph_stamp)
+        folder = params.get("cards", [""])[0]
+        if name and folder in BY_FOLDER:
+            answer["cards"] = tracks.cards_json(name, open_cards(self.app, self.graph, notes, BY_FOLDER[folder].name))
+        return answer
+
+    def plan_write(self, change):
+        """One planned-item write as the human: `change(hand graph, notes)` -> result; notes are
+        saved unless the result asks first (a name that matches real code)."""
+        with self.notes_lock:
+            notes = self.notes
+            result = change(planned.hand_graph(self.graph, notes), notes)
+            if not (isinstance(result, dict) and "ask" in result):
+                self.app.save_notes(notes)
+            return result
+
+    def post_plan(self, body):
+        """POST /api/plan {name, on?, made?, fields?, links?: [[from, to]], anyway?} -> {key} or
+        {key, ask: {exact, close}} (nothing written: ask the user, then send anyway)."""
+        fields = {name: clean_value(name, value) for name, value in (body.get("fields") or {}).items()}
+        return self.plan_write(lambda graph, notes: planned.add_item(
+            graph, notes, body.get("name"), self.human, False, on=body.get("on") or None,
+            made=body.get("made") or planned.PLANNED, fields=fields, anyway=bool(body.get("anyway")),
+            links=[tuple(pair) for pair in body.get("links") or []]))
+
+    def plan_drop(self, body):
+        return self.plan_write(lambda graph, notes: {"dropped": planned.drop_item(notes, body["key"])})
+
+    def plan_link(self, body):
+        """POST /api/plan/link {from, to}: a planned class or Class#function is built as `to`."""
+        return self.plan_write(lambda graph, notes: {"moved": planned.link_item(graph, notes, body["from"], body["to"])})
+
+    def plan_keep(self, body):
+        return self.plan_write(lambda graph, notes: {"moved": planned.keep_both(notes, body["id"])})
+
+    def plan_accept(self, body):
+        return self.plan_write(lambda graph, notes: {"accepted": planned.accept_item(notes, body["key"], self.human)})
 
     def accept_notes(self, body):
         """Turn the AI draft values of the listed fields into yours (as self.human)."""
@@ -249,6 +339,14 @@ class Api:
         """`coderstanding tour <app> <id> [--step N]` as text (the same textout function)."""
         step = params.get("step", [""])[0]
         return format_tour(self.app.name, self.tour(tour_id), number=int(step) if step else None)
+
+    def ref(self, params):
+        """GET /api/ref?app=&ref=: what a pasted location ref points at (refs.py)."""
+        self.refresh()
+        parsed = refs.parse_ref(params.get("ref", [""])[0], self.app.name)
+        if parsed is None:
+            return {"ok": False, "error": "not a ref: use `@<app> <target>`", "did_you_mean": []}
+        return refs.resolve_json(self.app, self.graph, self.notes, parsed)
 
     def fields(self):
         """The effective field rules (built-in plus this project's overrides), DESIGN 7e."""
@@ -413,9 +511,27 @@ class Handler(SimpleHTTPRequestHandler):
     hub = None  # set by make_server
     allow_origin = None  # set by make_server
     api = None  # the Api for this request's ?app=, set per request
+    idle_watch = None  # IdleWatch with `serve --idle-exit`, set by make_server
+    watched = None  # this request's IdleWatch entry (page or not), set by parse_request
 
     def log_message(self, format, *args):  # keep the terminal quiet
         pass
+
+    def parse_request(self):
+        """Count every request in the idle watch; only a page's (no MONITOR_HEADER) keeps the helper up."""
+        ok = super().parse_request()
+        if ok and self.idle_watch:
+            self.watched = not self.headers.get(MONITOR_HEADER)
+            self.idle_watch.begin(page=self.watched)
+        return ok
+
+    def handle_one_request(self):
+        self.watched = None
+        try:
+            super().handle_one_request()
+        finally:
+            if self.watched is not None:
+                self.idle_watch.end(page=self.watched)
 
     def end_headers(self):
         self.send_header("Cache-Control", "no-store")
@@ -500,8 +616,13 @@ class Handler(SimpleHTTPRequestHandler):
         if not self.local_host():
             return self.send_error_json(HTTPStatus.FORBIDDEN, "unknown host name")
         params = parse_qs(url.query)
+        if url.path == ALIVE_PATH:
+            return self.send_json({"alive": True})
         if url.path == "/api/apps":
             return self.send_json(self.hub.listing(details=params.get("details") == ["1"]))
+        if url.path == "/api/ref" and not params.get("app"):  # the ref names its app
+            ref = refs.parse_ref(params.get("ref", [""])[0])
+            params["app"] = [ref["app"]] if ref else []
         if not self.pick_app(params):
             return
         try:
@@ -534,12 +655,19 @@ class Handler(SimpleHTTPRequestHandler):
                 return self.send_error_json(HTTPStatus.NOT_FOUND, error.args[0])
         if path == "/api/linked":
             return self.send_json(self.api.linked(params))
+        if path == "/api/plan":
+            return self.send_json(self.api.plan())
+        if path == "/api/progress":
+            return self.send_json(self.api.progress(params))
         if path == "/api/find":
             return self.send_json(self.api.find_classes(params))
         if path == "/api/tours":
             return self.send_json(self.api.tour_list(params))
         if path == "/api/comments":
             return self.send_json(self.api.comments(params.get("target", [""])[0]))
+        if path == "/api/ref":
+            answer = self.api.ref(params)
+            return self.send_json(answer, HTTPStatus.OK if answer["ok"] else HTTPStatus.NOT_FOUND)
         if path.startswith("/api/tours/"):
             return self.route_tour_get(path, params)
         if path.startswith("/api/node/"):
@@ -617,6 +745,11 @@ class Handler(SimpleHTTPRequestHandler):
         self.route_write("POST", "/api/comments", lambda body: self.api.post_comment(body),
                          "/api/notes/accept", lambda body: self.api.accept_notes(body),
                          "/api/notes/still-true", lambda body: self.api.still_true(body),
+                         "/api/plan", lambda body: self.api.post_plan(body),
+                         "/api/plan/drop", lambda body: self.api.plan_drop(body),
+                         "/api/plan/link", lambda body: self.api.plan_link(body),
+                         "/api/plan/keep", lambda body: self.api.plan_keep(body),
+                         "/api/plan/accept", lambda body: self.api.plan_accept(body),
                          "/api/apps", lambda body: self.hub.add_app(body),
                          "/api/rescan", lambda body: self.hub.start_scan(self.app_name, body))
 
@@ -703,10 +836,74 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error_json(HTTPStatus.INTERNAL_SERVER_ERROR, str(error) or type(error).__name__)
 
 
+class IdleWatch:
+    """`serve --idle-exit SECONDS`: idle once no page has called for `seconds` (counted from the
+    start too, so a helper no page ever reaches goes away), no request is running and the hub is
+    not scanning. Requests with MONITOR_HEADER (tray, CLI checks) never count as a page."""
+
+    def __init__(self, seconds, busy=lambda: False, clock=time.monotonic):
+        self.seconds, self.busy, self.clock = seconds, busy, clock
+        self.last_page = clock()
+        self.active = 0
+        self.lock = threading.Lock()
+
+    def begin(self, page):
+        with self.lock:
+            self.active += 1
+            if page:
+                self.last_page = self.clock()
+
+    def end(self, page):
+        with self.lock:
+            self.active -= 1
+            if page:  # a long upload or scan request: its end counts too
+                self.last_page = self.clock()
+
+    def idle(self):
+        with self.lock:
+            quiet = self.active == 0 and self.clock() - self.last_page >= self.seconds
+        return quiet and not self.busy()
+
+
+def exit_when_idle(server, watch, tick=1.0, before_exit=lambda: None):
+    """Stop `server.serve_forever` once the watch says idle (run in a thread)."""
+    while not watch.idle():
+        time.sleep(tick)
+    print(f"no page for {watch.seconds:g} s: exiting (the next page starts it again)", flush=True)
+    before_exit()
+    server.shutdown()
+
+
+def systemd_socket(environ=None, pid=None, fd=SD_LISTEN_FDS_START):
+    """The listening socket systemd passed us (socket activation: LISTEN_PID is us, LISTEN_FDS
+    >= 1, the socket at fd 3), or None. Clears the variables so no child inherits them. A passed
+    socket on a network address is refused like a bind would be (DESIGN 18)."""
+    environ = os.environ if environ is None else environ
+    if environ.get("LISTEN_PID") != str(pid or os.getpid()) or int(environ.get("LISTEN_FDS") or 0) < 1:
+        return None
+    for name in ("LISTEN_PID", "LISTEN_FDS", "LISTEN_FDNAMES"):
+        environ.pop(name, None)
+    sock = socket.socket(fileno=fd)
+    if not is_loopback(sock.getsockname()[0]):
+        sock.close()
+        raise ValueError("refusing a passed socket on a network address: Coderstanding serves this PC only")
+    return sock
+
+
 class LoopbackServer(ThreadingHTTPServer):
     """Owns its port exclusively. ThreadingHTTPServer sets SO_REUSEADDR, which on Windows lets a
     second process bind the same port (two helpers); there we use SO_EXCLUSIVEADDRUSE instead.
-    On Linux SO_REUSEADDR only allows rebinding past TIME_WAIT, so it stays."""
+    On Linux SO_REUSEADDR only allows rebinding past TIME_WAIT, so it stays.
+    `sock`: an already listening socket (systemd socket activation) used instead of binding;
+    systemd then owns the port, which keeps it to one helper."""
+
+    def __init__(self, address, handler, sock=None):
+        super().__init__(address, handler, bind_and_activate=sock is None)
+        if sock is not None:
+            self.socket.close()
+            self.socket = sock
+            self.server_address = sock.getsockname()
+            self.server_name, self.server_port = self.server_address[:2]
 
     def server_bind(self):
         self.allow_reuse_address = not userconfig.windows()
@@ -716,21 +913,29 @@ class LoopbackServer(ThreadingHTTPServer):
 
 
 def make_server(api_or_hub, port=DEFAULT_PORT, viewer_dir=None, host=HOST,
-                allow_origin=None):
+                allow_origin=None, idle_exit=None, sock=None):
     """An Api (one fixed app, as tests use it) or a Hub (every registered app).
-    Loopback only: there is no way to listen on a network address (DESIGN 18)."""
+    Loopback only: there is no way to listen on a network address (DESIGN 18).
+    `idle_exit` seconds: attach an IdleWatch (server.idle_watch); `sock`: see LoopbackServer."""
     if not is_loopback(host):
         raise ValueError(f"refusing to listen on {host!r}: Coderstanding serves this PC only "
                          "(127.0.0.1 / ::1 / localhost)")
     hub = api_or_hub if isinstance(api_or_hub, Hub) else Hub(None, fixed={api_or_hub.app.name: api_or_hub})
-    handler = type("BoundHandler", (Handler,), {"hub": hub, "allow_origin": allow_origin})
-    return LoopbackServer((host, port), partial(handler, directory=str(viewer_dir or assets.viewer_dir())))
+    watch = IdleWatch(idle_exit, hub.busy) if idle_exit else None
+    handler = type("BoundHandler", (Handler,), {"hub": hub, "allow_origin": allow_origin,
+                                                "idle_watch": watch})
+    server = LoopbackServer((host, port), partial(handler, directory=str(viewer_dir or assets.viewer_dir())),
+                            sock=sock)
+    server.idle_watch = watch
+    return server
 
 
-def serve(app=None, port=DEFAULT_PORT, allow_origin=None):
+def serve(app=None, port=DEFAULT_PORT, allow_origin=None, idle_exit=None, sock=None, tray=False):
     """app: open on this one (registered or not); None: the first registered app.
     allow_origin (or env CODERSTANDING_ALLOW_ORIGIN): the hosted page origin let in cross-origin;
-    default: userconfig.hosted_origin() (env CODERSTANDING_ALLOW_ORIGIN, then hosted.json)."""
+    default: userconfig.hosted_origin() (env CODERSTANDING_ALLOW_ORIGIN, then hosted.json).
+    idle_exit: quit after that many seconds without a page (IdleWatch); sock: a socket systemd
+    passed; tray: show the tray icon while this helper runs (helper.start_tray)."""
     hub = Hub(Api, initial=app)
     if hub.known_apps():
         print(f"{len(hub.known_apps())} apps (a project is scanned only by Refresh or "
@@ -738,11 +943,18 @@ def serve(app=None, port=DEFAULT_PORT, allow_origin=None):
     else:  # the page shows its empty state: Projects... -> Add project...
         print("no projects yet: add one with `coderstanding add <name> <folder>` or in the viewer")
     allow_origin = allow_origin or hosted_origin()
-    server = make_server(hub, port, allow_origin=allow_origin)
+    server = make_server(hub, port, allow_origin=allow_origin, idle_exit=idle_exit, sock=sock)
     print(f"Coderstanding: http://{HOST}:{server.server_port}/  (Ctrl+C to stop)", flush=True)
+    tray_process = start_tray() if tray else None
+    # The tray stops polling once its stdin closes, so close it before the server stops answering.
+    close_tray = (lambda: tray_process.stdin.close()) if tray_process else (lambda: None)
+    if server.idle_watch:
+        threading.Thread(target=exit_when_idle, args=(server, server.idle_watch),
+                         kwargs={"before_exit": close_tray}, daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
+        close_tray()
         server.server_close()

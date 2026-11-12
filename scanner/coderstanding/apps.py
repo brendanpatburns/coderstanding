@@ -14,14 +14,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from . import userconfig
+from . import progress, userconfig, worktrees
 from .cache import SCANNER_VERSION
-from .checks import apply_note_warnings, check_layer_sides, parse_layer, parse_rule
+from .filewalk import list_files
+from .checks import apply_note_warnings, check_graph, check_layer_sides, parse_layer, parse_rule
 from .graph_json import read_graph, write_graph
 from .layout import FILE_NAME as LAYOUT_FILE
-from .levels import AUTO, DEFAULT_MAX_LEVEL, MAX_LEVELS, parse_hub_threshold, parse_max_level
-from .notes import DOMAIN_PREFIX, domain_id, load_notes, save_notes
+from .library import apply_library
+from .app_settings import (changed_item_list, ITEM_KINDS, of_kinds, SCAN_KINDS, split_operator,
+                           unknown_setting_text)
+from .levels import guess_levels, MAX_LEVELS
+from .notes import DOMAIN_PREFIX, domain_id, load_notes, overview_id, save_notes
 from .scan import scan_repo
+from .textindex import INDEX_FILE, read_index
 from .testcode import is_test
 
 
@@ -32,22 +37,27 @@ class AppError(Exception):
 def parse_setting(name, text):
     """A scan setting's value from text, or AppError (unknown name, bad value)."""
     if name not in SETTINGS:
-        raise AppError(f"unknown setting {name} (known: {', '.join(SETTINGS)})")
+        raise AppError(unknown_setting_text(name))
     try:
         return SETTINGS[name][0](text)
     except ValueError as error:
         raise AppError(str(error)) from error
 
 
-# Per-app scan settings, kept in `<data>/settings.json`: name -> (parser, default).
-SETTINGS = {"hub_threshold": (parse_hub_threshold, AUTO), "max_level": (parse_max_level, DEFAULT_MAX_LEVEL)}
+# Per-app scan settings, kept in `<data>/settings.json`: name -> (parser, default); from the settings table.
+SETTINGS = {setting.name: (setting.parse, setting.default) for setting in of_kinds(SCAN_KINDS)}
+# Per-app item lists beside them (rule lists, tracks): name -> Setting. They filter on load, so never rescan.
+RULE_LISTS = {setting.name: setting for setting in of_kinds(ITEM_KINDS)}
+
+
 RELEVEL_SCOPES = ("ai", "all")  # which per-class level notes `rescan --relevel` clears
 
 
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 # What a data folder holds: files Coderstanding makes (safe to delete with an app) and files the
 # user and AI wrote (deleted only when asked by name). tour_code.json: left by the dropped lab sync.
-GENERATED_FILES = ("graph.json", "cache", LAYOUT_FILE, "tour_code.json")
+GENERATED_FILES = ("graph.json", INDEX_FILE, "cache", LAYOUT_FILE, "tour_code.json", worktrees.MAPS_DIR,
+                   worktrees.RECORD, worktrees.SHOWN, progress.HISTORY_FILE)
 OWN_FILES = ("notes.jsonl", "specs", "memos", "tours", "settings.json", "fields.md")
 
 REGISTRY_ENV = "CODERSTANDING_REGISTRY"  # other registry file (tests, a second profile)
@@ -64,6 +74,10 @@ def default_data_dir(name):
     home = os.environ.get(DATA_HOME_ENV)
     base = Path(home) if home else userconfig.data_home()
     return base / name
+
+
+IN_REPO_DATA = ".coderstanding"  # a data folder inside the repo (this repo's own tours and specs live so)
+SEEDED_FILES = ("notes.jsonl", "settings.json", "fields.md")  # own files git does not track
 
 
 def load_registry():
@@ -85,6 +99,24 @@ def save_registry(apps):
     path.write_text(json.dumps(apps, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def has_own_files_in_repo(repo):
+    folder = Path(repo) / IN_REPO_DATA
+    return any((folder / own).exists() for own in OWN_FILES)
+
+
+def data_for_add(name, repo, data=None):
+    """The data folder `add` registers: the one given, else the one the name already has, else the
+    repo's own `.coderstanding` when it already holds notes, tours or specs, else the default
+    folder out of the repo (an agent once wrote `.coderstanding/` into a repo it only scanned).
+    None means the in-repo folder."""
+    if data:
+        return data
+    known = load_registry().get(name)
+    if known:
+        return known.get("data")
+    return None if has_own_files_in_repo(repo) else default_data_dir(name)
+
+
 def register(name, repo, data=None):
     repo = Path(repo).resolve()
     if not repo.is_dir():
@@ -98,12 +130,13 @@ def register(name, repo, data=None):
 @dataclass
 class App:
     name: str
-    root: Path
-    data: Path
+    root: Path  # the folder scanned: the registered repo, or a worktree of it (worktree_app)
+    data: Path  # notes, specs, tours, settings: always the app's own
+    map_dir: Path = None  # a worktree's own graph.json and cache; None = the data folder
 
     @property
     def graph_path(self):
-        return self.data / "graph.json"
+        return (self.map_dir or self.data) / "graph.json"
 
     @property
     def notes_path(self):
@@ -111,7 +144,7 @@ class App:
 
     @property
     def cache_dir(self):
-        return self.data / "cache"
+        return (self.map_dir or self.data) / "cache"
 
     @property
     def settings_path(self):
@@ -137,15 +170,37 @@ class App:
         return settings
 
     def change_settings(self, changes):
-        """Validate and save {name: text}; they apply at the next rescan."""
-        changes = dict(changes)
-        names = changes.pop("levels", None)  # "Domains,App,Systems": level 0 first; not a scan setting
+        """Validate and save {name: text} (or [(name, text)] where a name repeats: `library+=a library+=b`);
+        scan settings apply at the next rescan, item lists (RULE_LISTS: domains, loaded_by, library,
+        tracks; `name+=item` adds, `name-=item` removes) at once. Nothing is saved when any item is bad.
+        Returns every setting, scan settings and item lists."""
+        changes = list(changes.items() if isinstance(changes, dict) else changes)
+        names = next((text for name, text in changes if name == "levels"), None)  # "Domains,App,Systems": level 0 first; not a scan setting
+        changes = [(name, text) for name, text in changes if name != "levels"]
         if names is not None:
             names = [n.strip() for n in names.split(",")]
             self.set_levels(len(names) - 1, names)
-        settings = self.scan_settings(changes)
-        self.write_settings(**settings)
-        return settings
+        rule_changes = [(name, text) for name, text in changes if split_operator(name)[0] in RULE_LISTS]
+        settings = self.scan_settings(dict(change for change in changes if change not in rule_changes))
+        lists = self.rule_lists()
+        for name, text in rule_changes:
+            name, operator = split_operator(name)
+            try:
+                lists[name] = changed_item_list(RULE_LISTS[name], operator, text, lists[name])
+            except ValueError as error:
+                raise AppError(str(error)) from error
+        saved = self.saved_settings()
+        self.write_settings(**settings, **{name: rules for name, rules in lists.items() if rules or name in saved})
+        return {**settings, **lists}
+
+    def rule_lists(self):
+        """Every item list ({name: items}), empty ones included."""
+        saved = self.saved_settings()
+        return {name: saved.get(name, []) for name in RULE_LISTS}
+
+    def library_rules(self):
+        """Rules that mark code as an outside library (library.py); like other rules, no rescan."""
+        return self.saved_settings().get("library", [])
 
     def level_settings(self):
         """The saved {count, names} of the depth ruler, or None for the scan's own levels.
@@ -189,6 +244,15 @@ class App:
         `languages/*.py` is loaded by the registry; like warning rules, no rescan."""
         return self.saved_settings().get("loaded_by", [])
 
+    def domain_rules(self):
+        """Default-domain folder rules ({files: glob, domain: name}); a fallback under notes, no rescan."""
+        return [r for r in self.saved_settings().get("domains", []) if r.get("files") and r.get("domain")]
+
+    def track_settings(self):
+        """The app's own progress tracks as saved (progress.py checks them); no rescan."""
+        tracks = self.saved_settings().get("tracks", [])
+        return tracks if isinstance(tracks, list) else []
+
     def layer_rules(self):
         """Architecture rules (checks.parse_layer); like warning rules, a change never rescans."""
         return self.saved_settings().get("layers", [])
@@ -222,20 +286,39 @@ class App:
         notes.layers = self.layer_rules()
         notes.levels = self.level_settings()
         notes.loaded_rules = self.loaded_rules()
+        notes.domain_rules = self.domain_rules()
+        notes.tracks = self.track_settings()
+        notes.data_dir = self.data
         return notes
 
     def checked(self, graph, notes):
-        """Put the `layer` warnings on the graph (they need the notes' domains and tags)."""
-        apply_note_warnings(graph, notes.layers, notes)
+        """Put the notes-dependent parts on the graph: library marks (they need the notes' domains
+        and tags; changed marks redo the levels and warnings for own code) and `layer` warnings."""
+        if apply_library(graph, notes, self.library_rules()):
+            settings = self.scan_settings()
+            guess_levels(graph, settings["max_level"], settings["hub_threshold"])
+            check_graph(graph, notes.layers, notes)
+        else:
+            apply_note_warnings(graph, notes.layers, notes)
 
     def save_notes(self, notes):
         save_notes(notes, self.notes_path)
 
 
+def registered_name(name, names):
+    """`name` as registered: exact, else the one name equal ignoring case, else as given."""
+    if name in names:
+        return name
+    same = [n for n in names if n.lower() == str(name).lower()]
+    return same[0] if len(same) == 1 else name
+
+
 def find_app(name_or_path, data=None):
     """A registered name, else a repo folder. A relative registry `data` is relative to the
     registry file's folder (the hub's data root: `<root>/apps.json`, `<root>/<app>/`)."""
-    entry = load_registry().get(name_or_path)
+    registry = load_registry()
+    name_or_path = registered_name(name_or_path, registry)
+    entry = registry.get(name_or_path)
     if entry:
         root, data = Path(entry["path"]), data or entry.get("data")
         data = data and registry_path().parent / data
@@ -243,9 +326,15 @@ def find_app(name_or_path, data=None):
     else:
         root = Path(name_or_path).resolve()
         if not root.is_dir():
-            raise AppError(f"unknown app (not registered, not a folder): {name_or_path}")
+            known = ", ".join(sorted(load_registry())) or "none"
+            raise AppError(f"unknown app (not registered, not a folder): {name_or_path}; "
+                           f"registered apps: {known}")
         name = root.name
-    return App(name, root, Path(data) if data else root / ".coderstanding")
+    if data:
+        return App(name, root, Path(data))
+    in_repo = root / IN_REPO_DATA
+    # An unregistered folder keeps its data out of the repo unless it already has an in-repo folder.
+    return App(name, root, in_repo if name_or_path in registry or in_repo.is_dir() else default_data_dir(name))
 
 
 def registered_app(name):
@@ -335,14 +424,122 @@ def rename_app(old, new):
     return new
 
 
-def rescan(app, overrides=None):
-    """Scan the repo now into the app's data folder (graph.json and cache, never the repo).
-    `overrides`: {setting: text} for this run only (never saved)."""
+def rescan(app, overrides=None, signature=None):
+    """Scan the repo now into the app's data folder (graph.json and cache, never the repo) and
+    record the files' signature (`signature` if the caller just took it) so `refresh_map` can tell
+    later whether the map is current. `overrides`: {setting: text} for this run only (never saved
+    or recorded)."""
+    signature = None if overrides else signature or map_signature(app)
     graph = scan_repo(app.root, cache_dir=app.cache_dir, **app.scan_settings(overrides))
     if not any(node.kind != "external" for node in graph.nodes.values()):
         raise AppError(f"no supported files found in {app.root}")
     write_graph(graph, app.graph_path)
+    record_progress(app, graph)
+    if signature:
+        worktrees.write_record(app.map_dir or app.data, app.root, signature, ignore_parent=bool(app.map_dir))
+    prune_worktree_maps(app)
     return graph
+
+
+def record_progress(app, graph):
+    """Add this scan's track numbers to the progress history beside graph.json (the trend and
+    `progress`'s "since last scan")."""
+    notes = app.load_notes()
+    app.checked(graph, notes)
+    progress.record_history(app.map_dir or app.data, graph_scan(app), graph.scanned_at,
+                            progress.Progress(graph, notes).summary())
+
+
+def graph_scan(app):
+    """Which scan the saved graph.json is: its mtime in ns (None when missing); the progress
+    history's key."""
+    try:
+        return app.graph_path.stat().st_mtime_ns
+    except OSError:
+        return None
+
+
+def worktree_app(app, path=None):
+    """The app read from another git worktree of its repo, so lines match that branch: `path`
+    (a folder in the worktree), else the current folder. Its graph and cache live in
+    `<data>/worktrees/<key>/` and are rescanned (warm cache) when the worktree's files changed;
+    notes, specs, tours and settings stay the app's (an in-repo data folder: the worktree's own
+    `.coderstanding/`, so writes never land in the main checkout). Returns `app` itself when the folder is in
+    the registered checkout, or (no `path` given) not in a worktree of the same repo."""
+    root = worktrees.overlay_root(app.root, Path(path or os.getcwd()))
+    if root is None:
+        if path and worktrees.checkout_top(path) != worktrees.checkout_top(app.root):
+            raise AppError(f"--repo {path}: not a git worktree of {app.name}'s repo ({app.root})")
+        return app
+    if not root.is_dir():
+        raise AppError(f"{root}: {app.name}'s folder is missing in that worktree")
+    in_repo = app.data.resolve() == (app.root / IN_REPO_DATA).resolve()
+    data = root / IN_REPO_DATA if in_repo else app.data  # in-repo data: the branch's own, never main's
+    overlay = App(app.name, root, data, app.data / worktrees.MAPS_DIR / worktrees.map_key(root))
+    if in_repo:
+        seed_untracked_files(app.data, data)
+    if not worktrees.read_record(overlay.map_dir):
+        worktrees.write_record(overlay.map_dir, root, None)  # claimed: pruning keeps it
+    if not overlay.cache_dir.exists() and app.cache_dir.is_dir():
+        shutil.copytree(app.cache_dir, overlay.cache_dir)  # warm start: unchanged files hit
+    return overlay
+
+
+def seed_untracked_files(source, target):
+    """Copy the notes and settings main has (git does not track them) into a worktree's own
+    data folder once, so reading there still sees them."""
+    for name in SEEDED_FILES:
+        if (source / name).is_file() and not (target / name).exists():
+            target.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source / name, target / name)
+
+
+def map_signature(app):
+    """The state of the scanned files and settings; a changed one means the map is out of date."""
+    settings = json.dumps([SCANNER_VERSION, app.scan_settings()], sort_keys=True)
+    include = app.scan_settings()["include"]
+    return worktrees.files_signature(app.root, list_files(app.root, ["*"], include=include), settings)
+
+
+def refresh_map(app):
+    """Rescan the app's map (main or worktree) when its files changed since the last scan, so a
+    reading command never answers from an old map. Returns (rescanned, stale): `stale` = files
+    newer than the map when it could not be rescanned (hosted or missing folder, read-only data
+    folder), else 0. A main map that was never scanned is left to `load_graph`'s message."""
+    folder = app.map_dir or app.data
+    if not app.graph_path.exists() and not app.map_dir:
+        return False, 0
+    if not app.root.is_dir():
+        return False, 0
+    signature = map_signature(app)
+    if app.graph_path.exists() and worktrees.read_record(folder).get("signature") == signature:
+        return False, 0
+    try:
+        rescan(app, signature=signature)
+    except OSError:
+        return False, files_newer_than_map(app)
+    return True, 0
+
+
+def files_newer_than_map(app):
+    """How many scanned files changed after the map was written (at least 1: a removed file)."""
+    built = app.graph_path.stat().st_mtime_ns if app.graph_path.exists() else 0
+    newer = 0
+    for rel in list_files(app.root, ["*"], include=app.scan_settings()["include"]):
+        try:
+            newer += (app.root / rel).stat().st_mtime_ns > built
+        except OSError:
+            pass
+    return max(newer, 1)
+
+
+def prune_worktree_maps(app):
+    """Delete the maps of worktrees that are gone (or left the repo); run by every rescan."""
+    removed = [folder for folder in worktrees.stale_maps(
+        app.data / worktrees.MAPS_DIR, worktrees.git_common_dir(app.root)) if folder != app.map_dir]
+    for folder in removed:
+        shutil.rmtree(folder)
+    return removed
 
 
 def relevel(app, scope="ai", reset_names=False):
@@ -373,6 +570,14 @@ def load_graph(app):
         return read_graph(app.graph_path)
     except ValueError as error:  # an unknown graph.json format; other scanner versions load
         raise AppError(f"{app.name}: {error}: run `coderstanding rescan {app.name}`") from error
+
+
+def load_names(app):
+    """The app's names index (textindex.py, saved beside graph.json); AppError when it has none."""
+    index = read_index(app.graph_path)
+    if index is None:
+        raise AppError(f"{app.name} has no names index yet: run `coderstanding rescan {app.name}`")
+    return index
 
 
 def ends_with_part(text, query):
@@ -406,11 +611,12 @@ def candidates(graph, query):
 
 
 def find_id(graph, notes, query):
-    """Full id, domain, or a unique short name; AppError lists candidates if ambiguous."""
+    """Full id, domain, a unique short name, or a class's nickname; AppError lists candidates if
+    ambiguous."""
     if query in graph.nodes:
         return query
     domains = notes.domains()
-    if query.startswith(DOMAIN_PREFIX) and query[len(DOMAIN_PREFIX):] in domains:
+    if query == overview_id() or (query.startswith(DOMAIN_PREFIX) and query[len(DOMAIN_PREFIX):] in domains):
         return query
     found = candidates(graph, query)
     if len(found) > 1:
@@ -419,6 +625,11 @@ def find_id(graph, notes, query):
         return found[0]
     if query in domains:
         return domain_id(query)
+    nicknamed = [node_id for node_id, function in notes.nicknamed(graph, query) if function is None]
+    if len(nicknamed) > 1:
+        raise AppError(f"{query} is ambiguous: {', '.join(nicknamed)}")
+    if nicknamed:
+        return nicknamed[0]
     raise AppError(f"no class named {query}")
 
 
@@ -433,9 +644,3 @@ def parse_target(graph, notes, text):
     if sep and name and not graph.nodes.get(text):
         return "function", find_id(graph, notes, name), function
     return "node", find_id(graph, notes, text)
-
-
-def selection_id(graph, notes, text):
-    """The view's id of a selection: a node id, an edge key `A→B`, or `id#function`."""
-    kind, *ids = parse_target(graph, notes, text)
-    return {"edge": "→", "function": "#"}.get(kind, "").join(ids)

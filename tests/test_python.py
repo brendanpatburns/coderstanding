@@ -108,4 +108,5 @@ def test_class_size_is_its_span(tmp_path):
     (tmp_path / "m.py").write_text("import os\n\n\nclass A:\n    def f(self):\n        pass\n\n\nX = 1\n")
     graph = scan_repo(tmp_path, modules=[PythonModule()], use_cache=False)
     assert (graph.nodes["m.A"].lines, graph.nodes["m.A"].span) == (3, True)
-    assert (graph.nodes["m"].lines, graph.nodes["m"].span) == (9, False)
+    assert (graph.nodes["m"].lines, graph.nodes["m"].span) == (6, False)
+    assert graph.nodes["m"].file_lines == 9

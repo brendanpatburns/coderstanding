@@ -9,16 +9,20 @@ from pathlib import Path
 
 from .cache import CACHE_DIR_ENV, ScanCache, default_cache_dir, file_hash, write_gitignore
 from .checks import check_graph
-from .diagnose import collect as collect_diagnostics
+from .diagnose import collect as collect_diagnostics, parse_errors
+from .filekinds import mark_file_kinds
 from .filewalk import DEFAULT_SKIP_DIRS, assign_files
 from .fingerprints import compute_fingerprints
 from .language import FileContext, load_builtin_modules, track_dependencies
 from .levels import AUTO, DEFAULT_MAX_LEVEL, guess_levels
 from .offline import install as install_offline_guard
 from .resolver import Parsed, build_graph
+from .rpc_messages import add_rpc_nodes
 from .http_routes import add_http_nodes
 from .stack import read_stack
-from .testcode import mark_tests
+from .testcode import find_test_projects, mark_tests
+from .textindex import build_index
+from .vendor import is_vendor_file
 
 
 PARALLEL_MIN_FILES = 150  # fewer files to parse than this: stay serial (pool start-up costs)
@@ -44,15 +48,16 @@ def parse_all(root, jobs, workers, parallel_min):
 
 
 def parse_files(root, modules, skip_dirs, cache=None, workers=None,
-                parallel_min=PARALLEL_MIN_FILES):
+                parallel_min=PARALLEL_MIN_FILES, exclude=(), include=()):
     workers = workers or os.cpu_count() or 1
-    assigned = assign_files(root, modules, skip_dirs)
+    assigned = [(rel, module) for rel, module in assign_files(root, modules, skip_dirs, include)
+                if not is_vendor_file(root, rel, exclude)]
     results = {}  # (rel_path, module name) -> FileResult
     digests = {}
     todo = []
     for rel_path, module in assigned:
         digests[rel_path] = file_hash(root / rel_path)
-        hit = cache and cache.load(rel_path, module.name, digests[rel_path])
+        hit = cache and cache.load(rel_path, module.cache_name, digests[rel_path])
         if hit:
             results[(rel_path, module.name)] = hit[0]
         else:
@@ -65,9 +70,7 @@ def parse_files(root, modules, skip_dirs, cache=None, workers=None,
             continue
         results[(rel_path, module.name)] = result
         if cache:
-            cache.store(rel_path, module.name, digests[rel_path], result, deps)
-    if cache:
-        cache.prune()
+            cache.store(rel_path, module.cache_name, digests[rel_path], result, deps)
     return [Parsed(rel, module, results[(rel, module.name)]) for rel, module in assigned
             if (rel, module.name) in results]
 
@@ -80,26 +83,36 @@ def read_path_maps(root, modules, skip_dirs):
 
 def scan_repo(root, modules=None, skip_dirs=DEFAULT_SKIP_DIRS, use_cache=True,
               cache_dir=None, workers=None, parallel_min=PARALLEL_MIN_FILES, hub_threshold=AUTO,
-              max_level=DEFAULT_MAX_LEVEL):
+              max_level=DEFAULT_MAX_LEVEL, exclude=(), include=(), function_macros=None):
     """cache_dir: where the per-file cache lives (default: <root>/.coderstanding/cache).
-    hub_threshold, max_level: see levels.parse_hub_threshold, parse_max_level."""
+    hub_threshold, max_level: see levels.parse_hub_threshold, parse_max_level.
+    exclude: globs of files left out (with vendored and minified ones, see vendor.py).
+    include: folders or globs of git-ignored files to scan anyway (exclude still applies).
+    function_macros: {macro: function name template}, see languages.cpp.expand_function_macros."""
     root = Path(root).resolve()
     if modules is None:
         modules = load_builtin_modules()
     for module in modules:
         module.start_scan()
+        module.configure(function_macros or {})
     cache = None
     if use_cache:
         if not (cache_dir or os.environ.get(CACHE_DIR_ENV)):
             write_gitignore(root)
         cache = ScanCache(root, cache_dir or default_cache_dir(root))
-    parsed = parse_files(root, modules, skip_dirs, cache, workers, parallel_min)
+    parsed = parse_files(root, modules, skip_dirs, cache, workers, parallel_min, exclude, include)
     path_maps = read_path_maps(root, modules, skip_dirs)
     graph = build_graph(root, parsed, repo=root.name, path_maps=path_maps)
     read_stack(root, graph, skip_dirs)
     add_http_nodes(root, graph, skip_dirs)
-    graph.diagnostics = collect_diagnostics(root, graph, path_maps)
+    add_rpc_nodes(root, graph, skip_dirs)
+    graph.diagnostics = {**collect_diagnostics(root, graph, path_maps), **parse_errors(parsed)}
     mark_tests(graph)
+    mark_file_kinds(graph)
+    graph.names = build_index(root, {p.rel_path for p in parsed}, skip_dirs,
+                              find_test_projects(graph.stack), cache, exclude, include)
+    if cache:
+        cache.prune()  # after every user of the cache (scan and names index) marked its entries
     guess_levels(graph, max_level=max_level, hub_threshold=hub_threshold)
     check_graph(graph)
     graph.fingerprints = compute_fingerprints(root, graph)

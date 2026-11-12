@@ -1,4 +1,4 @@
-"""Manual refresh only (DESIGN 4): API requests and CLI reads never walk files or scan."""
+"""Manual refresh only (DESIGN 4): API requests never walk files or scan."""
 
 import json
 import threading
@@ -34,8 +34,8 @@ def walks(monkeypatch):
     return count
 
 
-def test_api_request_burst_and_cli_reads_walk_nothing(project, walks, capsys):
-    (project / "b.py").write_text("class Bb:\n    pass\n")  # changed since the scan: still no rescan
+def test_api_request_burst_walks_nothing(project, walks, capsys):
+    (project / "b.py").write_text("class Bb:\n    pass\n")  # changed since the scan: the server still does not rescan
     server = make_server(Hub(Api), port=0)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
@@ -45,11 +45,8 @@ def test_api_request_burst_and_cli_reads_walk_nothing(project, walks, capsys):
     finally:
         server.shutdown()
         server.server_close()
-    for _ in range(3):
-        cli.main(["graph", "p"])
-        cli.main(["node", "p", "Aa"])
     capsys.readouterr()
-    assert walks == []
+    assert walks == []  # (CLI reads do refresh a changed map: tests/test_fresh_map.py)
 
 
 def test_unscanned_project_says_press_refresh(project, tmp_path):

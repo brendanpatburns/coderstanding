@@ -30,12 +30,15 @@ class Target:
             `import {Foo} from './a'`); falls back to the node itself if there is no child.
     scope:  for a name: the dotted scope it was written in, used when the resolving Ref has
             none (alias targets: C++ `using V = Vec<float>;` inside `namespace a`).
+    basic:  an alias target meaning a basic type of the language (C `typedef unsigned char u8;`):
+            references through the alias are dropped, not unresolved.
     """
     name: str = ""
     path: str = ""
     id: str = ""
     member: str = ""
     scope: str = ""
+    basic: bool = False
 
     @property
     def text(self):
@@ -59,6 +62,14 @@ class Ref:
     # the scripts sharing a page with this file, else the ref is dropped (no external ref).
     shared: bool = False
 
+    @classmethod
+    def own_call(cls, owner_id, function, line, from_member, scope=""):
+        """A call from one of the owner's functions to another of its own (same module,
+        `self.x()`): a self edge. impact/ripple, `tests --diff` and the function rows walk it; the
+        map never draws a box-to-box line for it, nor counts it for hubs, cycles or god classes."""
+        return cls(owner_id, Target(id=owner_id), "dependency", line, "call", function, scope=scope,
+                   from_member=from_member)
+
 
 @dataclass
 class Declaration:
@@ -79,9 +90,22 @@ class Declaration:
 
 @dataclass
 class Mark:
-    """Flags to add to a node that may be declared in another file (Godot autoloads)."""
+    """Flags to add to a node that may be declared in another file (Godot autoloads).
+    global_name / global_kind (model.GLOBAL_KINDS): the name code uses for the node and how
+    it becomes reachable (autoload, class_name, global-class)."""
     target: Target
     flags: list
+    global_name: str = ""
+    global_kind: str = ""
+
+
+@dataclass
+class NodeLookup:
+    """A file reaching a global by looking it up in the scene tree: `name` = the first
+    node name of the path, `form` = the code as written (`root.get_node("Media")`)."""
+    name: str
+    form: str
+    line: int = 0
 
 
 @dataclass
@@ -102,6 +126,8 @@ class FileResult:
     # A classic script's top-level names (functions, classes, vars, `window.X =`) -> Target in
     # this file; other scripts loaded by the same page find them as bare names (Ref.shared).
     page_globals: dict = field(default_factory=dict)
+    lookups: list = field(default_factory=list)  # NodeLookup: scene-tree lookups of globals
+    parse_error_line: int = 0  # first line the grammar could not parse (ts_util.first_error_line); 0 = none
 
 
 @dataclass
@@ -172,6 +198,14 @@ class LanguageModule:
 
     def start_scan(self):
         """Called once before each scan; drop any in-memory state from earlier scans."""
+
+    def configure(self, function_macros):
+        """Called once before each scan with the app's `function_macros` setting."""
+
+    @property
+    def cache_name(self):
+        """The name the scan cache files results under (add what changes the results)."""
+        return self.name
 
     def read_path_map(self, root, skip_dirs):
         """Once per scan: a path map (`tsconfig.PathMap`: `bases(written, from_file)`) for

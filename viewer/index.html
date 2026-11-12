@@ -61,6 +61,7 @@
       <span class="scanned muted" id="scanned"></span>
       <button class="btn" id="themeBtn" title="Theme">Theme: auto</button>
     </header>
+    <div class="refnote" id="refNote" role="status" hidden><span id="refNoteText"></span><button class="btn small" id="refNoteClose" type="button" aria-label="Close">Close</button></div>
 
     <dialog class="apps-dialog" id="appsDialog" aria-labelledby="appsTitle">
       <header><h2 id="appsTitle">Projects on this PC</h2><button class="btn small" id="appsClose" aria-label="Close">Close</button></header>
@@ -89,92 +90,146 @@
     </form>
 
     <section id="tabGraph" role="tabpanel" class="graph-tab">
-      <div class="controls">
-        <div class="ctl">
-          <span class="ctl-label">View</span>
-          <div class="seg" role="group" aria-label="View">
-            <button id="viewAll" aria-pressed="true">All types</button>
-            <button id="viewConcrete" aria-pressed="false">Concrete</button>
+      <div class="calmbar" id="calmbar">
+        <div class="preset-box">
+          <div class="seg" role="group" aria-label="Preset" id="presetCtl">
+            <button id="presetRead" data-preset="read" aria-pressed="false" title="Domains, what each box does, explained lines first; outside code, tests and self calls hidden">Read</button>
+            <button id="presetExplore" data-preset="explore" aria-pressed="false" title="Every switch as it always was">Explore</button>
+            <button id="presetEdit" data-preset="edit" aria-pressed="false" title="Edit layout on, specs and notes shown">Edit</button>
           </div>
+          <span class="preset-custom" id="presetCustom" title="You changed a switch; pick a preset to go back" hidden>Custom</span>
         </div>
-        <div class="ctl" role="group" aria-label="Show types">
-          <span class="ctl-label">Show</span>
-          <label class="check"><input type="checkbox" id="showExternal" checked> Outside code</label>
-          <label class="check" title="Sockets and network endpoints: servers, clients, web sockets, HTTP"><input type="checkbox" id="showComm" checked> Communications</label>
-          <label class="check" title="Test code: hidden by default, removed rather than folded"><input type="checkbox" id="showTest"> Tests</label>
-          <label class="check" title="§N on classes and lines that N specs or notes link"><input type="checkbox" id="showCards" checked> Specs &amp; notes</label>
-          <label class="check off" title="Arrives when domains exist"><input type="checkbox" disabled> Domains</label>
-        </div>
-        <div class="ctl">
-          <label for="filter">Highlight</label>
-          <select id="filter" class="select" title="Dim the classes without this status or tag"></select>
-        </div>
+        <input class="note-input calm-search" id="graphSearch" type="search" placeholder="Find a class…" aria-label="Find a class (dims the others; Enter selects the first)">
+        <section class="ruler" id="ruler" aria-label="Depth">
+          <div class="ruler-top">
+            <nav class="crumbs" id="crumbs" aria-label="Zoom path"></nav>
+            <span class="ruler-count" id="rulerCount"></span>
+            <button class="btn small" id="overviewBtn" title="Level 0 as a short story and a card per domain" hidden>Overview</button>
+            <button class="btn small start-here" id="startHereBtn" aria-haspopup="true" title="Where to start reading: a short guided path through the main classes">Start here</button>
+            <div class="start-menu" id="startMenu" role="menu" hidden></div>
+            <button class="btn small" id="levelsBtn" title="Name the levels or change how many there are">Levels…</button>
+          </div>
+          <div class="ruler-cols" id="rulerCols" role="group" aria-label="Level (arrow keys step it)"></div>
+        </section>
+        <button class="btn" id="moreBtn" type="button" aria-expanded="false" aria-controls="moreOptions">More options ▾</button>
+        <span class="muted copy-out" id="copyOut" aria-live="polite"></span>
       </div>
-      <div class="controls actions">
-        <div class="ctl">
-          <span class="ctl-label">Layout</span>
-          <div class="seg" role="group" aria-label="Layout mode">
-            <button id="modeView" aria-pressed="true">View</button>
-            <button id="modeEdit" aria-pressed="false">Edit layout</button>
+      <div class="more-options" id="moreOptions" hidden>
+        <div class="controls">
+          <div class="ctl">
+            <span class="ctl-label">View</span>
+            <div class="seg" role="group" aria-label="View">
+              <button id="viewAll" aria-pressed="true">All types</button>
+              <button id="viewConcrete" aria-pressed="false">Concrete</button>
+            </div>
           </div>
-          <div class="seg split" role="group" aria-label="Auto layout">
-            <button id="autoBtn" title="Place every unpinned class (a preview in View mode, saved in Edit mode)">Auto layout</button>
-            <select id="autoMethod" aria-label="Auto layout method" title="How Auto layout places classes">
-              <option value="layered">Layered</option>
-              <option value="organic">Organic</option>
-              <option value="hub">Hub</option>
-              <option value="grid">Grid</option>
-            </select>
+          <div class="ctl" role="group" aria-label="Show types">
+            <span class="ctl-label">Show</span>
+            <label class="check"><input type="checkbox" id="showExternal" checked> Outside code</label>
+            <label class="check" title="Sockets and network endpoints: servers, clients, web sockets, HTTP"><input type="checkbox" id="showComm" checked> Communications</label>
+            <label class="check" title="Test code: hidden by default, removed rather than folded"><input type="checkbox" id="showTest"> Tests</label>
+            <label class="check" title="§N on classes and lines that N specs or notes link"><input type="checkbox" id="showCards" checked> Specs &amp; notes</label>
+            <label class="check" title="Lines from one function to another in the same open class"><input type="checkbox" id="showSelfCalls" checked> Self calls</label>
+            <label class="check off" title="Arrives when domains exist"><input type="checkbox" id="showDomains" disabled> Domains</label>
           </div>
+          <div class="ctl between off" id="betweenCtl">
+            <span class="ctl-label">Between frames</span>
+            <div class="seg small" role="group" aria-label="Lines between domain frames">
+              <button id="bundledBtn" aria-pressed="true" title="One line per pair of frames, with a count">Bundled</button>
+              <button id="everyBtn" aria-pressed="false" title="Every line between classes in different frames">Every line</button>
+            </div>
+          </div>
+          <div class="ctl">
+            <label for="filter">Highlight</label>
+            <select id="filter" class="select" title="Dim the classes without this status or tag"></select>
+          </div>
+          <p class="preset-note muted" id="presetNote" role="status"></p>
         </div>
-        <div class="ctl">
-          <span class="ctl-label">Functions</span>
-          <div class="seg" role="group" aria-label="Functions">
-            <button id="expandAllBtn" title="Open the shown classes into their functions">Expand all</button>
-            <button id="collapseAllBtn" title="Close every open class">Collapse all</button>
+        <div class="controls actions">
+          <div class="ctl">
+            <span class="ctl-label">Layout</span>
+            <div class="seg" role="group" aria-label="Layout mode">
+              <button id="modeView" aria-pressed="true">View</button>
+              <button id="modeEdit" aria-pressed="false">Edit layout</button>
+            </div>
+            <div class="seg split" role="group" aria-label="Auto layout">
+              <button id="autoBtn" title="Place every unpinned class (a preview in View mode, saved in Edit mode)">Auto layout</button>
+              <select id="autoMethod" aria-label="Auto layout method" title="How Auto layout places classes">
+                <option value="layered">Layered</option>
+                <option value="organic">Organic</option>
+                <option value="hub">Hub</option>
+                <option value="grid">Grid</option>
+              </select>
+            </div>
           </div>
-        </div>
-        <div class="ctl">
-          <span class="ctl-label">Copy</span>
-          <div class="seg" role="group" aria-label="Copy">
-            <button id="copyBtn" title="Copy what is on screen as slim text, with the command that prints it">for AI</button>
-            <button id="copyCmdBtn" title="Copy only the command line">command only</button>
+          <div class="ctl">
+            <span class="ctl-label">Functions</span>
+            <div class="seg" role="group" aria-label="Functions">
+              <button id="expandAllBtn" title="Open the shown classes into their functions">Expand all</button>
+              <button id="collapseAllBtn" title="Close every open class">Collapse all</button>
+            </div>
           </div>
-          <span class="muted copy-out" id="copyOut" aria-live="polite"></span>
+          <div class="ctl">
+            <span class="ctl-label">Box text</span>
+            <div class="seg small" role="group" aria-label="Box text" id="boxTextCtl">
+              <button data-boxtext="name" aria-pressed="false" title="Only the class names and counts">Name</button>
+              <button data-boxtext="short" aria-pressed="true" title="The name and what the class does, in 2 lines at most">Name + what it does</button>
+              <button data-boxtext="full" aria-pressed="false" title="The name and the whole description">Full</button>
+            </div>
+          </div>
+          <div class="ctl">
+            <span class="ctl-label">Lines</span>
+            <div class="seg small" role="group" aria-label="Lines" id="linesCtl">
+              <button data-lines="explained" aria-pressed="true" title="Lines with a hint drawn full, the rest thin and faint until you hover or select one of their ends">Explained first</button>
+              <button data-lines="all" aria-pressed="false" title="Every line at the same weight">All equal</button>
+            </div>
+            <span class="muted lines-count" id="linesCount" aria-live="polite"></span>
+          </div>
+          <div class="ctl">
+            <span class="ctl-label">Copy</span>
+            <div class="seg" role="group" aria-label="Copy">
+              <button id="copyBtn" title="Copy what is on screen as slim text, with the command that prints it">for AI</button>
+              <button id="copyCmdBtn" title="Copy only the command line">command only</button>
+            </div>
+          </div>
         </div>
       </div>
       <div class="editbar" id="editbar">
         Editing layout <span>Moves are saved. Pinned classes can still be moved here; Auto layout leaves them alone.</span>
         <span class="grow"></span>
+        <button class="btn small primary" id="addBoxBtn" title="Add a planned box, or one the scanner can't see">Add box</button>
         <button class="btn small" id="undoBtn" title="Undo (Ctrl+Z)">Undo</button>
         <button class="btn small" id="redoBtn" title="Redo (Ctrl+Shift+Z)">Redo</button>
       </div>
-      <section class="ruler" id="ruler" aria-label="Depth">
-        <div class="ruler-top">
-          <nav class="crumbs" id="crumbs" aria-label="Zoom path"></nav>
-          <span class="ruler-count" id="rulerCount"></span>
-          <button class="btn small" id="levelsBtn" title="Name the levels or change how many there are">Levels…</button>
-        </div>
-        <div class="ruler-cols" id="rulerCols" role="group" aria-label="Level (arrow keys step it)"></div>
-      </section>
       <div class="legend" aria-label="Legend">
-        <button type="button" class="legend-kind" data-kind="composition"><i class="lg lg-comp"></i>composition</button>
-        <button type="button" class="legend-kind" data-kind="association"><i class="lg lg-assoc"></i>association</button>
-        <button type="button" class="legend-kind" data-kind="dependency"><i class="lg lg-dep"></i>dependency</button>
-        <button type="button" class="legend-kind" data-kind="signal"><i class="lg lg-sig"></i>signal</button>
-        <button type="button" class="legend-kind" data-kind="loaded-by"><i class="lg lg-loaded"></i>loaded by (by name)</button>
-        <button type="button" class="legend-kind" data-kind="generalization"><i class="lg lg-gen"></i>generalization</button>
-        <button type="button" class="legend-kind" data-kind="realization"><i class="lg lg-real"></i>realization</button>
-        <span><i class="lg lg-derived"></i>through hidden classes</span>
+        <span class="legend-kinds" id="legendKinds"></span>
         <span><i class="lg lg-faded"></i>outside the zoom</span>
-        <span><i class="lg lg-internal"></i>call inside the class</span>
+        <button type="button" class="legend-kind" data-fan="self"><i class="lg lg-internal"></i>call inside the class</button>
+        <span class="dom-legend" hidden><i class="lg-frame"></i>domain frame</span>
+        <span class="dom-legend" hidden><i class="lg lg-bundle"></i>lines between two frames (bundled, with count)</span>
+        <span class="ctl plan-legend"><label for="planCtl">Planned work</label>
+          <select id="planCtl" class="select small" title="Planned boxes, functions and lines: not in the code yet">
+            <option value="hide">hide</option><option value="show">show</option><option value="only">only</option></select>
+          <button class="plan-count" id="planCount" type="button" aria-pressed="false" title="Planned work and stubs (not built yet). Click: only planned work" hidden></button></span>
+        <span class="ctl prog-legend"><label for="trackCtl">Progress</label>
+          <select id="trackCtl" class="select small" title="How much is done: a ring on every box that counts something"><option value="">none</option></select>
+          <span class="prog-sum" id="trackSum" role="status" hidden></span></span>
       </div>
       <div class="type-strip" id="typeStrip" role="group" aria-label="Code types in this view" hidden></div>
+      <div class="plan-banner" id="planBanner" role="status" hidden></div>
       <div class="stage">
         <div class="canvas" id="canvas">
+          <svg width="0" height="0" class="plan-defs" aria-hidden="true"><defs>
+            <pattern id="plan-hatch" width="12" height="12" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+              <rect width="12" height="12" class="hatch-bg"/><rect width="6" height="12" class="hatch-line"/></pattern></defs></svg>
+          <svg class="fan-layer" id="domBack" aria-hidden="true"></svg>
           <svg class="fan-layer" id="fanBack" aria-hidden="true"></svg>
           <div id="cy"></div>
+          <div class="overview" id="overview" hidden></div>
+          <svg class="fan-layer front" id="domFront"></svg>
           <svg class="fan-layer front" id="fanFront"></svg>
+          <svg class="fan-layer front" id="startBadges" aria-hidden="true"></svg>
+          <div class="dom-tip" id="domTip" role="tooltip" hidden></div>
           <div class="overlay" id="overlay" hidden></div>
           <div class="copy-box" id="copyBox" hidden>
             <p>The browser did not allow copying. Select all and copy:</p>
@@ -208,7 +263,10 @@
           <div class="dots" id="tourDots" aria-label="Steps"></div>
           <label class="ctl">Speed <select class="select" id="tourSpeed"><option value="0.8">0.8×</option><option value="1" selected>1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option></select></label>
           <label class="ctl">Voice <select class="select" id="tourVoice"><option value="">No voices found</option></select></label>
+          <label class="ctl check"><input type="checkbox" id="tourAutoplay" checked> Auto-play</label>
+          <label class="ctl check" title="When a line note pops up, the voice pauses the step, reads the note, then goes on"><input type="checkbox" id="tourReadNotes"> Read notes aloud</label>
           <div class="ttsnote" id="ttsNote" role="status" hidden></div>
+          <div class="ttsnote" id="voiceHint" hidden>Only robot voices found - install a better voice (e.g. Piper for speech-dispatcher on Linux, or Natural voices in Windows settings).</div>
           <div class="seek"><span class="t" id="seekNow">0:00</span><input type="range" id="seekBar" min="0" max="1000" value="0" aria-label="Seek in this step"><span class="t" id="seekDur">0:00</span><span id="seekChip"></span></div>
         </div>
         <section class="tour-code" id="tourCode" aria-label="Code for this step">
@@ -216,6 +274,7 @@
             <span class="path" id="codePath"></span>
             <span class="anchor" id="codeAnchor"></span>
             <a id="openEditor" href="#">Open in editor &#8599;</a>
+            <span id="codeCopy"></span>
           </div>
           <div class="stalebar" id="staleBar" hidden></div>
           <pre class="code-src" id="codeSrc"></pre>
@@ -228,15 +287,24 @@
   </main>
 </div>
 <script src="vendor/cytoscape.min.js"></script>
+<script src="view_options.js"></script>
 <script src="layout.js"></script>
+<script src="domains.js"></script>
 <script src="typechips.js"></script>
 <script src="fanout.js"></script>
+<script src="domain_view.js"></script>
 <script src="panels.js"></script>
 <script src="field_help.js"></script>
 <script src="lists.js"></script>
+<script src="refs.js"></script>
+<script src="copy_menu.js"></script>
 <script src="ruler.js"></script>
+<script src="overview.js"></script>
+<script src="start_here.js"></script>
 <script src="apps.js"></script>
 <script src="tours.js"></script>
+<script src="plan_view.js"></script>
+<script src="progress_view.js"></script>
 <script src="app.js"></script>
 <script src="comments.js"></script>
 <script src="tour_view.js"></script>

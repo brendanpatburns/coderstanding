@@ -133,6 +133,7 @@ from coderstanding.language import FileContext, load_builtin_modules
 from coderstanding.languages.csharp import CSharpModule
 from coderstanding.languages.java import JavaModule
 from coderstanding.languages.kotlin import KotlinModule
+from coderstanding.languages.shell import ShellModule
 modules = load_builtin_modules()
 import pathlib, tempfile
 root = pathlib.Path(tempfile.mkdtemp())
@@ -142,6 +143,8 @@ print(len(CSharpModule().parse(FileContext(root, "a.cs")).declarations), len(mod
 print(len(JavaModule().parse(FileContext(root, "A.java")).declarations))
 (root / "a.kt").write_text("package n\nclass A : B()\n")
 print(len(KotlinModule().parse(FileContext(root, "a.kt")).declarations))
+(root / "a.sh").write_text("git status\n")
+print(len(ShellModule().parse(FileContext(root, "a.sh")).declarations))
 print("socket events:", events)
 """)
     assert done.returncode == 0, done.stderr
@@ -244,6 +247,8 @@ ALLOWED = [
     ("viewer/apps.js", 'fetch("hosted.json"', "relative: this page's own hosted.json"),
     ("viewer/apps.js", "fetch(`${url}/api/apps`",
      "probe of the local helper named by hosted.json (null on a local serve page)"),
+    ("viewer/apps.js", "fetch(`${helperUrl()}/api/alive`",
+     "heartbeat to the local helper (hosted.json's, or this server on a local page)"),
     ("viewer/tour_view.js", "fetch(CoderApps.url(", "tour text through the one API helper"),
     ("viewer/app.js", "fetch(CoderApps.url(", "view text through the one API helper"),
     ("viewer/fanout.js", "http://www.w3.org/2000/svg", "SVG namespace name, never fetched"),

@@ -1,16 +1,18 @@
 """Commands that set Coderstanding up on a PC (not about a scanned app): `helper`, `tray`, `hook`,
 `hook-run`, `skill`, `guide`. Same shape as cli.py: one add_* function per command."""
 
+import argparse
 import sys
-from argparse import BooleanOptionalAction
 
 from . import field_rules, guide, helper, hook, skill
 from .apps import AppError, find_app
 
 
 def run_helper(args):
+    if args.url and args.action != "url-start":
+        sys.exit(f"helper {args.action}: unexpected argument {args.url[0]!r}")
     if args.action == "install":
-        ok = helper.install(tray=args.tray, dry_run=args.dry_run, start=args.start)
+        ok = helper.install(dry_run=args.dry_run, start=args.start)
         if not ok:
             sys.exit(1)
     elif args.action == "uninstall":
@@ -19,20 +21,22 @@ def run_helper(args):
         helper.status()
     elif args.action == "log":
         helper.show_log()
+    elif args.action == "url-start":
+        helper.start_from_link(*args.url)
     elif not helper.control(args.action, verify=True):
         sys.exit(1)
 
 
 def add_helper(commands):
-    parser = commands.add_parser("helper", help="run the local helper at login (systemd user unit on "
-                                 "Linux, Startup entry on Windows)")
+    parser = commands.add_parser("helper", help="the local helper, started by the page when needed "
+                                 "(systemd socket on Linux, coderstanding:// link on Linux and Windows)")
     parser.add_argument("action", choices=["install", "uninstall", "status", "start", "stop",
-                                           "restart", "log"])
+                                           "restart", "log", "url-start"],
+                        help="url-start: what the coderstanding:// link runs (starts the helper)")
+    parser.add_argument("url", nargs="*", help=argparse.SUPPRESS)  # url-start: ignored
     parser.add_argument("--dry-run", action="store_true", help="install/uninstall: show, change nothing")
     parser.add_argument("--no-start", dest="start", action="store_false",
                         help="install: do not start the helper now")
-    parser.add_argument("--tray", action=BooleanOptionalAction, default=None,
-                        help="install: with or without the tray icon (default: with when Qt is installed)")
     parser.set_defaults(run=run_helper)
 
 
@@ -41,11 +45,13 @@ def run_tray(args):
         from . import tray
     except ImportError:
         sys.exit(f"the tray needs Qt: {helper.tray_install_hint()}")
-    tray.main()
+    tray.main(attached=args.attached)
 
 
 def add_tray(commands):
     parser = commands.add_parser("tray", help="show the helper's tray icon (needs coderstanding[tray])")
+    parser.add_argument("--attached", action="store_true",
+                        help="quit when stdin closes (the helper starts the tray this way)")
     parser.set_defaults(run=run_tray)
 
 

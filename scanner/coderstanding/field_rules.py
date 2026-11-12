@@ -93,14 +93,15 @@ def write_overrides(data_dir, overrides, house):
 
 
 def effective(data_dir):
-    """{"rule", "house", "fields": {name: {what, who, not, good, bad, max, code_check, custom: [keys]}}}."""
+    """{"rule", "house", "fields": {name: {what, who, not, good, bad, max, code_check, custom: [keys]}},
+    "words": {"kinds": {line kind: {word, uml, tip}}, "terms": {term: definition}}} (words are not note fields)."""
     base = defaults()
     overrides, house = read_overrides(data_dir)
     fields = {}
     for name, rules in base["fields"].items():
         mine = {k: v for k, v in overrides.get(name, {}).items() if k in KEYS}
         fields[name] = {**rules, **mine, "custom": [k for k in KEYS if k in mine]}
-    return {"rule": base["rule"], "house": house, "fields": fields}
+    return {"rule": base["rule"], "house": house, "fields": fields, "words": base["words"]}
 
 
 def change(data_dir, sets=None, resets=None, house=None, by=None):

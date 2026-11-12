@@ -15,6 +15,7 @@ from pathlib import Path
 
 from . import userconfig
 from .offline import install as install_offline_guard
+from .worktrees import git_common_dir
 
 SEARCH_COMMANDS = ("grep", "rg", "find", "cat")
 DRIVE_PATH = re.compile(r"^[A-Za-z]:[\\/]")  # C:\code or C:/code
@@ -24,20 +25,6 @@ HINT = ("This repo is in Coderstanding (app `{app}`). Cheaper than grepping/read
 START_NOTE = ("This directory is in Coderstanding (app `{app}`). Use the `coderstanding` skill: "
               "start with `coderstanding graph {app} 1`, then `find`/`outline`/`node`/`impact` "
               "instead of broad grepping.\nOpen real files only for what the output points at.")
-
-
-def git_common_dir(path):
-    """The shared .git folder of the repo or worktree containing `path`, else None."""
-    for folder in [path, *path.parents]:
-        dot_git = folder / ".git"
-        if dot_git.is_dir():
-            return dot_git.resolve()
-        if dot_git.is_file():
-            gitdir = dot_git.read_text().strip().removeprefix("gitdir:").strip()
-            gitdir = (folder / gitdir).resolve()
-            common = gitdir / "commondir"
-            return (gitdir / common.read_text().strip()).resolve() if common.exists() else gitdir
-    return None
 
 
 def inside(path, root):

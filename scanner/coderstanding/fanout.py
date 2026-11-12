@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from .model import (DATA_MEMBER_KINDS, FUNCTION_KINDS, called_function, calling_function,
                     function_names)
+from .rpc_messages import message_directions
 
 EXPAND_ALL = "*"  # expand every shown class
 FIELD_KINDS = (*DATA_MEMBER_KINDS, "signal")  # listed under the functions
@@ -24,14 +25,19 @@ def functions_of(ctx, node_id):
 
 
 def class_parts(ctx, node_id):
-    """{"functions": [{name, line}], "fields": [{name, kind, type}]} of one class."""
+    """{"functions": [{name, line}], "fields": [{name, kind, type}], "properties": [...]} of one
+    class. `properties` = the fields that are public (the Properties section); functions are
+    never filtered by visibility."""
     node = ctx.graph.nodes[node_id]
     lines = {m.name: m.line for m in node.members if m.kind in FUNCTION_KINDS}
-    rpcs = {m.name for m in node.members if m.rpc}
-    return {"functions": [{"name": n, "line": lines.get(n, 0), **({"rpc": True} if n in rpcs else {})}
+    directions = message_directions(ctx.graph, node)  # remote-callable ones: who sends them
+    return {"functions": [{"name": n, "line": lines.get(n, 0),
+                           **({"rpc": True, "direction": directions[n]} if n in directions else {})}
                           for n in functions_of(ctx, node_id)],
             "fields": [{"name": m.name, "kind": m.kind, "type": m.type}
-                       for m in node.members if m.kind in FIELD_KINDS]}
+                       for m in node.members if m.kind in FIELD_KINDS],
+            "properties": [{"name": m.name, "kind": m.kind, "type": m.type, "line": m.line}
+                           for m in node.members if m.kind in FIELD_KINDS and m.public]}
 
 
 @dataclass
@@ -49,6 +55,7 @@ class FanLink:
     at: set = field(default_factory=set)
     as_: str = None
     faded: bool = False
+    quiet: bool = False  # its class line is quiet (views.quiet_keys)
 
     def add(self, kind, members=(), count=0, at=()):
         self.kinds.add(kind)
@@ -64,7 +71,7 @@ class FanLink:
                 "edge": self.edge, "from": self.from_id, "from_fn": self.from_fn,
                 "to": self.to, "to_fn": self.to_fn, "kinds": sorted(self.kinds),
                 "direct": self.direct, "internal": self.from_id == self.to,
-                "faded": self.faded, "as": self.as_, "count": self.count,
+                "faded": self.faded, "quiet": self.quiet, "as": self.as_, "count": self.count,
                 "members": [{"name": n, "count": c} for n, c in
                             sorted(self.members.items(), key=lambda m: (-m[1], m[0]))],
                 "at": [a.to_json() for a in sorted(self.at)]}
@@ -79,8 +86,8 @@ def call_kind(kind):
 class FanOut:
     """Collects the links of one view; `rows` = open class id -> its function names."""
 
-    def __init__(self, rows):
-        self.rows, self.links = rows, {}
+    def __init__(self, rows, quiet=frozenset()):
+        self.rows, self.links, self.quiet = rows, {}, quiet
 
     def source(self, node_id, from_member):
         fn = calling_function(from_member)
@@ -98,6 +105,7 @@ class FanOut:
                                       edge.key if edge else None)
             if edge:
                 self.links[key].faded = edge.faded
+                self.links[key].quiet = edge.key in self.quiet
                 self.links[key].as_ = min((i for _, i in edge.as_from), default=None)
         return self.links[key]
 
@@ -151,11 +159,12 @@ def counted(pairs):
     return found
 
 
-def fanout_links(ctx, edges, open_ids):
-    """JSON links for every edge touching an open class, plus calls inside open classes."""
+def fanout_links(ctx, edges, open_ids, quiet=frozenset()):
+    """JSON links for every edge touching an open class, plus calls inside open classes;
+    `quiet` = the class lines' keys drawn faint (views.quiet_keys): their links are quiet too."""
     if not open_ids:
         return []
-    fan = FanOut({i: set(functions_of(ctx, i)) for i in open_ids})
+    fan = FanOut({i: set(functions_of(ctx, i)) for i in open_ids}, quiet)
     for edge in edges:
         if edge.from_id not in open_ids and edge.to not in open_ids:
             continue

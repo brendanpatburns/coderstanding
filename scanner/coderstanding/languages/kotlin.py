@@ -5,20 +5,25 @@ Only reads files; the shared resolver resolves names and builds edges. Ids are f
 """
 
 import posixpath
+import re
 from dataclasses import dataclass, field, replace
 
 import tree_sitter_kotlin
 
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult, LanguageModule, Ref,
                                   Target, register)
-from coderstanding.model import Member, add_unique, child_id, entry_flags
+from coderstanding.model import Member, add_unique, child_id, entry_flags, is_public
 
 from . import doc_text
-from .ts_util import children_of_type, descendants, end_line, first_child_of_type, line, make_parser, text
+from .ts_util import (children_of_type, descendants, end_line, first_child_of_type, first_error_line, lifted_children,
+                      line, make_parser, text)
+
+from .stubs import is_stub
 
 PARSER = make_parser(tree_sitter_kotlin.language())
 
 TYPE_NODES = ("class_declaration", "object_declaration", "companion_object")
+TYPE_KEYWORDS = ("class", "interface", "object")  # loose in an ERROR node: a type header the grammar gave up on
 TYPE_REFS = ("user_type", "nullable_type", "function_type", "parenthesized_type")
 BUILTIN_TYPES = {"Int", "Long", "Short", "Byte", "Float", "Double", "Boolean", "Char", "String",
                  "Unit", "Any", "Nothing", "Array", "UInt", "ULong", "UShort", "UByte"}
@@ -26,6 +31,25 @@ INJECTORS = ("get", "inject", "viewModel", "viewModels", "hiltViewModel", "koinI
 GRADLE_SCRIPT_SUFFIX = ".gradle.kts"  # build scripts: the stack reader reads them, not this one
 APPLICATION_BASES = ("Application", "MultiDexApplication")
 DOC_MARKERS = ("/**",)
+# Soft keywords (modifiers) the grammar reads as a modifier even where they are a variable's name:
+# `open = true` is a parse error. Only used on a file that fails to parse (see parse_source).
+SOFT_KEYWORDS = ("open", "private", "public", "protected", "internal", "abstract", "final", "sealed", "inline",
+                 "override", "lateinit", "suspend", "tailrec", "infix", "external", "vararg", "noinline",
+                 "crossinline", "data", "inner", "enum", "annotation", "value", "const", "operator")
+SOFT_KEYWORD_USE = re.compile(
+    rb"(?<![\w`.])(?<!val )(?<!var )(" + "|".join(SOFT_KEYWORDS).encode() + rb")(?=\s*(?:[-+*/%]?=(?!=)|\+\+|--|\.\w))")
+
+
+def parse_source(source):
+    """The syntax tree root of Kotlin source. When the grammar fails, it is tried again with soft
+    keywords used as names written in backticks (`open = true` -> `` `open` = true``); the retry
+    wins when it parses clean or fails later in the file. Lines stay the same."""
+    root = PARSER.parse(source).root_node
+    if root.has_error and SOFT_KEYWORD_USE.search(source):
+        retry = PARSER.parse(SOFT_KEYWORD_USE.sub(rb"`\1`", source)).root_node
+        if not retry.has_error or first_error_line(retry) > first_error_line(root):
+            return retry
+    return root
 
 
 # ---- type names -------------------------------------------------------------------------
@@ -300,7 +324,8 @@ class Owner:
 
     def hold(self, node, name, kind, type_node, names, constructed):
         shown = text(type_node) if type_node is not None else (names[0] if names else "")
-        self.decl.members.append(Member(name, kind, shown, line(node)))
+        self.decl.members.append(Member(name, kind, shown, line(node),
+                                        public=is_public(name, "kotlin", modifier_words(node))))
         self.sink.in_member(FIELD_MEMBER).add("composition" if constructed else "association",
                                               names, node, "field")
 
@@ -314,7 +339,8 @@ class Owner:
         receiver = types[0] if dot >= 0 and types else None
         returns = types[-1] if types and types[-1] is not receiver else None
         kind = "function" if self.decl.kind == "module" else "method"
-        self.decl.members.append(Member(name, kind, text(returns), line(node), end_line(node)))
+        self.decl.members.append(Member(name, kind, text(returns), line(node), end_line(node),
+                                        stub=is_stub(first_child_of_type(node, "function_body"))))
         sink = self.sink.in_member(name).with_generics(generic_parameter_names(node))
         sink.add("dependency", type_names(receiver), node, "extension")
         sink.add("dependency", type_names(returns), node, "return")
@@ -347,22 +373,27 @@ class Owner:
 class TypeReader(Owner):
     """Reads one type declaration (class, interface, object, companion) and its nested types."""
 
-    def __init__(self, result, node, namespace, parent_id):
-        name = "Companion" if node.type == "companion_object" and node.child_by_field_name(
-            "name") is None else declared_name(node)
-        type_id = child_id(parent_id or namespace, name) if (parent_id or namespace) else name
+    def __init__(self, result, node, namespace, parent_decl=None):
+        """A companion object has no node of its own: it is read into its outer class's
+        declaration (`parent_decl`), so its members and edges belong to that class."""
+        parent_id = parent_decl.id if parent_decl else None
         self.node = node
         self.parent_id = parent_id
         self.words = modifier_words(node)
-        decl = Declaration(id=type_id, name=name, kind=self._kind(), line=line(node),
-                           end_line=end_line(node), flags=self._flags(), namespace=namespace,
-                           doc=self._doc())
+        if node.type == "companion_object" and parent_decl:
+            decl = parent_decl
+        else:
+            name = declared_name(node)
+            type_id = child_id(parent_id or namespace, name) if (parent_id or namespace) else name
+            decl = Declaration(id=type_id, name=name, kind=self._kind(), line=line(node),
+                               end_line=end_line(node), flags=self._flags(), namespace=namespace,
+                               doc=self._doc())
         super().__init__(result, decl, generic_parameter_names(node))
         self.body = first_child_of_type(node, "class_body", "enum_class_body")
 
     def _kind(self):
         node = self.node
-        if node.type != "class_declaration":
+        if node.type not in ("class_declaration", "ERROR"):
             return "inner" if self.parent_id else "class"
         if first_child_of_type(node, "interface") is not None:
             return "interface"
@@ -391,7 +422,8 @@ class TypeReader(Owner):
         return ""
 
     def read(self):
-        self.result.declarations.append(self.decl)
+        if self.node.type != "companion_object":
+            self.result.declarations.append(self.decl)
         self._read_delegation()
         constructor = first_child_of_type(self.node, "primary_constructor")
         if constructor is not None:
@@ -405,10 +437,14 @@ class TypeReader(Owner):
         return self
 
     def _body_members(self):
-        return list(self.body.children) if self.body is not None else []
+        if self.body is None and self.node.type == "ERROR":  # a header read from an error part
+            loose = lifted_children(self.node)
+            opening = next((i for i, child in enumerate(loose) if child.type == "{"), len(loose) - 1)
+            return loose[opening + 1:]
+        return lifted_children(self.body) if self.body is not None else []
 
     def _read_nested(self, node):
-        if TypeReader(self.result, node, self.decl.namespace, self.decl.id).read().jvm_main:
+        if TypeReader(self.result, node, self.decl.namespace, self.decl).read().jvm_main:
             self.jvm_main = True
             if node.type == "companion_object":  # `Main.main` is started through its outer class
                 add_unique(self.decl.flags, entry_flags("program-main"))
@@ -465,7 +501,8 @@ class KotlinModule(LanguageModule):
         result = FileResult()
         if ctx.rel_path.endswith(GRADLE_SCRIPT_SUFFIX):
             return result
-        root = PARSER.parse(ctx.read_bytes()).root_node
+        root = parse_source(ctx.read_bytes())
+        result.parse_error_line = first_error_line(root)
         namespace = self._read_header(result, root)
         module = Owner(result, self._module_declaration(ctx, namespace))
         top = [n for n in root.children if n.type not in ("package_header", "import")]
@@ -497,13 +534,25 @@ class KotlinModule(LanguageModule):
             TypeReader(result, node, namespace, "").read()
         elif node.type in ("function_declaration", "property_declaration"):
             module.read_member(node, lambda n: None)
-        elif node.type not in ("block_comment", "line_comment", "ERROR", "file_annotation"):
+        elif node.type == "ERROR":
+            self._read_error(result, module, node, namespace)
+        elif node.type not in ("block_comment", "line_comment", "file_annotation"):
             module.body_reader(INIT_MEMBER).visit(node)
+
+    def _read_error(self, result, module, node, namespace):
+        """A part the grammar could not parse. A type whose header (`class Name {`) ended up
+        loose in it is read from there on, its members from the declarations after the `{`
+        (one type per error part); anything else is read as if it stood at top level."""
+        if first_child_of_type(node, *TYPE_KEYWORDS) is not None:
+            TypeReader(result, node, namespace, "").read()
+        else:
+            for child in lifted_children(node):
+                self._read_top_level(result, module, child, namespace)
 
     @staticmethod
     def _read_header(result, root):
         namespace = ""
-        for node in root.children:
+        for node in lifted_children(root):
             if node.type == "package_header":
                 namespace = text(first_child_of_type(node, "qualified_identifier", "identifier"))
             elif node.type == "import":

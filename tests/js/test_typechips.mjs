@@ -6,7 +6,7 @@ import vm from "node:vm";
 
 const source = readFileSync(new URL("../../viewer/typechips.js", import.meta.url), "utf8");
 const t = {};
-vm.runInNewContext(`${source}\nthis.api = { TYPE_COLORS, fileType, typeColors, contrast, relativeLuminance, wrapName, wrapSub };`, t);
+vm.runInNewContext(`${source}\nthis.api = { TYPE_COLORS, fileType, typeColors, contrast, relativeLuminance, wrapName, wrapSub, wrapText, clampLines };`, t);
 const { TYPE_COLORS, fileType, typeColors, contrast, relativeLuminance } = t.api;
 const plain = (fn) => (...args) => [...fn(...args)];  // arrays from the sandbox have another prototype
 const wrapName = plain(t.api.wrapName);
@@ -19,8 +19,8 @@ test("fileType is the lowercase extension, empty without one", () => {
   assert.equal(fileType(""), "");
 });
 
-test("every chip passes text contrast in both themes", () => {
-  for (const theme of ["light", "dark"]) {
+test("every chip passes text contrast in every theme", () => {
+  for (const theme of ["light", "dark", "contrast"]) {
     for (const type of Object.keys(TYPE_COLORS[theme])) {
       const { bg, ink } = typeColors(type, theme);
       assert.ok(contrast(bg, ink) >= 4.5, `${theme} ${type} ${contrast(bg, ink).toFixed(2)}`);
@@ -29,7 +29,7 @@ test("every chip passes text contrast in both themes", () => {
 });
 
 test("chip colours differ in lightness, not just hue", () => {
-  for (const theme of ["light", "dark"]) {
+  for (const theme of ["light", "dark", "contrast"]) {
     const lums = Object.values(TYPE_COLORS[theme]).map(relativeLuminance).sort((a, b) => a - b);
     for (let i = 1; i < lums.length; i++) assert.ok((lums[i] + 0.05) / (lums[i - 1] + 0.05) >= 1.06, `${theme} step ${i}`);
   }
@@ -58,4 +58,16 @@ test("a single unbreakable word is cut by characters, never an ellipsis", () => 
 
 test("a sub-line wraps whole marks", () => {
   assert.deepEqual(wrapSub("3 functions · 2 fields · #net · draft", mono, 25 * 8), ["3 functions · 2 fields ·", "#net · draft"]);
+});
+
+test("wrapText breaks prose between words; clampLines keeps N lines and ends the last in an ellipsis that fits", () => {
+  const wrapText = plain(t.api.wrapText);
+  const clampLines = plain(t.api.clampLines);
+  const lines = wrapText("Keeps every slot of the inventory in step with the items", mono, 80);
+  assert.ok(lines.length > 2 && lines.every((l) => mono(l) <= 80 && l === l.trim()));
+  assert.equal(lines.join(" "), "Keeps every slot of the inventory in step with the items");
+  const two = clampLines(lines, 2, mono, 80);
+  assert.equal(two.length, 2);
+  assert.ok(two[1].endsWith("…") && mono(two[1]) <= 80, two[1]);
+  assert.deepEqual(clampLines(["short"], 2, mono, 80), ["short"], "nothing cut: no ellipsis");
 });

@@ -102,6 +102,22 @@ function draw() {
   drawPanel();
   drawGutter();
   drawBadges();
+  revealPending();
+}
+
+/** `?comment=<id>` (a comment ref): show that comment once the panel has drawn it. */
+function reveal(id) {
+  cs.reveal = id;
+  revealPending();
+}
+
+function revealPending() {
+  const el = cs.reveal && document.querySelector(`.cmt[data-cid="${CSS.escape(cs.reveal)}"]`);
+  if (!el) return;
+  el.closest("details")?.setAttribute("open", "");  // a resolved thread
+  el.classList.add("ref-hit");
+  el.scrollIntoView({ block: "nearest" });
+  cs.reveal = null;
 }
 
 // ---------- rendering ----------
@@ -112,9 +128,17 @@ function when(c) {
   return `${esc(text)}${c.edited ? " · edited" : ""}`;
 }
 
+/** Where a comment sits, for its ref's hint: `tour <id> step <N>` (or just the tour). */
+function commentPlace(c) {
+  const key = c.target.split("#")[1];
+  const i = key ? tour().steps.findIndex((s) => s.key === key) : -1;
+  return i < 0 ? `tour ${tour().id}` : `tour ${tour().id} step ${i + 1}`;
+}
+
 function commentHtml(c) {
   const mine = c.by === cs.me && !c.deleted;
-  const head = `<div class="chead"><b>${esc(c.by)}</b>${c.ai ? '<span class="chip" title="Written by an AI">AI</span>' : ""}<span class="muted small">${when(c)}</span>
+  const ref = c.deleted ? "" : CoderRefs.copyButtons(CoderRefs.formatRef(CoderApps.current, CoderRefs.target.comment(c.id), commentPlace(c)), c.text);
+  const head = `<div class="chead"><b>${esc(c.by)}</b>${c.ai ? '<span class="chip" title="Written by an AI">AI</span>' : ""}<span class="muted small">${when(c)}</span>${ref}
     ${mine ? `<span class="cact"><button type="button" data-cact="edit" data-cid="${c.id}">Edit</button><button type="button" data-cact="delete" data-cid="${c.id}">Delete</button></span>` : ""}</div>`;
   if (c.deleted) return `<div class="cmt" data-cid="${c.id}"><div class="chead muted small">Deleted comment</div></div>`;
   if (cs.edit === c.id) {
@@ -288,5 +312,5 @@ function bind() {
   });
 }
 
-window.CoderComments = { ...pure, update, state: cs };
+window.CoderComments = { ...pure, update, reveal, state: cs };
 })();

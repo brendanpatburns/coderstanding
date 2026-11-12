@@ -70,3 +70,16 @@ def test_store_write_read_list_search_delete(tmp_path):
         store.read("a-tour")
     with pytest.raises(ItemError):
         store.path("../evil")
+
+
+def test_stored_target_is_none_when_lost_and_never_guesses_bare_names():
+    from coderstanding.items import stored_target
+    from coderstanding.model import Graph, Node
+    from coderstanding.notes import Notes
+    graph = Graph()
+    graph.add_node(Node(id="a", name="a", kind="class", lang="x", file="a.x"))
+    notes = Notes()
+    assert stored_target(graph, notes, "a") == ("node", "a")
+    assert stored_target(graph, notes, "a#gone") is None
+    assert stored_target(graph, notes, "nope") is None
+    assert stored_target(graph, notes, "a>nope") is None

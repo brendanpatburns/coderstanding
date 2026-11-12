@@ -48,5 +48,5 @@ def test_server_param_and_cli_flag_reach_the_engine():
     assert view_args({"hide_kind": ["signal", ""]})["show"]["hide_kinds"] == ["signal"]
     assert view_args({})["show"]["hide_kinds"] == []
     args = SimpleNamespace(concrete=False, no_scenes=False, no_external=False, no_comm=False, tests=False,
-                           hide_type=[], hide_kind=["signal"])
+                           hide_type=[], hide_file_kind=[], hide_kind=["signal"], lines="explained")
     assert view_options(args)["show"]["hide_kinds"] == ["signal"]

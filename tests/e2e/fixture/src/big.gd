@@ -2,6 +2,7 @@ class_name Big
 extends RefCounted
 
 var count: int = 0
+var _hidden: int = 0
 
 
 func step_01():
@@ -106,3 +107,7 @@ func step_25():
 
 func step_26():
 	count += 26
+
+
+func _quiet():
+	_hidden += 1

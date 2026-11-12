@@ -2,7 +2,7 @@ from pathlib import Path
 
 from coderstanding.model import Edge, Graph, Location, Node
 from coderstanding.scan import scan_repo
-from coderstanding.stack import read_stack, split_image
+from coderstanding.stack import read_stack, split_image, unresolved_names
 from fake_lang import FAKE
 from helpers import edge, scan_fake
 from test_gdscript import FIXTURE, MODULES
@@ -111,3 +111,39 @@ def test_python_standard_library_is_not_unresolved():
         outside_ref(py, label)
     read_stack(MISC, graph)
     assert graph.stack["unresolved"] == {"refs": 1, "top": [("mystery", 1)]}
+
+
+def test_outside_names_are_not_unresolved():
+    graph = Graph()
+    py = Node("tool", "tool", "module", "python", "t.py")
+    graph.add_node(py)
+    for label in ("bpy", "mathutils.Vector", "models/hero.GLB", "mystery"):
+        outside_ref(py, label)
+    read_stack(MISC, graph)
+    assert graph.stack["unresolved"] == {"refs": 1, "top": [("mystery", 1)]}
+    assert graph.stack["outside"]["refs"] == 3
+
+
+def test_platform_standard_and_asset_names_are_not_unresolved():
+    graph = Graph()
+    kotlin = Node("Svc", "Svc", "class", "kotlin", "S.kt")
+    node_js = Node("srv", "srv", "module", "javascript", "s.js")
+    godot = Node("main", "main", "script", "gdscript", "main.gd")
+    for node in (kotlin, node_js, godot):
+        graph.add_node(node)
+    for label in ("android.media.AudioRecord", "ShortArray", "Synchronized", "mystery.Thing"):
+        outside_ref(kotlin, label)
+    for label in ("node:fs/promises", "node:path", "mystery"):
+        outside_ref(node_js, label)
+    outside_ref(godot, "assets/shaders/tint.gdshader")
+    read_stack(MISC, graph)
+    assert graph.stack["unresolved"]["refs"] == 2
+    assert graph.stack["outside"]["refs"] == 1
+
+
+def test_unresolved_names_add_up_a_name_seen_as_several_line_kinds():
+    node = Node("Svc", "Svc", "class", "kotlin", "S.kt")
+    for kind, count in (("dependency", 4), ("association", 3)):
+        node.add_external(Edge("Svc", "okhttp3.Mystery", kind,
+                               at=[Location("S.kt", n) for n in range(count)]))
+    assert unresolved_names(node) == {"okhttp3.Mystery": 7}

@@ -16,8 +16,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .apps import AppError, parse_target
-from .notes import ARROW, FUNCTION_SEP, is_function
+from .apps import AppError
+from .notes import ARROW, FUNCTION_SEP
+from .views import checked_target
 
 FENCE = "---"
 ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]{0,79}$")
@@ -215,22 +216,19 @@ def plain_links(text, wrap="{}"):
 
 # --- targets (CLI syntax: Name, A>B, Name#function) ---
 
-def resolve_target(graph, notes, text):
-    """parse_target's answer for a graph target, or None when it is unknown (lost)."""
+def stored_target(graph, notes, text):
+    """The shared resolver's (strict) answer for a stored target (spec, tour step, card), or None
+    when it is unknown (lost). No bare names or did-you-mean: stored targets are written in full."""
     try:
-        kind, *ids = parse_target(graph, notes, text)
+        found = checked_target(graph, notes, text)
     except AppError:
         return None
-    if any(i not in graph.nodes for i in (ids if kind == "edge" else ids[:1])):
-        return None
-    if kind == "function" and not is_function(graph, "#".join(ids)):
-        return None
-    return (kind, *ids)
+    return found if all(i in graph.nodes for i in (found[1:] if found[0] == "edge" else found[1:2])) else None
 
 
 def unknown_targets(graph, notes, targets):
     """The targets the graph no longer has (listed like lost notes, never dropped)."""
-    return [t for t in targets if resolve_target(graph, notes, t) is None]
+    return [t for t in targets if stored_target(graph, notes, t) is None]
 
 
 def focus_ids(graph, notes, targets):
@@ -238,7 +236,7 @@ def focus_ids(graph, notes, targets):
     out (a tour step's or a spec's highlight)."""
     ids = []
     for target in targets:
-        found = resolve_target(graph, notes, target)
+        found = stored_target(graph, notes, target)
         if found:
             ids.append({"edge": ARROW, "function": FUNCTION_SEP}.get(found[0], "").join(found[1:]))
     return ids

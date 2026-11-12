@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const source = readFileSync(new URL("../../viewer/fanout.js", import.meta.url), "utf8");
+const source = ["plan_view.js", "fanout.js"].map((f) => readFileSync(new URL(`../../viewer/${f}`, import.meta.url), "utf8")).join("\n");
 const sandbox = {};
 vm.runInNewContext(`${source}\nthis.boxBadges = boxBadges;`, sandbox);
 const texts = (flags, extra = {}) => sandbox.boxBadges({ flags, ...extra }).map((b) => `${b.text}/${b.look}`);

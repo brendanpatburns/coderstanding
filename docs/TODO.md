@@ -2,8 +2,8 @@
 
 Small things decided but not scheduled. Bigger work lives in `docs/DESIGN.md` §14 Milestones.
 
-- [ ] Low priority: "Open in editor" button (VS Code `vscode://file/<path>:<line>`) and a
-      Forgejo file link in the details panel (DESIGN §12a).
+- [x] "Open in editor" link (VS Code `vscode://file/<path>:<line>`) and a "View on Forgejo" file
+      link in the details panel for classes and functions (DESIGN §12a). `/api/meta` `source`.
 - [x] Human note edits record the user's git `user.name` instead of `you` (AI edits keep their
       own name, e.g. `claude`, with `ai: true`). Done with comments: `notes.human_author`.
 - [ ] Maybe later: write an accepted description back into the header comment.
@@ -18,12 +18,39 @@ Small things decided but not scheduled. Bigger work lives in `docs/DESIGN.md` §
       comment already describes them as `-hint` (508 left that way); level 0 domain lines all
       read `~> (via 2)`, so direct vs indirect is lost; level 1 shows long `~> (via 6)` lines
       between core classes; `set` totals count connections with classes.
-- [ ] `warnings` counts outside imports of tool scripts (`bpy`, stdlib) and model
-      assets in scenes (`.glb`) as unresolved; maybe a separate "outside" bucket.
+- [x] `warnings` counts outside imports of tool scripts (`bpy`, stdlib) and model
+      assets in scenes (`.glb`) as unresolved; maybe a separate "outside" bucket. Done: `is_outside_name`.
+- [ ] Found writing tours (2026-11-11): `tour <app> <id> --note` (and other tour writes) run inside a
+      worktree write into the main checkout's `.coderstanding/tours`, not the worktree's; no CLI flag sets a
+      step's code range (`--draft` shows 8 lines, so a real tour was hand-edited, then `--still-true`).
+- [ ] Layout leftovers (2026-11-11): Coderstanding's own level 5 has +31% crossings from fold-by-users
+      (compare both fold orders per band); right-angle routes blocked by the 1.4x detour limit (1.5x? user call).
+
+## Done: progress tracks (approved 2026-11-11, built 2026-11-11; DESIGN 7g)
+Generic "how much is done" numbers for any project ("Draft 50% complete", a decomp's "78% proven").
+- A track = name + "of" (a set picked with the map's filters: folder, domain, file kind, tag,
+  class/function) + "done" (a tag, a note field filled / accepted by a person, or a scanner fact:
+  has a test, not a stub, no warnings). Defined per project in `settings.json` `tracks`.
+- Project-specific truth stays outside: a project's own script tags items through `set --file`
+  (e.g. StarCom tags `proven` from its checker). No project formats in Coderstanding.
+- Built-in tracks with no setup: Described (has a hint), Tested (nearest test), Built (uses the
+  `planned` branch's shared built predicate: not planned, not a stub).
+- Shows: `coderstanding progress <app>` (`Proven 26.9% (67/249) · +3 since last scan`), a bar per
+  domain in the overview, a ring per box for the chosen track, a spec's progress = share of its
+  linked classes/functions done (so specs read "50% complete"), history per scan for a trend.
+- [ ] Maybe later: weigh by size (a decomp counts bytes: StarCom's PROOF_STATUS says 26.9% by bytes,
+      27.7% by count); a trend chart beyond the tooltip; Described could count code header docs.
 
 ## Later: work tickets
 
-- [ ] Hotspots: rank classes by size × git churn × missing tests (checks/testcode data + git log), for when the app gets work-ticket connections.
+- [x] Hotspots (`coderstanding hotspots`): rank classes by size × git churn × missing tests (checks/testcode data + git log), for when the app gets work-ticket connections.
+
+## Done (layout readability, 2026-11-11)
+
+- [x] Layered layout reads better on real apps (real app, level 2: crossings -18%, lines under boxes
+      after bending -49%, mean line length -27%): best-order sweeps, rows lined up, bands slid and
+      folded under their users, gap-channel bends, lines in one gap spread apart; numbers from
+      `CoderLayout.measure` / `tests/e2e/layout_bench.mjs`.
 
 ## Done (m7 browser QA, 2026-10-29)
 
@@ -47,3 +74,7 @@ Small things decided but not scheduled. Bigger work lives in `docs/DESIGN.md` §
       command keeps the zoom's `--via`; `node` lists at most 8 tested-by files.
 - [x] Box faces as in the mock-up, drawn toggle triangle, warning mark, ignore warnings,
       scrolling/filterable function lists, resizable side panels.
+
+## Later: more readers (user, 2026-11-11)
+- Shaders (`.gdshader`, `.glsl`): uniforms, functions, includes.
+- RimWorld XML Defs: each Def as a node, `ParentName` / `<li Class=>` / defName references as lines.

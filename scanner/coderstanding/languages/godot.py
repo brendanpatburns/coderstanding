@@ -57,7 +57,7 @@ def read_project(ctx):
     for name, path in autoloads(config).items():
         target = Target(path=path)
         result.global_aliases[name] = target
-        result.marks.append(Mark(target, list(AUTOLOAD_FLAGS)))
+        result.marks.append(Mark(target, list(AUTOLOAD_FLAGS), name, "autoload"))
     scene = main_scene(config)
     if scene.startswith(UID_PREFIX):
         scene = files.scene_by_uid(scene)

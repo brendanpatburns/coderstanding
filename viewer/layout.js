@@ -4,8 +4,11 @@
 //   compact while every class keeps one spot at every level. Scenes join the band of the script
 //   they hold. Outside code gets its own grid band at the right of the top band.
 // - Inside a band: columns by call depth (callers left, callees right; cycles broken), rows
-//   ordered by barycenter sweeps to cut crossings, tall columns folded into side-by-side columns.
-// - Fixed spots (saved or pinned) never move; free classes are placed around them.
+//   ordered by barycenter sweeps to cut crossings (the best order kept), tall columns folded into
+//   side-by-side columns by where their users sit above, rows lined up with their neighbours.
+// - Each band below the first slides sideways to sit under the classes above that it uses.
+// - Fixed spots (saved or pinned) never move; free classes are placed around them. Saved spots
+//   whose boxes grew into each other are nudged apart first (settleFixed).
 //
 // Input nodes: {id, w, h, level, kind}; edges: {from, to, kinds}. Output: Map id -> {x, y}.
 (function () {
@@ -18,7 +21,8 @@ const LAYOUT = {
   minRows: 6,         // a band column holds at least this many rows before it folds
   rowsPerRoot: 0.9,   // ...or this times the square root of the band's size (wider than tall)
   sweeps: 8,          // crossing-minimisation passes
-  sweepLimit: 10000,  // above this many nodes, skip the sweeps (stay fast on huge graphs)
+  sweepLimit: 10000,  // above this many nodes, skip the sweeps and row alignment (stay fast on huge graphs)
+  alignSweeps: 4,     // row-alignment passes before the last both-sides pass
   nearRatio: 0.25,
   toolRows: 8,        // tools column height before it folds (further left)
   outsideGap: 40,     // outside code sits this far right of its user    // fewer free than this share of fixed: place each next to its neighbours
@@ -139,7 +143,34 @@ function columnsOf(bandIds, graph) {
 
 // ---------- ordering (rows) ----------
 
-/** Barycenter sweeps, left to right then back: each node moves toward its neighbours' rows. */
+/** Pairs of lines that cross between neighbouring columns (lines that skip a column not counted). */
+function adjacentCrossings(columns, neighbours) {
+  let total = 0;
+  for (let c = 0; c + 1 < columns.length; c++) {
+    const next = new Map(columns[c + 1].map((id, i) => [id, i]));
+    const ends = [];
+    columns[c].forEach((id, i) => { for (const m of neighbours.get(id) || []) if (next.has(m)) ends.push([i, next.get(m)]); });
+    ends.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    total += inversions(ends.map((pair) => pair[1]), columns[c + 1].length);
+  }
+  return total;
+}
+
+/** How many pairs i < j have values[i] > values[j] (values in 0..size-1), with a Fenwick tree. */
+function inversions(values, size) {
+  const tree = new Array(size + 1).fill(0);
+  let count = 0;
+  values.forEach((v, seen) => {
+    let below = 0;  // values <= v seen so far
+    for (let i = v + 1; i > 0; i -= i & -i) below += tree[i];
+    count += seen - below;
+    for (let i = v + 1; i <= size; i += i & -i) tree[i]++;
+  });
+  return count;
+}
+
+/** Barycenter sweeps, left to right then back: each node moves toward its neighbours' rows.
+ *  Keeps the order with the fewest crossings seen (a later sweep can make it worse). */
 function orderColumns(columns, neighbours, sweeps) {
   const column = new Map();
   const rank = new Map();
@@ -154,10 +185,14 @@ function orderColumns(columns, neighbours, sweeps) {
     columns[c].sort((a, b) => key.get(a) - key.get(b));
     setRanks(columns[c]);
   };
-  for (let pass = 0; pass < sweeps; pass++) {
+  let best = { crossings: sweeps ? adjacentCrossings(columns, neighbours) : 0, order: columns.map((col) => [...col]) };
+  for (let pass = 0; pass < sweeps && best.crossings; pass++) {
     if (pass % 2 === 0) for (let c = 1; c < columns.length; c++) sortColumn(c, (m) => m < c);
     else for (let c = columns.length - 2; c >= 0; c--) sortColumn(c, (m) => m > c);
+    const crossings = adjacentCrossings(columns, neighbours);
+    if (crossings < best.crossings) best = { crossings, order: columns.map((col) => [...col]) };
   }
+  best.order.forEach((col, c) => { columns[c] = col; });
   return columns;
 }
 
@@ -169,24 +204,83 @@ function foldColumn(col, maxRows) {
   return folded;
 }
 
+// ---------- rows ----------
+
+/**
+ * Whole-number positions closest to `targets` (least squares) that keep their order with at least
+ * 1 between neighbours: isotonic regression (pool adjacent violators), then rounded, so every
+ * column stays on one shared row grid.
+ */
+function spacedRows(targets) {
+  const blocks = [];
+  targets.forEach((t, i) => {
+    let block = { sum: t - i, count: 1 };
+    while (blocks.length && blocks.at(-1).sum / blocks.at(-1).count > block.sum / block.count) {
+      const last = blocks.pop();
+      block = { sum: last.sum + block.sum, count: last.count + block.count };
+    }
+    blocks.push(block);
+  });
+  const rows = [];
+  for (const block of blocks) {
+    const z = Math.round(block.sum / block.count);
+    for (let k = 0; k < block.count; k++) rows.push(z + rows.length);
+  }
+  return rows;
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+/**
+ * Rows for ordered columns (Brandes-Köpf in spirit, much simpler): each box moves toward the
+ * median row of its neighbours in the next columns (sweeps left to right and back, then both
+ * sides at once), keeping the column order and one row between boxes. Lines between neighbouring
+ * columns run level more often, with no new crossings. Returns id -> row (0 = the middle).
+ */
+function alignRows(columns, neighbours, sweeps = LAYOUT.alignSweeps) {
+  const row = new Map();
+  const column = new Map();
+  columns.forEach((col, c) => col.forEach((id, i) => { row.set(id, i - (col.length - 1) / 2); column.set(id, c); }));
+  const settle = (c, isSide) => {
+    const col = columns[c];
+    const targets = col.map((id) => {
+      const rows = neighbours.get(id).filter((m) => column.has(m) && isSide(column.get(m))).map((m) => row.get(m));
+      return rows.length ? median(rows) : row.get(id);
+    });
+    spacedRows(targets).forEach((r, i) => row.set(col[i], r));
+  };
+  for (let pass = 0; pass < sweeps; pass++) {
+    if (pass % 2 === 0) for (let c = 1; c < columns.length; c++) settle(c, (m) => m === c - 1);
+    else for (let c = columns.length - 2; c >= 0; c--) settle(c, (m) => m === c + 1);
+  }
+  for (let c = 0; c < columns.length; c++) settle(c, (m) => m === c - 1 || m === c + 1);
+  return row;
+}
+
 // ---------- coordinates ----------
 
-/** Place columns left to right from `left`, each centred on `middle`; returns the band's box. */
-function placeColumns(columns, byId, left, middle, spots) {
+/** Place columns left to right from `left`; `rowOf(id, i, col)` gives a box's row (0 = `middle`;
+ *  default: the column centred on `middle`). Returns the band's box. */
+function placeColumns(columns, byId, left, middle, spots, rowOf = (id, i, col) => i - (col.length - 1) / 2) {
   const rowStep = Math.max(...columns.flat().map((id) => byId.get(id).h)) + LAYOUT.rowGap;
   let x = left;
-  let top = middle;
-  let bottom = middle;
+  let top = Infinity;
+  let bottom = -Infinity;
   for (const col of columns) {
     const width = Math.max(...col.map((id) => byId.get(id).w));
-    col.forEach((id, row) => {
-      const y = middle + (row - (col.length - 1) / 2) * rowStep;
+    col.forEach((id, i) => {
+      const y = middle + rowOf(id, i, col) * rowStep;
       spots.set(id, { x: x + width / 2, y });
+      top = Math.min(top, y - rowStep / 2);
+      bottom = Math.max(bottom, y + rowStep / 2);
     });
-    top = Math.min(top, middle - (col.length / 2) * rowStep);
-    bottom = Math.max(bottom, middle + (col.length / 2) * rowStep);
     x += width + LAYOUT.columnGap;
   }
+  if (top > bottom) top = bottom = middle;  // no boxes
   return { left, right: x - LAYOUT.columnGap, top, bottom };
 }
 
@@ -214,11 +308,43 @@ function orderBand(bandIds, graph, tail = []) {
   return { columns: tail.length ? columns.slice(0, -1) : columns, tail: tail.length ? columns.at(-1) : [] };
 }
 
-/** Place a band's columns, tall ones folded side by side. */
+/** Place a band's columns, tall ones folded side by side (by where the classes they use sit in
+ *  earlier bands), rows lined up with their neighbours. */
 function layoutBand(columns, graph, left, middle, spots) {
   const size = columns.reduce((sum, col) => sum + col.length, 0);
   const maxRows = Math.max(LAYOUT.minRows, Math.ceil(Math.sqrt(size) * LAYOUT.rowsPerRoot));
-  return placeColumns(columns.flatMap((col) => foldColumn(col, maxRows)), graph.byId, left, middle, spots);
+  const aboveX = xAbove(columns.flat(), graph, spots);
+  const folded = columns.flatMap((col) => (aboveX.size ? foldUnder(col, maxRows, aboveX) : foldColumn(col, maxRows)));
+  if (graph.nodes.length > LAYOUT.sweepLimit) return placeColumns(folded, graph.byId, left, middle, spots);
+  const rows = alignRows(folded, graph.neighbours);
+  return placeColumns(folded, graph.byId, left, middle, spots, (id) => rows.get(id));
+}
+
+/** id -> median x of its neighbours already placed (earlier bands; outside code left out). */
+function xAbove(ids, graph, spots) {
+  const xs = new Map();
+  for (const id of ids) {
+    const placed = graph.neighbours.get(id).filter((m) => spots.has(m) && graph.byId.get(m).kind !== "external");
+    if (placed.length) xs.set(id, median(placed.map((m) => spots.get(m).x)));
+  }
+  return xs;
+}
+
+/** Fold a tall column into side-by-side columns by where the classes they use sit above (left
+ *  ones left), each keeping the column's top-to-bottom order; classes with nothing above count
+ *  as sitting at the middle of the others. */
+function foldUnder(col, maxRows, aboveX) {
+  const count = Math.ceil(col.length / maxRows);
+  if (count < 2) return [col];
+  const known = col.filter((id) => aboveX.has(id)).map((id) => aboveX.get(id));
+  if (!known.length) return foldColumn(col, maxRows);
+  const fallback = median(known);
+  const key = new Map(col.map((id) => [id, aboveX.has(id) ? aboveX.get(id) : fallback]));
+  const order = new Map(col.map((id, i) => [id, i]));
+  const sorted = [...col].sort((a, b) => key.get(a) - key.get(b) || order.get(a) - order.get(b));
+  const per = Math.ceil(col.length / count);
+  return Array.from({ length: count }, (_, k) => sorted.slice(k * per, (k + 1) * per).sort((a, b) => order.get(a) - order.get(b)))
+    .filter((part) => part.length);
 }
 
 /** Outside code as a compact grid, in the order given, reading top to bottom. */
@@ -248,6 +374,7 @@ function layered(nodes, edges) {
     const ids = idsOf(level);
     const { columns, tail } = orderBand(ids, graph, i === 0 ? external : []);
     const box = stackBand(ids, top, (left) => layoutBand(columns, graph, left, 0, spots), 0, spots);
+    if (i > 0) shiftUnder(ids, graph, spots);
     const bottom = i === 0 ? Math.max(box.bottom, stackExternals(tail, box.right)) : box.bottom;
     top = bottom + LAYOUT.bandGap;
   });
@@ -260,13 +387,29 @@ function layered(nodes, edges) {
     if (!ids.length) return;
     const columns = foldColumn(ids, LAYOUT.toolRows);
     const width = columns.reduce((sum, col) => sum + Math.max(...col.map((id) => graph.byId.get(id).w)) + LAYOUT.columnGap, 0);
-    stackBand(ids, 0, (left) => placeColumns(columns, graph.byId, left, 0, spots), -width, spots);
+    const others = [...spots];
+    const box = stackBand(ids, 0, (at) => placeColumns(columns, graph.byId, at, 0, spots), -width, spots);
+    const beside = others.filter(([id, s]) => Math.abs(s.y - (box.top + box.bottom) / 2) < (box.bottom - box.top + graph.byId.get(id).h) / 2);
+    const room = Math.min(0, ...beside.map(([id, s]) => s.x - graph.byId.get(id).w / 2)) - LAYOUT.columnGap - (box.right - box.left);
+    ids.forEach((id) => { spots.get(id).x += Math.min(0, room - box.left); });  // clear of bands slid left
   }
 
   function stackExternals(ids, right) {
     const place = (left) => layoutExternals(ids, graph, left, 0, spots);
     return stackBand(ids, 0, place, right + LAYOUT.bandGap, spots).bottom;
   }
+}
+
+/** Slide a placed band sideways by the median gap to its neighbours in earlier bands, so lines
+ *  between bands run as straight down as they can on the whole. */
+function shiftUnder(ids, graph, spots) {
+  const inBand = new Set(ids);
+  const dxs = ids.flatMap((id) => graph.neighbours.get(id)
+    .filter((m) => !inBand.has(m) && spots.has(m) && graph.byId.get(m).kind !== "external")
+    .map((m) => spots.get(m).x - spots.get(id).x));
+  if (!dxs.length) return;
+  const dx = median(dxs);
+  ids.forEach((id) => { spots.get(id).x += dx; });
 }
 
 /** Lay out one band with `place`, then move it so its top edge is at `top`; returns its box. */
@@ -325,6 +468,32 @@ function clearSpot(node, spot, taken) {
     if (!taken.hits(boxOf(node, tryAt), LAYOUT.rowGap / 3)) return tryAt;
   }
   return spot;
+}
+
+/**
+ * Saved spots nudged so no two of these boxes overlap (boxes grew since the spots were saved,
+ * e.g. taller box faces): top to bottom, a box that overlaps one above it moves down to just
+ * below it. Boxes that already fit stay where they are. `nodes` gives the sizes (closed boxes);
+ * returns only the moved spots (id -> {x, y}).
+ */
+function settleFixed(nodes, fixed, gap = LAYOUT.rowGap / 3) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const ids = [...fixed.keys()].filter((id) => byId.has(id))
+    .sort((a, b) => fixed.get(a).y - fixed.get(b).y || fixed.get(a).x - fixed.get(b).x);
+  const placed = [];
+  const moved = new Map();
+  for (const id of ids) {
+    const node = byId.get(id);
+    let spot = { x: fixed.get(id).x, y: fixed.get(id).y };
+    for (let k = 0; k <= placed.length; k++) {
+      const hits = placed.filter((b) => rectsOverlap(boxOf(node, spot), b));
+      if (!hits.length) break;
+      spot = { x: spot.x, y: Math.max(...hits.map((b) => b.y2)) + gap + node.h / 2 };
+    }
+    if (spot.y !== fixed.get(id).y) moved.set(id, spot);
+    placed.push(boxOf(node, spot));
+  }
+  return moved;
 }
 
 /** A spot next to a new class's placed neighbours: right of its callers, left of its callees. */
@@ -654,6 +823,124 @@ function hub(nodes, edges, fixed, wanted, at) {
   return spots;
 }
 
+// ---------- focus: a tour step's compact layout ----------
+
+const FOCUS_LAYOUT = { columnGap: 110, rowGap: 34, minRows: 3 };
+
+/** Which side of the focus a class goes: left when its lines mostly come into `towards`
+ *  (it calls them), right when they mostly go out to it; ties and no lines: right. */
+function sideOf(id, edges, towards) {
+  let left = 0, right = 0;
+  for (const e of edges) {
+    if (e.from === id && towards.has(e.to)) left++;
+    else if (e.to === id && towards.has(e.from)) right++;
+  }
+  return left > right ? "left" : "right";
+}
+
+/** Split a column, in order, into columns no taller than `height` (a too-tall box stands alone;
+ *  at least FOCUS_LAYOUT.minRows boxes fit before a fold). */
+function foldByHeight(col, byId, height) {
+  const parts = [];
+  let part = [], used = 0;
+  for (const id of col) {
+    const h = byId.get(id).h + FOCUS_LAYOUT.rowGap;
+    if (part.length >= FOCUS_LAYOUT.minRows && used + h > height) { parts.push(part); part = []; used = 0; }
+    part.push(id);
+    used += h;
+  }
+  if (part.length) parts.push(part);
+  return parts;
+}
+
+/**
+ * A tour step's layout (DESIGN 7c): the focus classes in the middle column, the unfaded classes
+ * (what a focused function really calls or is called by) in the columns beside it, callers left
+ * and callees right, and the faded neighbours in the outer columns on the side of what they
+ * touch. Columns fold so none is taller than `height` (canvas units), and are ordered to cut
+ * crossings, so lines stay short; boxes line up on the column edge facing the middle.
+ * `nodes`: {id, w, h, faded}; returns id -> centre {x, y},
+ * the middle column at x = 0.
+ */
+function focusLayout(nodes, edges, { focus, height = 600 }) {
+  const graph = graphOf(nodes, edges);
+  const middle = nodes.filter((n) => focus.has(n.id)).map((n) => n.id);
+  const near = nodes.filter((n) => !focus.has(n.id) && !n.faded).map((n) => n.id);
+  const far = nodes.filter((n) => !focus.has(n.id) && n.faded).map((n) => n.id);
+  const inner = new Set([...middle]);
+  const nearSide = new Map(near.map((id) => [id, sideOf(id, graph.edges, inner)]));
+  const placed = new Set([...middle, ...near]);
+  const farSide = new Map(far.map((id) => {
+    const touches = graph.neighbours.get(id).filter((m) => placed.has(m));
+    const lefts = touches.filter((m) => nearSide.get(m) === "left").length;
+    const rights = touches.filter((m) => nearSide.get(m) === "right").length;
+    if (lefts !== rights) return [id, lefts > rights ? "left" : "right"];
+    return [id, sideOf(id, graph.edges, placed)];
+  }));
+  const pick = (ids, sides, side) => ids.filter((id) => sides.get(id) === side).sort();
+  const columns = [pick(far, farSide, "left"), pick(near, nearSide, "left"), middle.sort(),
+    pick(near, nearSide, "right"), pick(far, farSide, "right")];
+  const centre = 2;
+  orderColumns(columns.filter((col) => col.length), graph.neighbours, LAYOUT.sweeps);
+  // fold outward: the folded columns of a left group read from the outside in
+  const folded = columns.map((col, c) => {
+    const parts = foldByHeight(col, graph.byId, height);
+    return c < centre ? parts.reverse() : parts;
+  });
+  const spots = new Map();
+  const flat = folded.flat();
+  let x = 0;
+  const widths = flat.map((col) => Math.max(...col.map((id) => graph.byId.get(id).w)));
+  const xs = widths.map((width) => {
+    const at = x + width / 2;
+    x += width + FOCUS_LAYOUT.columnGap;
+    return at;
+  });
+  const middleIndex = folded.slice(0, centre).flat().length;  // first middle column
+  // boxes line up on the column edge facing the middle: callers' right edges, the rest's left edges
+  const alignedX = (c, w) => (c < middleIndex ? xs[c] + widths[c] / 2 - w / 2 : xs[c] - widths[c] / 2 + w / 2);
+  flat.forEach((col, c) => {
+    const heights = col.map((id) => graph.byId.get(id).h);
+    const total = heights.reduce((a, b) => a + b, 0) + (col.length - 1) * FOCUS_LAYOUT.rowGap;
+    let y = -total / 2;
+    col.forEach((id, row) => {
+      spots.set(id, { x: alignedX(c, graph.byId.get(id).w), y: y + heights[row] / 2 });
+      y += heights[row] + FOCUS_LAYOUT.rowGap;
+    });
+  });
+  const shift = middle.length ? xs[middleIndex] : 0;
+  for (const spot of spots.values()) spot.x -= shift;
+  return spots;
+}
+
+/**
+ * The camera for a tour step's layout (DESIGN 7c): the whole step when it still reads at
+ * `readAll` (faded neighbours at the edges), else the targets and the classes they really call
+ * (`core`); never above `max` nor below `min` (then centred on the `focus` boxes).
+ * `rects`: [{x, y, w, h, core, focus}] centres and sizes; `size`: {width, height} of the canvas.
+ * Returns {zoom, pan} for Cytoscape.
+ */
+function focusFrame(rects, size, { pad = 40, min = 0.4, max = 1.2, readAll = 0.56 } = {}) {
+  const boxOf = (list) => {
+    const x1 = Math.min(...list.map((r) => r.x - r.w / 2)), x2 = Math.max(...list.map((r) => r.x + r.w / 2));
+    const y1 = Math.min(...list.map((r) => r.y - r.h / 2)), y2 = Math.max(...list.map((r) => r.y + r.h / 2));
+    return { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2, w: x2 - x1, h: y2 - y1 };
+  };
+  const fit = (box) => Math.min((size.width - 2 * pad) / Math.max(box.w, 1), (size.height - 2 * pad) / Math.max(box.h, 1));
+  if (!rects.length) return { zoom: 1, pan: { x: size.width / 2, y: size.height / 2 } };
+  const core = rects.filter((r) => r.core);
+  let box = boxOf(rects);
+  let zoom = fit(box);
+  if (zoom < readAll && core.length) { box = boxOf(core); zoom = fit(box); }
+  if (zoom > max) zoom = max;
+  if (zoom < min) {
+    const focus = rects.filter((r) => r.focus);
+    if (focus.length) box = boxOf(focus);
+    zoom = min;
+  }
+  return { zoom, pan: { x: size.width / 2 - box.cx * zoom, y: size.height / 2 - box.cy * zoom } };
+}
+
 /** Grid: compact rows, by level then name, for very big graphs. */
 function grid(nodes) {
   const sorted = [...nodes].sort((a, b) => (a.level ?? 0) - (b.level ?? 0) || (a.id < b.id ? -1 : 1));
@@ -667,7 +954,7 @@ function grid(nodes) {
 
 // A detour may be at most `maxStretch` times the straight line (plus `slack`): longer ones
 // read as lines running off to nothing, so the line stays straight over the box instead.
-const ROUTE = { margin: 10, step: 34, maxOffset: 420, maxStretch: 1.4, slack: 60 };
+const ROUTE = { margin: 10, step: 34, maxOffset: 420, maxStretch: 1.4, slack: 60, nudge: 4, maxNudge: 10 };
 const LABEL = { pad: 3, along: [0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78, 0.14, 0.86], sideSteps: 3 };
 
 function rectsOverlap(a, b, margin = 0) {
@@ -720,7 +1007,8 @@ function pointAlong(points, t) {
   return { ...points[0], dx: 1, dy: 0 };
 }
 
-/** Detours for a line a-b: one bend sideways from the middle, or a channel above/below a blocker. */
+/** Detours for a line a-b: one bend sideways from the middle, or a channel beside a blocker
+ *  (entered part way along the line, or straight out of the end boxes: the gap between columns). */
 function detours(a, b, blockers) {
   const length = Math.hypot(b.x - a.x, b.y - a.y) || 1;
   const normal = { x: -(b.y - a.y) / length, y: (b.x - a.x) / length };
@@ -732,10 +1020,32 @@ function detours(a, b, blockers) {
   const at = (t) => ({ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t });
   const [p1, p2] = [at(0.2), at(0.8)];
   for (const r of blockers) {  // channels past a blocker: above/below it, or left/right of it
-    for (const y of [r.y1 - ROUTE.margin * 2, r.y2 + ROUTE.margin * 2]) routes.push([{ x: p1.x, y }, { x: p2.x, y }]);
-    for (const x of [r.x1 - ROUTE.margin * 2, r.x2 + ROUTE.margin * 2]) routes.push([{ x, y: p1.y }, { x, y: p2.y }]);
+    for (const y of [r.y1 - ROUTE.margin * 2, r.y2 + ROUTE.margin * 2]) {
+      routes.push([{ x: p1.x, y }, { x: p2.x, y }]);
+      routes.push([{ x: a.x, y }, { x: b.x, y }]);  // straight out of the end boxes into the gap
+    }
+    for (const x of [r.x1 - ROUTE.margin * 2, r.x2 + ROUTE.margin * 2]) {
+      routes.push([{ x, y: p1.y }, { x, y: p2.y }]);
+      routes.push([{ x, y: a.y }, { x, y: b.y }]);
+    }
+  }
+  // Down the gap beside the first blocker, across a gap above/below some blocker, down the gap
+  // beside the last one: for long lines between bands whose columns do not line up.
+  const along = (r) => ((r.x1 + r.x2) / 2 - a.x) * (b.x - a.x) + ((r.y1 + r.y2) / 2 - a.y) * (b.y - a.y);
+  const sorted = [...blockers].sort((r, q) => along(r) - along(q));
+  const sides = (r) => [r.x1 - ROUTE.margin * 2, r.x2 + ROUTE.margin * 2];
+  const ys = blockers.flatMap((r) => [r.y1 - ROUTE.margin * 2, r.y2 + ROUTE.margin * 2]);
+  for (const x1 of sides(sorted[0])) {
+    for (const x2 of sides(sorted.at(-1))) {
+      for (const y of ys) routes.push([{ x: x1, y: a.y }, { x: x1, y }, { x: x2, y }, { x: x2, y: b.y }]);
+    }
   }
   return routes;
+}
+
+/** The longest a bent line from `a` to `b` may be. */
+function longestDetour(a, b) {
+  return Math.hypot(b.x - a.x, b.y - a.y) * ROUTE.maxStretch + ROUTE.slack;
 }
 
 /**
@@ -750,7 +1060,7 @@ function routeAround(a, b, boxes) {
   const blockers = near.filter((r) => segmentHitsRect(a, b, r, ROUTE.margin));
   if (!blockers.length) return [];
   let best = null;
-  const longest = Math.hypot(b.x - a.x, b.y - a.y) * ROUTE.maxStretch + ROUTE.slack;
+  const longest = longestDetour(a, b);
   for (const bends of detours(a, b, blockers)) {
     const points = [a, ...bends, b];
     const length = polylineLength(points);
@@ -758,6 +1068,53 @@ function routeAround(a, b, boxes) {
     if (!best || length < best.length) best = { bends, length };
   }
   return best ? best.bends : [];
+}
+
+/**
+ * Lines bent into the same gap run on top of each other and read as one thick line. Spread them:
+ * bend-to-bend segments that are level (or upright) on the same row (column) and overlap get
+ * `ROUTE.nudge` apart, at most `ROUTE.maxNudge` either side; a line the spreading would make too
+ * long (`longestDetour`) keeps its bends. `routes` = [{a, b, bends: [{x, y}..]}], bends changed
+ * in place; returns `routes`.
+ */
+function nudgeBends(routes) {
+  const before = routes.map((route) => route.bends.map((p) => ({ ...p })));
+  const groups = new Map();
+  for (const { bends } of routes) {
+    for (let i = 0; i + 1 < bends.length; i++) {
+      const [p, q] = [bends[i], bends[i + 1]];
+      const axis = Math.abs(p.x - q.x) < 0.5 ? "x" : Math.abs(p.y - q.y) < 0.5 ? "y" : null;  // the coordinate it keeps
+      if (!axis) continue;
+      const other = axis === "x" ? "y" : "x";
+      const key = `${axis}${Math.round(p[axis])}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push({ axis, p, q, lo: Math.min(p[other], q[other]), hi: Math.max(p[other], q[other]) });
+    }
+  }
+  for (const segments of groups.values()) {
+    segments.sort((s, t) => s.lo - t.lo || s.hi - t.hi);
+    let cluster = [];
+    let reach = -Infinity;
+    const spread = () => {
+      const step = Math.min(ROUTE.nudge, (2 * ROUTE.maxNudge) / Math.max(1, cluster.length - 1));
+      cluster.forEach((s, k) => {
+        const off = (k - (cluster.length - 1) / 2) * step;
+        s.p[s.axis] += off;
+        s.q[s.axis] += off;
+      });
+    };
+    for (const s of segments) {
+      if (s.lo >= reach && cluster.length) { spread(); cluster = []; }
+      cluster.push(s);
+      reach = Math.max(reach, s.hi);
+    }
+    spread();
+  }
+  routes.forEach((route, i) => {
+    if (polylineLength([route.a, ...route.bends, route.b]) <= longestDetour(route.a, route.b)) return;
+    route.bends.forEach((p, k) => Object.assign(p, before[i][k]));
+  });
+  return routes;
 }
 
 /** Spots to try for a label on `path`: along the line first, then nudged off it either side. */
@@ -802,8 +1159,73 @@ function placeLabels(items, obstacles = []) {
   return spots;
 }
 
-const CoderLayout = { layout, layoutByLevels, layered, LAYOUT, METHODS, pickMethod, hubCentre, foldColumn, routeAround, placeLabels,
-  pointAlong, segmentHitsRect };
+// ---------- readability numbers (for tests and the layout bench) ----------
+
+/** Do segments p1-p2 and q1-q2 cross (touching ends do not count)? */
+function segmentsCross(p1, p2, q1, q2) {
+  const side = (a, b, c) => Math.sign((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
+  return side(p1, p2, q1) * side(p1, p2, q2) < 0 && side(q1, q2, p1) * side(q1, q2, p2) < 0;
+}
+
+/**
+ * How readable a placement is, with lines drawn straight between box centres (one per pair of
+ * classes): `crossings` (line pairs that cross; pairs sharing an end left out), `under` (lines
+ * passing under a box that is not one of their ends), `stuck` (of those, lines `routeAround` finds
+ * no short way around for, so the viewer draws them under boxes), `overlaps` (box pairs), `length` (mean line
+ * length in typical box widths), `backward` (share of lines running right to left, against the
+ * callers-left reading), `slant` (mean line angle from level, degrees), `fill` (box area /
+ * bounding-box area), `aspect` (width / height).
+ */
+function measure(nodes, edges, spots) {
+  const byId = new Map(nodes.filter((n) => spots.has(n.id)).map((n) => [n.id, n]));
+  const pairs = new Map();
+  for (const e of edges) {
+    if (e.from === e.to || !byId.has(e.from) || !byId.has(e.to)) continue;
+    const key = e.from < e.to ? `${e.from}\n${e.to}` : `${e.to}\n${e.from}`;
+    if (!pairs.has(key)) pairs.set(key, e);
+  }
+  const lines = [...pairs.values()].map((e) => ({ e, a: spots.get(e.from), b: spots.get(e.to) }));
+  const boxes = [...byId.values()].map((n) => ({ id: n.id, ...boxOf(n, spots.get(n.id)) }));
+  const taken = new Occupied(300);
+  boxes.forEach((r) => taken.add(r));
+  let overlaps = 0;
+  boxes.forEach((r) => { overlaps += taken.count(r, -1) - 1; });
+  let crossings = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const p = lines[i];
+    for (let j = i + 1; j < lines.length; j++) {
+      const q = lines[j];
+      if (p.e.from === q.e.from || p.e.from === q.e.to || p.e.to === q.e.from || p.e.to === q.e.to) continue;
+      if (segmentsCross(p.a, p.b, q.a, q.b)) crossings++;
+    }
+  }
+  let under = 0;
+  let stuck = 0;
+  for (const { e, a, b } of lines) {
+    const span = { x1: Math.min(a.x, b.x), x2: Math.max(a.x, b.x), y1: Math.min(a.y, b.y), y2: Math.max(a.y, b.y) };
+    const near = new Set(taken.cells(span).flatMap((key) => taken.buckets.get(key) || []));
+    if (![...near].some((r) => r.id !== e.from && r.id !== e.to && segmentHitsRect(a, b, r, -2))) continue;
+    under++;
+    const others = boxes.filter((r) => r.id !== e.from && r.id !== e.to);
+    if (!routeAround(a, b, others).length) stuck++;
+  }
+  const unit = mean(boxes.map((r) => r.x2 - r.x1)) || 1;
+  const width = Math.max(...boxes.map((r) => r.x2)) - Math.min(...boxes.map((r) => r.x1)) || 1;
+  const height = Math.max(...boxes.map((r) => r.y2)) - Math.min(...boxes.map((r) => r.y1)) || 1;
+  const round = (v, d = 2) => Math.round((v || 0) * 10 ** d) / 10 ** d;
+  const angle = ({ a, b }) => Math.atan2(Math.abs(b.y - a.y), Math.abs(b.x - a.x)) * 180 / Math.PI;
+  return {
+    nodes: boxes.length, lines: lines.length, crossings, under, stuck, overlaps: overlaps / 2,
+    length: round(mean(lines.map(({ a, b }) => Math.hypot(b.x - a.x, b.y - a.y))) / unit),
+    backward: round(lines.filter(({ a, b }) => b.x < a.x - 1).length / (lines.length || 1)),
+    slant: round(mean(lines.map(angle)), 1),
+    fill: round(boxes.reduce((s, r) => s + (r.x2 - r.x1) * (r.y2 - r.y1), 0) / (width * height), 3),
+    aspect: round(width / height),
+  };
+}
+
+const CoderLayout = { layout, layoutByLevels, settleFixed, layered, focusLayout, focusFrame, LAYOUT, METHODS, pickMethod, hubCentre, foldColumn, routeAround, placeLabels,
+  pointAlong, segmentHitsRect, measure, nudgeBends };
 if (typeof module !== "undefined") module.exports = CoderLayout;
 else window.CoderLayout = CoderLayout;
 })();

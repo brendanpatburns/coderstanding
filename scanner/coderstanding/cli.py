@@ -1,34 +1,48 @@
 """Command line: `coderstanding <command> ...`. Add a command with one add_* function."""
 
 import argparse
+import json
 import os
 import importlib.metadata
+import re
 import shlex
 import sys
 from collections import Counter
 from pathlib import Path
 
-from . import field_rules, textout
+from . import app_settings, field_rules, refs, textout
 from .textout import short_namer
-from .apps import (AppError, load_registry, RELEVEL_SCOPES, SETTINGS, find_app, find_id, load_graph, parse_target, register,
-                   relevel, remove_app, rename_app, rescan, selection_id)
+from . import worktrees
+from .apps import (AppError, graph_scan, candidates, data_for_add, load_names, load_registry, RELEVEL_SCOPES, SETTINGS, find_app, load_graph, register,
+                   refresh_map, relevel, remove_app, rename_app, rescan, worktree_app)
 from .graph_json import write_graph
 from .cache import SCANNER_VERSION
 from .offline import helper_listening, install as install_offline_guard, privacy_report
 from .levels import parse_hub_threshold
-from .checks import RULE_FILTERS, warnings_by_kind
+from .checks import RULE_FILTERS, unresolved_by_node, warnings_by_kind
 from .diagnose import diagnose_text
-from .notes import (AI_AUTHOR, HUMAN_AUTHOR, clean_value, edge_key, function_key, is_function,
+from .notes import (AI_AUTHOR, FUNCTION_SEP, HUMAN_AUTHOR, clean_value, edge_key, function_key, is_function,
                     human_author, node_key)
+from .readtargets import read_target_blocks
 from .setup_cli import SETUP_COMMANDS
 from .scan import default_output, scan_repo
-from .testcode import is_test, files_to_retest
-from .cards import KINDS, PRIORITIES, SORTS, link_index, open_cards
-from .tours import open_tours
-from .views import (CONCRETE, EXPAND_ALL, IMPACT_DEPTH, SCENE_TYPE, brief, compute_view, effective_level, find,
-                    impact, outline)
+from .e2e_checks import e2e_for_diff
+from .name_reach import command_tests
+from .testcode import files_to_retest, is_test, is_test_path
+from .cards import KINDS, PRIORITIES, SORTS, SPEC, link_index, linked_texts, open_cards
+from .tours import open_tours, parse_view_pairs
+from .fingerprints import SourceLines
+from . import planned, progress
+from .views import (ALL_LINES, CONCRETE, EXPLAINED, LINES, EXPAND_ALL, IMPACT_DEPTH, SCENE_TYPE, brief, compute_view, diff_tests, effective_level, find, find_text,
+                    find_suggestions, globals_list, hit_callers, hotspots, impact, name_impact, outline, read_blocks, miss, resolve_class, resolve_target, resolve_unit, selection_id,
+                    suggest_files, unique_namer, title_namer,
+                    setup_of)
+from .filewalk import git_changed_lines, git_churn
+from .textindex import dupes, env_vars, read_index, under_path, uses
 
+SPEC_STAGES = SPEC.stages
 CURATED_FIELDS = ("level", "domain", "hint")
+REDO_FIELDS = CURATED_FIELDS + ("description",)  # `curate --redo` also rewrites AI descriptions
 TOP_CALLS = 3
 
 
@@ -74,7 +88,7 @@ def scan_settings(args):
 
 def run_add(args):
     known = args.name in load_registry()
-    entry = register(args.name, args.path, args.data)
+    entry = register(args.name, args.path, data_for_add(args.name, args.path, args.data))
     if args.hub_threshold is not None:
         find_app(args.name).change_settings(scan_settings(args))
     print(f"{args.name} -> {entry['path']}")
@@ -92,7 +106,7 @@ def add_add(commands):
     parser.add_argument("name")
     parser.add_argument("path", help="repo folder")
     parser.add_argument("--data", help="folder for graph.json/notes.jsonl "
-                        "(default: <path>/.coderstanding)")
+                        "(default: ~/.local/share/coderstanding/<name>, never inside the repo)")
     hub_threshold_option(parser)
     parser.add_argument("--no-scan", action="store_true", help="register only (for scripts)")
     parser.add_argument("--rescan", action="store_true",
@@ -100,41 +114,59 @@ def add_add(commands):
     parser.set_defaults(run=run_add)
 
 
-def key_values(items):
-    """{key: text} from `key=value` tokens."""
-    pairs = {}
+def key_value_pairs(items):
+    """[(key, text)] from `key=value` tokens, in order (a key may repeat: `library+=a library+=b`)."""
+    pairs = []
     for token in items:
         name, sep, text = token.partition("=")
         if not sep:
             raise AppError(f"not key=value: {token}")
-        pairs[name] = text
+        pairs.append((name, text))
     return pairs
+
+
+def key_values(items):
+    """{key: text} from `key=value` tokens."""
+    return dict(key_value_pairs(items))
 
 
 def run_settings(args):
     app = find_app(args.app, args.data)
-    changes = key_values(args.items)
-    settings = app.change_settings(changes) if changes else app.scan_settings()
-    print(f"{app.name} settings " + " ".join(f"{k}={'off' if v == 0 else v}"
-                                             for k, v in settings.items())
+    changes = key_value_pairs(args.items)
+    settings = app.change_settings(changes) if changes else {**app.scan_settings(), **app.rule_lists()}
+    print(f"{app.name} settings " + " ".join(f"{key}={setting_text(value)}"
+                                             for key, value in settings.items() if value not in ([], {}))
           + (f" levels={','.join(app.level_settings()['names'])}" if app.level_settings() else ""))
 
 
+def setting_text(value):
+    """A setting as the user types it: 0 is `off`, a list is comma text."""
+    if isinstance(value, list):
+        return json.dumps(value) if any(isinstance(item, dict) for item in value) else ",".join(value)
+    if isinstance(value, dict):
+        return json.dumps(value)
+    return "off" if value == 0 else value
+
+
 def add_settings(commands):
-    parser = commands.add_parser("settings", help="show or change scan settings "
-                                 f"({', '.join(SETTINGS)}); a change applies at the next `rescan`; "
-                                 "levels=Domains,App,Systems,... names the depth levels (level 0 first, "
-                                 "the last name is the last level; never rescans)")
-    app_args(parser, view_options=False)
+    parser = commands.add_parser("settings", help="show or change an app's settings "
+                                 f"({', '.join(app_settings.NAMES)}); scan settings apply at the next `rescan`, "
+                                 "the others at once; `name+=item` adds to a list, `name-=key` removes, "
+                                 "`name=[json list]` replaces; run `coderstanding guide` for each setting's syntax")
+    app_args(parser, view_options=False, worktree=False)
     parser.add_argument("items", nargs="*", help="key=value ...")
     parser.set_defaults(run=run_settings)
 
 
 # --- shared by the text commands ---
 
-def app_args(parser, view_options=True, optional=False):
+def app_args(parser, view_options=True, optional=False, worktree=True):
     parser.add_argument("app", nargs="?" if optional else None, help="registered name or repo folder")
     parser.add_argument("--data", help="folder holding graph.json/notes.jsonl")
+    if worktree:
+        parser.add_argument("--repo", metavar="PATH",
+                            help="read this git worktree of the app's repo (default: the current "
+                            "folder's worktree), so lines match its branch; notes stay the app's")
     if view_options:
         parser.add_argument("--concrete", action="store_true", help="concrete view")
         parser.add_argument("--calls", action="store_true", help="list every call")
@@ -143,22 +175,48 @@ def app_args(parser, view_options=True, optional=False):
         parser.add_argument("--no-comm", action="store_true",
                             help="hide communications nodes (sockets, network endpoints)")
         parser.add_argument("--tests", action="store_true", help="show test code (hidden by default)")
+        parser.add_argument("--no-planned", action="store_true",
+                            help="hide planned classes, functions and lines (shown by default)")
         parser.add_argument("--hide-type", action="append", default=[], metavar="EXT",
                             help="hide the classes of a file type, e.g. .gd (repeatable)")
+        parser.add_argument("--hide-file-kind", action="append", default=[], metavar="KIND",
+                            help="hide the classes of a file kind, e.g. Data (repeatable)")
+        parser.add_argument("--tag", action="append", default=[], metavar="TAG",
+                            help="only the classes with this tag note (repeatable: any of them)")
+        parser.add_argument("--hide-tag", action="append", default=[], metavar="TAG",
+                            help="hide the classes with this tag note (repeatable)")
         parser.add_argument("--hide-kind", action="append", default=[], metavar="KIND",
                             help="hide the lines of a kind, e.g. signal (repeatable)")
+        parser.add_argument("--lines", choices=(EXPLAINED, ALL_LINES), default=EXPLAINED,
+                            help="explained (default): lines with a hint first, the rest marked "
+                            "quiet; all: every line equal")
 
 
-def open_app(args):
-    """(app, graph, notes) from the saved graph (never scans); warns about lost notes."""
-    app = find_app(args.app, args.data)
+def open_app(args, warn_lost=True):
+    """(app, graph, notes) from the saved graph; the map (main or a worktree's own) is rescanned
+    first when the files changed since it was built, so nothing answers from an old map (the
+    server never does this: scans are manual there). Explains lost notes unless `warn_lost` is off
+    (find: they do not change its answer)."""
+    app = worktree_app(find_app(args.app, args.data), args.repo)
+    rescanned, stale = refresh_map(app)
+    folder = app.map_dir or app.data
+    if app.map_dir:
+        first_time = worktrees.changed_since_shown(folder, "worktree", str(app.root))
+        if rescanned or first_time:
+            print(f"note: worktree {app.root}{' (rescanned)' if rescanned else ''}", file=sys.stderr)
+    elif rescanned and worktrees.changed_since_shown(folder, "rescanned", app.graph_path.stat().st_mtime_ns):
+        print("note: map was older than the files: rescanned", file=sys.stderr)
+    if stale and worktrees.changed_since_shown(folder, "stale", stale):
+        print(f"note: map is older than the files ({stale} changed): rescan", file=sys.stderr)
     graph, notes = load_graph(app), app.load_notes()
     app.checked(graph, notes)
     if graph.scanner_version != SCANNER_VERSION:
         print(f"note: made by an older scanner: run `coderstanding rescan {app.name}`", file=sys.stderr)
     lost = notes.lost(graph)
-    if lost:
-        print(f"warning: {len(lost)} lost notes: {', '.join(lost[:5])}", file=sys.stderr)
+    if warn_lost and worktrees.changed_since_shown(app.map_dir or app.data, "lost_notes", sorted(lost)) and lost:
+        print(f"note: {len(lost)} saved notes belong to renamed or removed code (kept, harmless "
+              f"unless you expected them): {', '.join(lost[:3])}{' ...' if len(lost) > 3 else ''}",
+              file=sys.stderr)
     return app, graph, notes
 
 
@@ -170,32 +228,41 @@ def hidden_types(args):
 def view_options(args):
     return {"view": CONCRETE if args.concrete else "all",
             "show": {"external": not args.no_external, "comm": not args.no_comm, "test": args.tests,
-                     "hide_types": hidden_types(args), "hide_kinds": args.hide_kind}}
-
-
-def unique_namer(graph):
-    """Short name where it is unique in the graph, else the full id (lists across the repo)."""
-    counts = Counter(n.name for n in graph.nodes.values())
-    return lambda i: graph.nodes[i].name if counts[graph.nodes[i].name] == 1 else i
+                     "planned": not getattr(args, "no_planned", False),
+                     "hide_types": hidden_types(args), "hide_file_kinds": args.hide_file_kind,
+                     "hide_kinds": args.hide_kind, "tags": getattr(args, "tag", []),
+                     "hide_tags": getattr(args, "hide_tag", []),  # hand-made args (tests) may lack them
+                     LINES: args.lines}}
 
 
 def run_graph(args):
     app, graph, notes = open_app(args)
-    view = compute_view(graph, notes, level=args.level, **view_options(args))
-    print(textout.format_graph(app.name, view, args.calls, short_namer(graph), graph))
+    options = view_options(args)
+    view = compute_view(graph, notes, level=args.level, **options)
+    outside = 0
+    if options["show"]["external"] and not args.all:  # own code only; outside lines are a count
+        own = compute_view(graph, notes, level=args.level, **{**options, "show": {**options["show"], "external": False}})
+        outside, view = len(view["edges"]) - len(own["edges"]), own
+    print(textout.format_graph(app.name, view, args.calls, short_namer(graph, notes), graph))
+    if outside:
+        print(f"+{outside} lines to outside packages (--all)")
+    globals_text = textout.globals_lines(globals_list(graph))
+    if globals_text:
+        print("\n".join(globals_text))
 
 
 def add_graph(commands):
     parser = commands.add_parser("graph", help="print the graph at a level as slim text")
     app_args(parser)
     parser.add_argument("level", nargs="?", type=int, default=1, help="0 = domains")
+    parser.add_argument("--all", action="store_true", help="also the lines to outside packages")
     parser.set_defaults(run=run_graph)
 
 
 def add_via(zoom, graph, notes, args):
     """Set zoom["via"] to the --via classes; unset it so the engine finds the path."""
     if args.via:
-        zoom["via"] = [find_id(graph, notes, n) for n in args.via]
+        zoom["via"] = [resolve_class(graph, notes, n) for n in args.via]
 
 
 def add_via_arg(parser):
@@ -205,11 +272,12 @@ def add_via_arg(parser):
 
 def run_zoom(args):
     app, graph, notes = open_app(args)
-    zoom = {"from": find_id(graph, notes, args.from_name),
-            "to": find_id(graph, notes, args.to_name), "level": args.level}
+    graph = planned.hand_graph(graph, notes, not getattr(args, "no_planned", False))
+    zoom = {"from": resolve_class(graph, notes, args.from_name),
+            "to": resolve_class(graph, notes, args.to_name), "level": args.level}
     add_via(zoom, graph, notes, args)
     view = compute_view(graph, notes, zoom=zoom, **view_options(args))
-    print(textout.format_zoom(app.name, view, args.calls, short_namer(graph)))
+    print(textout.format_zoom(app.name, view, args.calls, short_namer(graph, notes)))
     print_linked(app, graph, notes, f"{zoom['from']}→{zoom['to']}")
 
 
@@ -231,17 +299,18 @@ def print_linked(app, graph, notes, view_id):
 
 def run_node(args):
     app, graph, notes = open_app(args)
-    node_id = find_id(graph, notes, args.name)
+    graph = planned.hand_graph(graph, notes, not getattr(args, "no_planned", False))  # a planned class is a node too
+    node_id = resolve_class(graph, notes, args.name)
     level = args.level
     if level is None:
         level = effective_level(graph, notes, node_id) if node_id in graph.nodes else 0
     zoom = {"from": node_id, "to": None, "level": level}
     if args.functions:  # every shown class open, so callers show their functions too
         view = compute_view(graph, notes, zoom=zoom, expand=[EXPAND_ALL], **view_options(args))
-        print(textout.format_functions(app.name, view, node_id, short_namer(graph)))
+        print(textout.format_functions(app.name, view, node_id, short_namer(graph, notes)))
         return
     view = compute_view(graph, notes, zoom=zoom, **view_options(args))
-    print(textout.format_node(app.name, view, node_id, args.calls, short_namer(graph)))
+    print(textout.format_node(app.name, view, node_id, args.calls, short_namer(graph, notes)))
     print_linked(app, graph, notes, node_id)
 
 
@@ -261,15 +330,16 @@ def run_view(args):
     if args.zoom:
         if len(args.zoom) > 2:
             raise AppError("--zoom takes one class or two (A B)")
-        ends = [find_id(graph, notes, n) for n in args.zoom]
+        ends = [resolve_class(graph, notes, n) for n in args.zoom]
         zoom = {"from": ends[0], "to": ends[1] if len(ends) > 1 else None,
                 "level": args.zoom_level or args.level}
         add_via(zoom, graph, notes, args)
-    expand = [n if n == EXPAND_ALL else find_id(graph, notes, n) for n in args.expand]
+    expand = [n if n == EXPAND_ALL else resolve_class(graph, notes, n) for n in args.expand]
     select = selection_id(graph, notes, args.select) if args.select else None
     focus = [selection_id(graph, notes, t) for t in args.focus]
     print(textout.view_text(app.name, graph, notes, level=args.level, zoom=zoom,
-                            expand=expand, select=select, focus=focus, **view_options(args)))
+                            expand=expand, select=select, focus=focus, domain=args.domain,
+                            **view_options(args)))
 
 
 def add_view(commands):
@@ -287,6 +357,8 @@ def add_view(commands):
     parser.add_argument("--focus", nargs="+", default=[], metavar="TARGET",
                         help="highlight these classes, A>B lines or Class#functions (a spec's or "
                         "tour step's view); function targets open their class")
+    parser.add_argument("--domain", help="show only this domain's classes (Unsorted = no domain), "
+                        "the other domains as faded cards")
     parser.set_defaults(run=run_view)
 
 
@@ -306,7 +378,7 @@ def add_tours(commands):
 
 
 def tour_edit(args, tours):
-    """--draft, --step N --text/--title, --still-true: the small writes; returns the tour."""
+    """--draft, --step N --text/--title/--note/--drop-note, --still-true: the small writes."""
     by, ai = (args.by, False) if args.by else (AI_AUTHOR, True)
     if args.draft is not None:
         if not args.targets:
@@ -317,18 +389,46 @@ def tour_edit(args, tours):
         keys = [tours.get(args.id).steps[args.step - 1].key] if args.step else None
         tour, steps = tours.still_true(args.id, keys)
         print(f"{tour.id}: still true ({len(steps)} steps)")
+    elif args.view:
+        tour, view = tours.set_view(args.id, parse_view_pairs(args.view), args.step)
+        where = f"step {args.step}" if args.step else "tour"
+        print(f"{tour.id} {where} view: {textout.view_text_of(view) or '(none)'}")
+    elif args.note or args.drop_note:
+        lines, text = args.note or (args.drop_note, None)
+        tour, step = tours.edit_note(args.id, args.step, lines, text, args.cue, by, ai)
+        what = "note saved" if text is not None else "note removed"
+        print(f"{tour.id} step {args.step}: {what} on lines {lines} by {by}{' (AI draft)' if ai else ''}"
+              f" ({len(step.notes)} notes)")
     else:
         tour, step = tours.edit_step(args.id, args.step, by, ai, text=args.text, title=args.title)
         print(f"{tour.id} step {args.step}: saved by {by}{' (AI draft)' if ai else ''}")
+
+
+def draft_starts(tours, title):
+    """--draft-start [TITLE]: AI-draft the start tours from the map's main paths."""
+    drafted, kept = tours.draft_starts(title or None)
+    for tour in drafted:
+        print(f"drafted {tour.id}: {len(tour.steps)} steps by {AI_AUTHOR} (AI draft, start tour)")
+    for tour_id in kept:
+        print(f"{tour_id} exists: left alone (edit it or delete its file)")
+    if not drafted and not kept:
+        print("no start path: no entry class with a line leading on at level 1")
 
 
 def run_tour(args):
     app, graph, notes = open_app(args)
     tours = open_tours(app, graph, notes)
     try:
-        if args.draft is not None or args.still_true or args.text or args.title:
-            if (args.text or args.title) and not args.step:
-                raise AppError("--text/--title need --step N")
+        notes = args.note or args.drop_note
+        if args.cue and not args.note:
+            raise AppError("--cue goes with --note LINES TEXT")
+        if args.draft_start is not None:
+            return draft_starts(tours, args.draft_start)
+        if not args.id:
+            raise AppError("tour needs an id (see `coderstanding tours`) or --draft-start")
+        if args.draft is not None or args.still_true or args.text or args.title or notes or args.view:
+            if (args.text or args.title or notes) and not args.step:
+                raise AppError("--text/--title/--note/--drop-note need --step N")
             return tour_edit(args, tours)
         data = tours.tour_json(tours.get(args.id))
         if args.comments:
@@ -365,7 +465,7 @@ def add_tour(commands):
     parser = commands.add_parser("tour", help="print a tour (lean: step text and its code lines), "
                                  "export it (--md), draft one (--draft) or fix a step")
     app_args(parser, view_options=False)
-    parser.add_argument("id", help="tour id")
+    parser.add_argument("id", nargs="?", help="tour id (not with --draft-start)")
     parser.add_argument("targets", nargs="*", help="with --draft: one step per target, in order")
     parser.add_argument("--step", type=int, help="one step only (1-based)")
     parser.add_argument("--marked", action="store_true", help="only the highlighted lines")
@@ -375,8 +475,21 @@ def add_tour(commands):
     parser.add_argument("-o", "--output", help="with --md: write to this file")
     parser.add_argument("--draft", metavar="TITLE", help="draft a new tour along the targets "
                         "(AI draft until accepted)")
+    parser.add_argument("--draft-start", nargs="?", const="", metavar="TITLE", help="draft the "
+                        "\"Start here\" tours (start: true) from the main path out of each entry "
+                        "class (no id or targets; the optional title names the first)")
     parser.add_argument("--text", help="with --step: new step text")
     parser.add_argument("--title", help="with --step: new step title")
+    parser.add_argument("--note", nargs=2, metavar=("LINES", "TEXT"), help="with --step: a line "
+                        "note (popup in the viewer's code pane) on today's lines, e.g. 50-51 \"why\"; "
+                        "same lines again replaces it")
+    parser.add_argument("--cue", metavar="WORDS", help="with --note: words of the step text the "
+                        "note pops up at (default: in order through the step)")
+    parser.add_argument("--drop-note", metavar="LINES", help="with --step: remove the note on these lines")
+    parser.add_argument("--view", nargs="+", metavar="KEY=VALUE", help="view options while the tour "
+                        "plays (the viewer's URL names: lines=all selfcalls=0 boxtext=full "
+                        "external=0 hide_kind=signal,dependency ...; key= removes one); with --step N: "
+                        "that step only")
     parser.add_argument("--still-true", action="store_true", help="the stale steps (or --step N) "
                         "still match today's code")
     parser.add_argument("--by", help="author name (default: claude, saved as an AI draft)")
@@ -568,22 +681,76 @@ def add_comment(commands):
 
 # --- reading commands: outline, find, impact, brief ---
 
-def find_unit(graph, notes, text):
-    """(class id, function or None) for `Name` or `Name#function`; edges are refused."""
-    kind, *ids = parse_target(graph, notes, text)
-    if kind == "edge":
-        raise AppError(f"{text}: give a class or Class#function, not a connection")
-    if kind == "function" and not is_function(graph, "#".join(ids)):
-        raise AppError(f"{ids[0]} has no function {ids[1]}")
-    if ids[0] not in graph.nodes:
-        raise AppError(f"{text}: not a class")
-    return ids[0], ids[1] if kind == "function" else None
-
-
 def run_outline(args):
     app, graph, notes = open_app(args)
-    node_id, function = find_unit(graph, notes, args.target)
-    print(textout.format_outline(app.name, outline(graph, notes, node_id, function), function))
+    node_id, function = resolve_unit(graph, notes, args.target)
+    print(textout.format_outline(app.name, outline(graph, notes, node_id, function), function,
+                                 title_namer(graph, notes)))
+
+
+def run_read(args):
+    app, graph, notes = open_app(args)
+    source, namer = SourceLines(app.root).of, unique_namer(graph)
+    plain = [t for t in args.targets if not t.startswith("@")]
+    for target in args.targets:  # a pasted ref (`@app ...`) prints as `ref` does
+        if target.startswith("@"):
+            print_refs(target)
+    blocks = []
+    for target in plain:
+        blocks += read_target_blocks(app, graph, notes, target, args.signatures, args.context,
+                                     source, namer)
+    if plain:
+        print(textout.format_read(app.name, plain, blocks, source, namer))
+
+
+def run_ref(args):
+    text = sys.stdin.read() if args.text == ["-"] else "\n".join(args.text)
+    if not print_refs(text):
+        raise AppError("no ref found: a ref is `@<app> <target>`, e.g. @myapp src/a.py:10-20")
+
+
+def print_refs(text):
+    """Print every ref in `text` (one block each; a ref that no longer resolves prints its error
+    and nearest targets); returns how many refs there were."""
+    found = refs.find_refs(text)
+    opened = {}
+    for parsed in found:
+        label = refs.format_ref(parsed)
+        try:
+            if parsed["app"] not in opened:
+                opened[parsed["app"]] = open_app(argparse.Namespace(app=parsed["app"], data=None,
+                                                                    repo=None))
+            print(refs.ref_text(*opened[parsed["app"]], parsed))
+        except refs.RefMiss as error:
+            near = f"; did you mean: {', '.join(error.did_you_mean)}" if error.did_you_mean else ""
+            print(f"{label}\nerror: {error}{near}")
+        except AppError as error:
+            print(f"{label}\nerror: {error}")
+    return len(found)
+
+
+def add_ref(commands):
+    parser = commands.add_parser("ref", help="resolve pasted location refs (`@<app> <target>` "
+                                 "lines the viewer copies) and print what they point at")
+    parser.add_argument("text", nargs="+", help="the pasted text (junk around refs is ignored; "
+                        "'-' reads stdin)")
+    parser.set_defaults(run=run_ref)
+
+
+def add_read(commands):
+    parser = commands.add_parser("read", help="print the source of functions or classes with line "
+                                 "numbers, their file:lines and hint")
+    app_args(parser, view_options=False)
+    parser.add_argument("targets", nargs="+", metavar="target",
+                        help="Class#function, Class, a bare function name, path:line (the function "
+                        "around it), path:first-last, path (header + definitions), doc.md#Heading, "
+                        "or a pasted ref ('@app ...', see `ref`)")
+    parser.add_argument("--signatures", action="store_true",
+                        help="only each function's first line (a class's function list as code)")
+    parser.add_argument("--context", type=int, metavar="N",
+                        help="N more lines around each (a path:line outside functions: 5)")
+    allow_options_before_positionals(parser)
+    parser.set_defaults(run=run_read)
 
 
 def add_outline(commands):
@@ -594,47 +761,160 @@ def add_outline(commands):
     parser.set_defaults(run=run_outline)
 
 
+def find_test_file(graph, text):
+    """Repo path of the test file named by `text` (a path, or a path ending the same way)."""
+    files = sorted({n.file for n in graph.nodes.values() if n.kind != "external"
+                    and (n.file == text or n.file.endswith("/" + text))})
+    if not files:
+        raise miss(f"{text}: no such file in the scan", suggest_files(graph, text))
+    if len(files) > 1:
+        raise AppError(f"{text}: several files match: {', '.join(files[:5])}")
+    if not is_test_path(files[0]) and not any(is_test(n) for n in graph.nodes.values()
+                                              if n.file == files[0]):
+        raise AppError(f"{files[0]} is not a test file")
+    return files[0]
+
+
+def run_setup(args):
+    app, graph, notes = open_app(args)
+    print(textout.format_setup(app.name, setup_of(graph, notes, find_test_file(graph, args.file))))
+
+
+def add_setup(commands):
+    parser = commands.add_parser("setup", help="a test file's helpers, hooks, bases and globals "
+                                 "(and how it reaches them), to copy when writing a new test")
+    app_args(parser, view_options=False)
+    parser.add_argument("file", help="the test file's path (a trailing part is enough)")
+    parser.set_defaults(run=run_setup)
+
+
 FIND_LIMIT = 20
 
 
+def run_find_text(args, app, graph, notes):
+    if args.words:
+        raise AppError(f"find: words or --text, not both: find {app.name} <words...>  |  "
+                       f"find {app.name} --text <pattern> [--path <prefix>]")
+    rows = find_text(graph, load_names(app), app.root, args.text, args.path)
+    print(textout.format_find_text(app.name, args.text, rows, args.all, title_namer(graph, notes)))
+
+
 def run_find(args):
-    app, graph, notes = open_app(args)
-    hits = find(graph, notes, args.words, args.tests)
+    app, graph, notes = open_app(args, warn_lost=False)
+    if args.text is not None:
+        return run_find_text(args, app, graph, notes)
+    if not args.words:
+        raise AppError(f"find: give words or --text: find {app.name} <words...>  |  "
+                       f"find {app.name} --text <pattern> [--path <prefix>]")
+    hits = find(graph, notes, args.words, args.include_tests, linked_texts(app, graph, notes))
     shown = hits if args.all else hits[:FIND_LIMIT]
-    print(textout.format_find(app.name, args.words, hits, shown, unique_namer(graph)))
+    extras = hit_callers(graph, shown) if args.tests else None
+    print(textout.format_find(app.name, args.words, hits, shown, title_namer(graph, notes),
+                              find_suggestions(graph, args.words) if not hits else (), extras))
 
 
 def add_find(commands):
-    parser = commands.add_parser("find", help="search class and function names, notes and code "
-                                 "docs for words (all must match), best first")
+    parser = commands.add_parser("find", help="search class, function and field names plus their "
+                                 "notes and the spec / memo / tour text about them, fuzzy words, best "
+                                 "first; --text searches file text instead")
     app_args(parser, view_options=False)
-    parser.add_argument("words", nargs="+")
-    parser.add_argument("--all", action="store_true", help=f"every match, not the first {FIND_LIMIT}")
-    parser.add_argument("--tests", action="store_true", help="include test code")
+    parser.add_argument("words", nargs="*")
+    parser.add_argument("--text", metavar="PATTERN",
+                        help="instead of names: lines of any indexed file (code, docs, scripts, "
+                        "config) matching this regex or literal, with their enclosing function / heading")
+    parser.add_argument("--path", default="", metavar="PREFIX",
+                        help="with --text: only files whose path starts with this")
+    parser.add_argument("--all", action="store_true",
+                        help=f"every match, not the first {FIND_LIMIT} (--text: every line, not "
+                        f"{textout.MAX_TEXT_HITS} then a count per file)")
+    parser.add_argument("--tests", action="store_true",
+                        help="per hit: its callers and the nearest test files using it")
+    parser.add_argument("--include-tests", action="store_true", help="also search test code")
     parser.set_defaults(run=run_find)
+
+
+def is_plain_name(graph, text):
+    """True for a name no class matches (a constant, env var, settings key)."""
+    return "#" not in text and text not in graph.nodes and not candidates(graph, text)
 
 
 def run_impact(args):
     app, graph, notes = open_app(args)
-    unit = find_unit(graph, notes, args.target)
-    print(textout.format_impact(app.name, unit, args.depth, impact(graph, unit, args.depth),
-                                unique_namer(graph)))
+    index = read_index(app.graph_path)  # None before the first rescan with names: classes still work
+    rows = is_plain_name(graph, args.target) and uses(load_names(app), app.root, args.target)
+    if rows:
+        unit, result = args.target, name_impact(graph, rows, args.depth)
+    else:
+        unit = resolve_unit(graph, notes, args.target)
+        result = impact(graph, unit, args.depth, index, command_tests_finder(app, graph))
+        result["tours"] = open_tours(app, graph, notes).steps_over([unit])
+    print(textout.format_impact(app.name, unit, args.depth, result, title_namer(graph, notes), args.all))
 
 
 def add_impact(commands):
-    parser = commands.add_parser("impact", help="who depends on a class or Class#function, by "
-                                 "distance, and the tests to rerun")
+    parser = commands.add_parser("impact", help="who depends on a class, Class#function or any "
+                                 "name (constant, env var), by distance, the tests to rerun, and "
+                                 "the tests and docs naming it")
     app_args(parser, view_options=False)
-    parser.add_argument("target", help="Name or Name#function")
+    parser.add_argument("target", help="Name, Name#function, or a constant / env var name")
     parser.add_argument("--depth", type=int, default=IMPACT_DEPTH,
                         help=f"how many steps out (default {IMPACT_DEPTH})")
+    parser.add_argument("--all", action="store_true",
+                        help="every test to rerun, not just those reaching the unit directly")
     parser.set_defaults(run=run_impact)
+
+
+# --- names index: uses, env, dupes ---
+
+def run_uses(args):
+    app = find_app(args.app, args.data)
+    rows = uses(load_names(app), app.root, args.name)
+    print(textout.format_uses(app.name, args.name, rows, args.all))
+
+
+def add_uses(commands):
+    parser = commands.add_parser("uses", help="every line naming a class, function, constant, env "
+                                 "var or settings key, in code, tests, docs, deploy and scripts")
+    app_args(parser, view_options=False)
+    parser.add_argument("name", help="e.g. Player, MAX_PLAYERS, WOOF_PORT, audio/volume")
+    parser.add_argument("--all", action="store_true",
+                        help=f"every line (docs, scripts, config: not one count line per kind)")
+    parser.set_defaults(run=run_uses)
+
+
+def run_env(args):
+    app = find_app(args.app, args.data)
+    print(textout.format_env(app.name, env_vars(load_names(app), args.prefix)))
+
+
+def add_env(commands):
+    parser = commands.add_parser("env", help="env vars: where read, set (compose, Dockerfile, "
+                                 ".env, scripts) and documented, with gaps")
+    app_args(parser, view_options=False)
+    parser.add_argument("--prefix", default="", help="only names starting with this, e.g. WOOF_")
+    parser.set_defaults(run=run_env)
+
+
+def run_dupes(args):
+    app = find_app(args.app, args.data)
+    kinds = ("src", "script", "test") if args.tests else ("src", "script")
+    print(textout.format_dupes(app.name, dupes(load_names(app), kinds), args.all))
+
+
+def add_dupes(commands):
+    parser = commands.add_parser("dupes", help="identical string literals in 2+ files, "
+                                 "most repeated first")
+    app_args(parser, view_options=False)
+    parser.add_argument("--all", action="store_true",
+                        help=f"every literal, not the first {textout.MAX_DUPES}")
+    parser.add_argument("--tests", action="store_true", help="include test code")
+    parser.set_defaults(run=run_dupes)
 
 
 def run_brief(args):
     app, graph, notes = open_app(args)
-    units = [find_unit(graph, notes, t) for t in args.targets]
-    print(textout.format_brief(app.name, brief(graph, notes, units), short_namer(graph)))
+    units = [resolve_unit(graph, notes, t) for t in args.targets]
+    print(textout.format_brief(app.name, brief(graph, notes, units), short_namer(graph, notes)))
 
 
 def add_brief(commands):
@@ -647,11 +927,89 @@ def add_brief(commands):
 
 # --- tests / warnings ---
 
+def run_progress(args):
+    """`progress <app>`: every track's numbers; --track NAME adds domains, trend, what is left;
+    --spec ID counts that spec's linked classes and functions."""
+    app, graph, notes = open_app(args)
+    tracks = progress.Progress(graph, notes)
+    if args.spec:
+        try:
+            targets = open_cards(app, graph, notes, "spec").tree_focus(args.spec)
+        except KeyError as error:
+            raise AppError(error.args[0]) from error
+        print(textout.format_progress(f"{app.name} spec {args.spec}", tracks.links_summary(targets), tracks.problems))
+        return
+    report = tracks.json(args.track, progress.read_history(app.map_dir or app.data), graph_scan(app))
+    if not args.track:
+        print(textout.format_progress(app.name, report["tracks"], tracks.problems))
+        return
+    track = tracks.track(args.track)
+    if track is None:
+        raise AppError(f"no track {args.track} (have: {', '.join(t['name'] for t in tracks.tracks)})")
+    namer = title_namer(tracks.graph, notes)
+    todo = [namer(owner) + (f"#{namer.function(owner, function)}" if function else "")
+            for owner, _, function in (t.partition(FUNCTION_SEP) for t in tracks.todo(track))]
+    row = next(r for r in report["tracks"] if r["name"] == track["name"])
+    print(textout.format_track(app.name, row, report["domains"], todo, args.all, report["trend"]))
+
+
+def add_progress(commands):
+    parser = commands.add_parser("progress", help="how much is done: one line per progress track "
+                                 "(built in: Described, Tested, Built; own ones in settings.json \"tracks\")")
+    app_args(parser, view_options=False)
+    parser.add_argument("--track", metavar="NAME", help="one track: per domain, the trend and what is not done")
+    parser.add_argument("--spec", metavar="ID", help="the tracks over one spec's linked classes and functions")
+    parser.add_argument("--all", action="store_true", help="--track: list every item not done")
+    parser.set_defaults(run=run_progress)
+
+
+def run_hotspots(args):
+    app, graph, notes = open_app(args)
+    churn = git_churn(app.root, args.days)
+    if churn is None:
+        sys.exit(f"hotspots needs git history: {app.root} is not in a git repo")
+    rows = hotspots(graph, churn)
+    shown = rows[:args.top]
+    print(textout.format_hotspots(app.name, args.days, shown, len(rows), title_namer(graph, notes)))
+
+
+def add_hotspots(commands):
+    parser = commands.add_parser("hotspots", help="classes and modules ranked by size x git churn x missing "
+                                 "tests: where bugs and rework are likely")
+    app_args(parser, view_options=False)
+    parser.add_argument("--top", type=int, default=15, help="rows to show (default 15)")
+    parser.add_argument("--days", type=int, default=90, help="count commits from the last N days (default 90)")
+    parser.set_defaults(run=run_hotspots)
+
+
+def command_tests_finder(app, graph):
+    """extra_tests for diff_tests / impact: the tests reaching a unit through a CLI command
+    (name_reach.py)."""
+    return lambda unit, test_index: command_tests(graph, app.root, unit, test_index)
+
+
+def run_diff_tests(args, app, graph, notes):
+    git = git_changed_lines(app.root, args.diff or None)
+    if git is None:
+        sys.exit(f"tests --diff needs git: {app.root} is not in a git repo")
+    changed, ref = git
+    result = diff_tests(graph, changed, command_tests_finder(app, graph))
+    index = read_index(app.graph_path)
+    if index is not None:
+        result["e2e"] = e2e_for_diff(index, app.root, changed)
+    result["tours"] = open_tours(app, graph, notes).steps_over(result["units"])
+    print(textout.format_diff_tests(app.name, ref[:10], result, title_namer(graph, notes)))
+
+
 def run_tests(args):
     app, graph, notes = open_app(args)
-    node_id = find_id(graph, notes, args.name)
+    if args.diff is not None:
+        return run_diff_tests(args, app, graph, notes)
+    if not args.name:
+        sys.exit("tests needs a class name, or --diff")
+    node_id = resolve_class(graph, notes, args.name)
     found = files_to_retest(graph, node_id, args.deep)
-    name = unique_namer(graph)
+    name = title_namer(graph, notes)
     print(f"{app.name} tests {name(node_id)}{' deep' if args.deep else ''} {len(found)}")
     for test_file, via in found:
         print(test_file + (f" (via {name(via)})" if via else ""))
@@ -660,15 +1018,29 @@ def run_tests(args):
 def add_tests(commands):
     parser = commands.add_parser("tests", help="test files to run after changing a class")
     app_args(parser, view_options=False)
-    parser.add_argument("name")
+    parser.add_argument("name", nargs="?")
     parser.add_argument("--deep", action="store_true", help="add tests of its direct users")
+    parser.add_argument("--all", action="store_true", help="no effect with --diff: it always lists every test file")
+    parser.add_argument("--diff", nargs="?", const="", metavar="REF",
+                        help="instead of a name: the tests to run for the git diff against REF "
+                        "(default: merge base with main), uncommitted changes included")
     parser.set_defaults(run=run_tests)
+
+
+def run_unresolved_names(args, app, graph, notes):
+    only_id = resolve_class(graph, notes, args.names) if args.names else None
+    print("\n".join(textout.unresolved_name_lines(app.name, unresolved_by_node(graph, only_id),
+                                                 title_namer(graph, notes))))
 
 
 def run_warnings(args):
     app, graph, notes = open_app(args)
+    if args.names is not None:
+        return run_unresolved_names(args, app, graph, notes)
     print(textout.format_warnings(app.name, warnings_by_kind(graph, notes, args.all),
-                                  unique_namer(graph)))
+                                  title_namer(graph, notes)))
+    for line in textout.outside_lines(graph.stack, args.all):
+        print(line)
     tours = open_tours(app, graph, notes)
     for line in textout.tour_warning_lines(tours.stale_steps(), tours.lost_steps(),
                                            tours.comments.lost("tour:")):
@@ -681,9 +1053,12 @@ def run_warnings(args):
 
 
 def add_warnings(commands):
-    parser = commands.add_parser("warnings", help="unused, god classes, cycles, unsure, unresolved, layer, stale notes")
+    parser = commands.add_parser("warnings", help="unused, god classes, cycles, unsure, unresolved, layer, stale notes; "
+                                 "plus an outside line (host-program modules, asset files)")
     app_args(parser, view_options=False)
-    parser.add_argument("--all", action="store_true", help="also show ignored warnings")
+    parser.add_argument("--all", action="store_true", help="also show ignored warnings and every outside name")
+    parser.add_argument("--names", nargs="?", const="", metavar="CLASS",
+                        help="instead: list the unresolved names with their counts, per class (or just CLASS)")
     parser.set_defaults(run=run_warnings)
 
 
@@ -738,7 +1113,7 @@ def run_rules(args):
 def add_rules(commands):
     parser = commands.add_parser("rules", help="warning rules by folder and architecture rules: list, add, "
                                  "add-layer, remove (no rescan needed)")
-    app_args(parser, view_options=False)
+    app_args(parser, view_options=False, worktree=False)
     parser.add_argument("words", nargs="*", help='add "<glob>" ignore=kind,kind [lang=..] '
                         "[kind=..] | add-layer FROM TO | remove N")
     parser.add_argument("--forbid", action="store_true", help="add-layer: FROM must not depend on TO")
@@ -750,26 +1125,60 @@ def add_rules(commands):
 
 # --- curate / set ---
 
-def missing_fields(notes, node_id):
-    return [f for f in CURATED_FIELDS if not notes.has(node_key(node_id), f)]
+def missing_fields(notes, node):
+    """Curated fields not set yet; a domain from a folder rule counts as set."""
+    return [f for f in CURATED_FIELDS
+            if not (notes.domain_of(node) if f == "domain" else notes.has(node_key(node.id), f))]
 
 
-def curate_row(graph, notes, node, missing):
+def ai_draft_fields(notes, node_id):
+    """Redo set: fields whose only value is an AI draft (a human value is never listed)."""
+    key = node_key(node_id)
+    return [f for f in REDO_FIELDS if notes.get(key, f)[1] is not None and notes.is_ai(key, notes.get(key, f)[1])]
+
+
+def todo_marks(missing, drafts):
+    """`-level,domain ~hint,description`: `-` missing fields, `~` AI drafts to rewrite."""
+    marks = ([f"-{','.join(missing)}"] if missing else []) + ([f"~{','.join(drafts)}"] if drafts else [])
+    return " ".join(marks)
+
+
+def curate_row(graph, notes, node, marks):
     outs = [e for e in graph.edges.values() if e.from_id == node.id and e.to != node.id]
     ins = {e.from_id for e in graph.edges.values() if e.to == node.id and e.from_id != node.id}
     calls = sorted((c for e in outs for c in e.calls), key=lambda c: -c.count)
     top = list(dict.fromkeys(c.member for c in calls))[:TOP_CALLS]
     return (f"{node.id} {node.file} L{effective_level(graph, notes, node.id)} "
-            f"{len(ins)}/{len({e.to for e in outs})} -{','.join(missing)}"
+            f"{len(ins)}/{len({e.to for e in outs})} {marks}"
             + (" {" + ", ".join(top) + "}" if top else ""))
+
+
+def curate_paths(args):
+    """The --path prefixes (repeatable, each may be a comma list)."""
+    return [prefix for value in args.path for prefix in value.split(",") if prefix]
+
+
+def curate_todo(graph, notes, args):
+    """(node, marks) of every class to curate, in id order."""
+    prefixes = curate_paths(args)
+    todo = []
+    for node_id, node in sorted(graph.nodes.items()):
+        if node.kind == "external" or is_test(node):
+            continue
+        if prefixes and not any(under_path(node.file, prefix) for prefix in prefixes):
+            continue
+        missing = missing_fields(notes, node)
+        drafts = ai_draft_fields(notes, node_id) if args.redo else []
+        if missing or drafts:
+            todo.append((node, todo_marks(missing, drafts)))
+    return todo
 
 
 def run_curate(args):
     app, graph, notes = open_app(args)
-    rows = [curate_row(graph, notes, node, missing_fields(notes, node_id))
-            for node_id, node in sorted(graph.nodes.items())
-            if node.kind != "external" and not is_test(node) and missing_fields(notes, node_id)]
-    print(f"{app.name} curate {len(rows)} to do (id file level in/out -missing {{calls}})")
+    rows = [curate_row(graph, notes, node, marks) for node, marks in curate_todo(graph, notes, args)]
+    legend = " ~AI draft to rewrite" if args.redo else ""
+    print(f"{app.name} curate {len(rows)} to do (id file level in/out -missing{legend} {{calls}})")
     print("\n".join(field_rules.reminder_lines(field_rules.effective(app.data))))
     if rows:
         print("\n".join(rows))
@@ -778,6 +1187,10 @@ def run_curate(args):
 def add_curate(commands):
     parser = commands.add_parser("curate", help="classes still lacking level/domain/hint")
     app_args(parser, view_options=False)
+    parser.add_argument("--redo", action="store_true",
+                        help="also list classes whose level/domain/hint/description are AI drafts, to rewrite")
+    parser.add_argument("--path", action="append", default=[], metavar="PREFIX",
+                        help="only classes whose file starts with this (repeatable, or a comma list)")
     parser.set_defaults(run=run_curate)
 
 
@@ -795,7 +1208,7 @@ def parse_value(graph, notes, name, text):
             raise AppError(f"singleton must be true or false, got {text}")
         return text.lower() in TRUE_WORDS
     if name in ("bindings", "loaded_by"):
-        return [find_id(graph, notes, t.strip()) for t in text.split(",") if t.strip()]
+        return [resolve_class(graph, notes, t.strip()) for t in text.split(",") if t.strip()]
     if name in ("rules", "review"):
         return text.replace("\\n", "\n")  # `\n` in a set line starts a new line
     return clean_value(name, text)
@@ -803,12 +1216,10 @@ def parse_value(graph, notes, name, text):
 
 def note_target(graph, notes, target):
     """`Name` -> node key, `A>B` or `A→B` -> edge key, `Name#function` -> function key."""
-    kind, *ids = parse_target(graph, notes, target)
+    kind, *ids = resolve_target(graph, notes, target)
     if kind == "edge":
         return edge_key(*ids)
     if kind == "function":
-        if not is_function(graph, "#".join(ids)):
-            raise AppError(f"{ids[0]} has no function {ids[1]}")
         return function_key(*ids)
     return node_key(ids[0])
 
@@ -852,6 +1263,7 @@ def run_still_true(args, app, graph, notes):
 
 def run_set(args):
     app, graph, notes = open_app(args)
+    graph = planned.hand_graph(graph, notes)  # planned and added-manually items are targets too
     if args.still_true:
         return run_still_true(args, app, graph, notes)
     by, ai = (args.by, False) if args.by else (AI_AUTHOR, True)
@@ -903,7 +1315,7 @@ def run_fields(args):
 def add_fields(commands):
     parser = commands.add_parser("fields", help="how to write each note field (hint, description, ...): "
                                  "the effective rules, your project's overrides marked")
-    app_args(parser, view_options=False)
+    app_args(parser, view_options=False, worktree=False)
     parser.add_argument("--set", dest="sets", nargs="+", metavar="FIELD.KEY=VALUE",
                         help="override, e.g. hint.what=\"...\" hint.max=120 description.code_check=off "
                              "(keys: what who not good bad max code_check); house=\"...\" = house rules; "
@@ -911,6 +1323,108 @@ def add_fields(commands):
     parser.add_argument("--reset", nargs="+", metavar="FIELD", help="drop overrides: a field name, house_rules or all")
     parser.add_argument("--by", metavar="NAME", help="record this editor (default: the human here)")
     parser.set_defaults(run=run_fields)
+
+
+def plan_fields(args):
+    """The --stage/--priority/... options of `plan --add` as note fields (unset ones left out)."""
+    fields = {"hint": args.note, "stage": args.stage, "priority": args.priority,
+              "importance": args.importance, "spec": args.spec, "where": args.where,
+              "level": args.level, "tags": clean_value("tags", args.tags) if args.tags else None}
+    return {name: value for name, value in fields.items() if value is not None}
+
+
+def plan_target(graph, notes, text):
+    """`Name` or `Class#function` of a hand-made or real item, as (id or Class#name)."""
+    kind, *ids = resolve_target(graph, notes, text)
+    if kind == "edge":
+        raise AppError(f"{text}: give a class or Class#function, not a line")
+    return FUNCTION_SEP.join(ids)
+
+
+def plan_links(graph, notes, name, text):
+    """`A>B,B>C` as (from, to) id pairs; the new item's own name stays as written."""
+    pairs = []
+    for token in (t.strip() for t in (text or "").split(",") if t.strip()):
+        ends = token.replace("→", ">").split(">")
+        if len(ends) != 2:
+            raise AppError(f"not a line A>B: {token}")
+        pairs.append(tuple(e.strip() if e.strip() == name else resolve_class(graph, notes, e.strip())
+                           for e in ends))
+    return pairs
+
+
+def ask_text(app, name, on, ask):
+    """Why `plan --add` stopped: the name matches real code; how to link to it or add anyway."""
+    owner = f"{on}#" if on else ""
+    found = ", ".join(f"{owner}{n}" for n in ask["exact"] + ask["close"])
+    kind = "is" if ask["exact"] else "looks like"
+    return (f"{owner}{name} {kind} real code: {found}\n  put notes on the real one instead: "
+            f"coderstanding set {app} <target> hint=\"...\"\n  or add it anyway: repeat with --anyway")
+
+
+def run_plan(args):
+    """`plan <app>`: list what is not built; --add / --drop / --link / --keep-both / --accept."""
+    app, graph, notes = open_app(args)
+    hand = planned.hand_graph(graph, notes)
+    by, ai = (args.by, False) if args.by else (AI_AUTHOR, True)
+    try:
+        if args.add:
+            on = resolve_class(hand, notes, args.on) if args.on else None
+            if args.spec and planned.spec_stage(notes, args.spec) is None:
+                raise AppError(f"no spec {args.spec} (see `coderstanding specs {app.name}`)")
+            result = planned.add_item(hand, notes, args.add, by, ai, on=on, made=args.kind,
+                                      fields=plan_fields(args), anyway=args.anyway,
+                                      links=plan_links(hand, notes, args.add.strip(), args.links))
+            if "ask" in result:
+                raise AppError(ask_text(app.name, args.add.strip(), on, result["ask"]))
+            print(f"added [{args.kind}] {result['key'][len('node:'):]}" + (" (AI draft)" if ai else ""))
+        elif args.drop:
+            target = plan_target(hand, notes, args.drop)
+            print("dropped " + ", ".join(planned.drop_item(notes, node_key(target))))
+        elif args.link:
+            old, new = (plan_target(hand, notes, t) for t in args.link)
+            moved = planned.link_item(hand, notes, old, new)
+            print(f"linked {old} -> {new} ({len(moved)} notes keys moved)")
+        elif args.keep_both:
+            moved = planned.keep_both(notes, plan_target(hand, notes, args.keep_both))
+            print(f"renamed {moved[0][0]} -> {moved[0][1]}")
+        elif args.accept:
+            keys = planned.accept_item(notes, node_key(plan_target(hand, notes, args.accept)),
+                                       args.by or human_author(app.root))
+            print("accepted " + ", ".join(keys))
+        else:
+            print(textout.format_plan(app.name, planned.plan_rows(graph, notes)))
+            return
+    except ValueError as error:
+        raise AppError(str(error)) from error
+    app.save_notes(notes)
+
+
+def add_plan(commands):
+    parser = commands.add_parser("plan", help="planned and added-manually items and stub functions: "
+                                 "list them (default) or add, drop, link, accept")
+    app_args(parser, view_options=False)
+    parser.add_argument("--add", metavar="NAME", help="add a planned class (or with --on, a planned function)")
+    parser.add_argument("--on", metavar="CLASS", help="--add: the class the planned function goes on")
+    parser.add_argument("--kind", choices=planned.MADE_KINDS, default=planned.PLANNED,
+                        help="--add: planned (not in the code yet, default) or manual (real, the scan can't see it)")
+    parser.add_argument("--note", help="--add: what it is for, in plain words (the hint)")
+    parser.add_argument("--stage", choices=SPEC_STAGES, help="--add: its own stage (default: its spec's)")
+    parser.add_argument("--priority", choices=PRIORITIES, help="--add: work priority (how soon)")
+    parser.add_argument("--importance", choices=PRIORITIES, help="--add: how much it matters")
+    parser.add_argument("--spec", metavar="ID", help="--add: the spec it belongs to")
+    parser.add_argument("--where", help="--add --kind manual: the file, folder or service it lives in")
+    parser.add_argument("--tags", help="--add: a,b")
+    parser.add_argument("--level", type=int, help="--add: the map level it shows at (default 1)")
+    parser.add_argument("--links", metavar="A>B,...", help="--add: lines to or from the new class")
+    parser.add_argument("--anyway", action="store_true", help="--add: even when the name matches real code")
+    parser.add_argument("--drop", metavar="TARGET", help="remove a planned or added item (a class takes its lines)")
+    parser.add_argument("--link", nargs=2, metavar=("PLANNED", "REAL"),
+                        help="the planned class or Class#function is built as REAL: move its notes there")
+    parser.add_argument("--keep-both", metavar="NAME", help="a planned class whose name is real now: rename it NAME (planned)")
+    parser.add_argument("--accept", metavar="TARGET", help="make an AI-drafted item yours")
+    parser.add_argument("--by", metavar="NAME", help=f"write as this person (default: AI draft by {AI_AUTHOR})")
+    parser.set_defaults(run=run_plan)
 
 
 def add_set(commands):
@@ -928,23 +1442,26 @@ def add_set(commands):
 
 
 def run_serve(args):
-    from .server import serve
+    from .server import serve, systemd_socket
     try:
         app = find_app(args.app, args.data) if args.app else None
     except AppError as error:
         sys.exit(str(error))
     from .helper import enter_service_mode, helper_running, log_line, report_service_failure
-    if helper_running(args.port):  # before service mode: it must not take over the running one's pid file
+    passed = systemd_socket()  # socket activation: systemd owns the port, so no second-helper check
+    options = {"allow_origin": args.allow_origin, "idle_exit": args.idle_exit, "sock": passed,
+               "tray": args.tray}
+    if passed is None and helper_running(args.port):  # before service mode: it must not take over the running one's pid file
         message = f"a helper is already running on http://127.0.0.1:{args.port}/"
         print(message)
         if args.service:
             log_line(message)
         return
     if not args.service:
-        return serve(app, args.port, allow_origin=args.allow_origin)
+        return serve(app, args.port, **options)
     console = enter_service_mode()
     try:
-        serve(app, args.port, allow_origin=args.allow_origin)
+        serve(app, args.port, **options)
     except Exception as error:  # nobody watches the log: say why, then fail
         report_service_failure(error, console)
         sys.exit(1)
@@ -953,20 +1470,25 @@ def run_serve(args):
 def add_serve(commands):
     parser = commands.add_parser("serve", help="open the viewer on localhost: every registered "
                                  "app, starting on <app> if given")
-    app_args(parser, view_options=False, optional=True)
+    app_args(parser, view_options=False, optional=True, worktree=False)
     parser.add_argument("--port", type=int, default=8517, help="port (default 8517)")
     parser.add_argument("--allow-origin", metavar="URL",
                         help="hosted page origin that may use this server as its helper (default: env "
                              "CODERSTANDING_ALLOW_ORIGIN, then \"origin\" in "
                              "~/.config/coderstanding/hosted.json)")
     parser.add_argument("--service", action="store_true",
-                        help="run as the login helper without a console (Windows): log to the "
+                        help="run as the helper without a console (Windows): log to the "
                              "helper log file and record the pid")
+    parser.add_argument("--idle-exit", type=float, metavar="SECONDS",
+                        help="exit once no page has used the server for SECONDS (also when none "
+                             "comes after the start); never during a scan or a running request")
+    parser.add_argument("--tray", action="store_true",
+                        help="show the tray icon while running (when Qt is installed)")
     parser.set_defaults(run=run_serve)
 
 
 def run_rescan(args):
-    app = find_app(args.app, args.data)
+    app = worktree_app(find_app(args.app, args.data), args.repo)
     if args.reset_level_names and not args.relevel:
         raise AppError("--reset-level-names only goes with --relevel")
     graph = rescan(app, key_values(args.setting))
@@ -1049,14 +1571,30 @@ def version():
         return "(source checkout)"
 
 
+class HintParser(argparse.ArgumentParser):
+    """Says what to type when a command is missing its app or targets, instead of the bare
+    argparse error (subcommand parsers use this class too)."""
+
+    def error(self, message):
+        if "required" in message and " " in self.prog:
+            names = [a.metavar or a.dest for a in self._get_positional_actions()]
+            typed = " ".join(f"<{n}>" + ("..." if a.nargs in ("+", "*") else "")
+                             for n, a in zip(names, self._get_positional_actions()))
+            apps = ", ".join(sorted(load_registry())) or "none yet (coderstanding add <folder>)"
+            self.exit(2, f"error: {message}\ntype: {self.prog} {typed} [options]   "
+                         f"(registered apps: {apps})\n")
+        super().error(message)
+
+
 def build_parser():
-    parser = argparse.ArgumentParser(prog="coderstanding")
+    parser = HintParser(prog="coderstanding")
     parser.add_argument("--version", action="version", version=f"coderstanding {version()}")
     commands = parser.add_subparsers(dest="command", required=True)
     for add in (add_scan, add_add, add_settings, add_graph, add_zoom, add_node, add_view,
-                add_specs, add_memos, add_tours, add_tour, add_comment, add_outline, add_find, add_impact,
+                add_specs, add_memos, add_tours, add_tour, add_comment, add_outline, add_setup, add_read, add_ref, add_find, add_impact,
+                add_uses, add_env, add_dupes, add_hotspots, add_progress,
                 add_brief, add_tests,
-                add_warnings, add_diagnose, add_rules, add_curate, add_set, add_fields, add_serve, add_rescan,
+                add_warnings, add_diagnose, add_rules, add_curate, add_plan, add_set, add_fields, add_serve, add_rescan,
                 add_remove, add_rename, add_privacy, *SETUP_COMMANDS):
         add(commands)
     return parser
@@ -1064,6 +1602,9 @@ def build_parser():
 
 def main(argv=None):
     install_offline_guard()  # before anything else runs (DESIGN 18)
+    hint = worktrees.other_code_hint(Path(__file__).resolve().parents[1])
+    if hint:
+        print(hint, file=sys.stderr)
     args = build_parser().parse_args(argv)
     try:
         args.run(args)

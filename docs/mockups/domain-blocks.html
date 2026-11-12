@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Domain Blocks Mock-up</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@600;700&display=swap" rel="stylesheet">
+<style>
+/* Tokens copied from viewer/style.css, plus --frame-* for the domain blocks of this mock-up. */
+:root {
+  --bg: #f3f5f8; --surface: #ffffff; --ink: #141b24; --muted: #5a6574; --line: #d4dae3;
+  --accent: #2f58cc; --accent-ink: #ffffff; --derived: #b5620c; --hl: #d63f7a; --faded: #8d97a4;
+  --ext: #eaf0e4; --scene: #e3ebfb; --row: #eef2f8; --dim: #b9c1cc; --signal: #7a4fc4;
+  --caution: #f2b705; --caution-ink: #1b1b1b; --error: #b3261e; --warn: #b45309;
+  --frame-fill: .07; --frame-head: .17; --frame-line: .55; --frame-l: 42%;
+  --f-display: "Schibsted Grotesk", "Segoe UI", system-ui, sans-serif;
+  --f-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --ext: #1e2a1f; --scene: #1f2c48; --row: #1c2530; --dim: #3a4552; --signal: #b892ff; --error: #ff8a80; --warn: #f5b041;
+  --frame-fill: .10; --frame-head: .24; --frame-line: .6; --frame-l: 66%;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --ext: #1e2a1f; --scene: #1f2c48; --row: #1c2530; --dim: #3a4552; --signal: #b892ff; --error: #ff8a80; --warn: #f5b041;
+  --frame-fill: .10; --frame-head: .24; --frame-line: .6; --frame-l: 66%;
+  color-scheme: dark }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--f-body); display: flex; flex-direction: column; }
+h1 { font: 700 1.15rem var(--f-display); margin: 0; }
+code { font-family: var(--f-mono); font-size: .9em; }
+[hidden] { display: none !important; }
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Top bar, controls, legend: as in viewer/style.css */
+.top { display: flex; align-items: center; gap: 18px; padding: 8px 14px 0; border-bottom: 1px solid var(--line); background: var(--surface); flex-wrap: wrap; }
+.top h1 { padding-bottom: 8px; }
+.appname { font: 12px var(--f-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; margin-bottom: 8px; }
+.tabs { display: flex; gap: 2px; align-self: end; }
+.tabs button { border: 1px solid transparent; border-bottom: none; background: none; color: var(--muted);
+  padding: 7px 14px; font: 500 13.5px var(--f-body); border-radius: 7px 7px 0 0; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); background: var(--bg); border-color: var(--line); }
+.grow { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 6px 11px; font: 13px var(--f-body); cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.small { padding: 3px 9px; font-size: 12.5px; }
+.top .btn { margin-bottom: 8px; }
+
+.mocknote { display: flex; gap: 10px 18px; align-items: baseline; flex-wrap: wrap; padding: 7px 14px; font-size: 12.5px;
+  background: var(--row); border-bottom: 1px solid var(--line); color: var(--muted); }
+.mocknote b { color: var(--ink); font-weight: 600; }
+.mocknote .tag { font: 600 11px var(--f-mono); color: var(--hl); border: 1px solid var(--hl); border-radius: 4px; padding: 0 5px; }
+
+.controls { display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; padding: 8px 14px; border-bottom: 1px solid var(--line); }
+.controls.actions { padding-top: 6px; background: var(--bg); }
+.ctl { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.ctl label, .ctl-label { color: var(--muted); }
+.ctl label.check { display: flex; gap: 5px; align-items: center; color: var(--ink); }
+.ctl label.check.new { border: 1px solid var(--accent); border-radius: 6px; padding: 1px 7px 1px 5px; }
+.ctl label.check.new::after { content: "new"; font: 600 10px var(--f-mono); color: var(--accent); margin-left: 3px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.seg button { border: none; background: var(--surface); color: var(--ink); padding: 6px 11px; font: 13px var(--f-body); cursor: pointer; }
+.seg.small button { padding: 3px 9px; font-size: 12.5px; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+.seg button:disabled { color: var(--muted); cursor: default; }
+.between { transition: opacity .2s; }
+.between.off { opacity: .4; pointer-events: none; }
+
+.legend { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; color: var(--muted); padding: 6px 14px; }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+.lg { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--accent); }
+.lg-dep { border-top-style: dashed; }
+.lg-sig { border-top: 3px dotted var(--accent); }
+.lg-derived { height: 6px; border: 2px solid var(--derived); border-left: none; border-right: none; }
+.lg-bundle { border-top: 6px solid var(--muted); opacity: .5; border-radius: 3px; }
+.lg-frame { width: 22px; height: 14px; border: 1.5px solid hsl(210 55% var(--frame-l) / var(--frame-line)); border-radius: 4px;
+  background: hsl(210 60% 50% / var(--frame-fill)); }
+
+/* Graph */
+.stage { flex: 1; min-height: 420px; position: relative; border-top: 1px solid var(--line); background: var(--surface); }
+#graph { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; user-select: none; touch-action: none; }
+#graph.panning { cursor: grabbing; }
+.selnote { position: absolute; right: 12px; bottom: 10px; font: 12px var(--f-mono); color: var(--muted); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px 8px; pointer-events: none; }
+.fitbtn { position: absolute; right: 12px; top: 10px; }
+
+/* Boxes (fanout.js faces) */
+.box-bg { fill: var(--surface); stroke: var(--ink); stroke-width: 1.3; }
+.cls-head { fill: var(--row); }
+.node.k-scene .cls-head { fill: var(--scene); }
+.node.k-external .cls-head { fill: var(--ext); }
+.node.k-external .box-bg { stroke-dasharray: 5 3; }
+.cls-name { font: 600 13.5px var(--f-mono); fill: var(--ink); }
+.cls-sub { font: 11px var(--f-mono); fill: var(--muted); }
+.type-chip-text { font: 700 10px var(--f-mono); }
+.fan-tri { fill: var(--accent); }
+.node { cursor: default; }
+.node text, .frame text, .badge text, .bundle-badge text { pointer-events: none; }
+.badge rect { fill: var(--accent); stroke: var(--accent); } .badge text { font: 600 10.5px var(--f-body); fill: var(--accent-ink); }
+.dimmed { opacity: .22; }
+
+/* Lines (the .wire rules of viewer/style.css) */
+.wire { fill: none; stroke-width: 1.6; }
+.wire.t-accent { stroke: var(--accent); } .wire.t-derived { stroke: var(--derived); } .wire.t-hl { stroke: var(--hl); stroke-width: 2.6; }
+.wire.k-dependency { stroke-dasharray: 6 4; }
+.wire.k-loaded-by { stroke-dasharray: 10 3 2 3; }
+.wire.k-signal { stroke-dasharray: 0.1 6; stroke-linecap: round; stroke-width: 2.6; }
+.wire.outline { stroke-width: 4.8; }
+.wire.hollow { stroke: var(--surface); stroke-width: 1.8; stroke-dasharray: none; }
+.mark.t-accent { fill: var(--accent); } .mark.t-derived { fill: var(--derived); } .mark.t-hl { fill: var(--hl); } .mark.t-muted { fill: var(--muted); }
+#topLayer { pointer-events: none; }
+.wire-hit { fill: none; stroke: transparent; stroke-width: 9; cursor: help; }
+.lines.quiet .wire { opacity: .55; }
+
+/* Domain blocks (new) */
+.frame .body { fill: hsl(var(--h) var(--s) 50% / var(--frame-fill)); stroke: hsl(var(--h) calc(var(--s) - 10%) var(--frame-l) / var(--frame-line)); stroke-width: 1.5; cursor: move; }
+.frame.unsorted .body { stroke-dasharray: 6 4; }
+.frame .head { fill: hsl(var(--h) var(--s) 50% / var(--frame-head)); cursor: pointer; }
+.frame .head:hover { fill: hsl(var(--h) var(--s) 50% / calc(var(--frame-head) + .08)); }
+.frame .title { font: 700 13.5px var(--f-display); fill: var(--ink); }
+.frame .count { font: 600 11px var(--f-mono); fill: var(--muted); }
+.frame .tri { fill: hsl(var(--h) calc(var(--s) - 10%) var(--frame-l)); }
+.frame.card .body { fill: var(--surface); stroke-width: 2; }
+.frame.card .sub { font: 11px var(--f-mono); fill: var(--muted); }
+.bundle { fill: none; stroke: var(--muted); stroke-linecap: round; opacity: .42; }
+.bundle.hot { stroke: var(--hl); opacity: .3; }
+.bundle-hit { fill: none; stroke: transparent; stroke-width: 16; cursor: help; }
+.bundle-badge rect { fill: var(--surface); stroke: var(--muted); stroke-width: 1; cursor: help; }
+.bundle-badge text { font: 600 11px var(--f-mono); fill: var(--ink); }
+.bundle-badge.hot rect { stroke: var(--hl); stroke-width: 1.6; }
+.merge-badge rect { fill: var(--surface); stroke: var(--accent); }
+.merge-badge text { font: 600 10px var(--f-mono); fill: var(--accent); }
+
+/* Tooltip (as .help-tip in viewer/style.css) */
+.tip { position: fixed; z-index: 10; max-width: 340px; padding: 7px 10px; font: 12.5px/1.45 var(--f-body); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 2px 8px #0003; pointer-events: none; }
+.tip b { font: 600 12.5px var(--f-mono); }
+.tip .meta { color: var(--muted); font: 11px var(--f-mono); margin-top: 3px; }
+.tip ul { margin: 4px 0 0; padding: 0; list-style: none; font: 11.5px/1.5 var(--f-mono); }
+.tip li span { color: var(--muted); }
+@media (max-width: 700px) { .controls { gap: 8px 14px; } }
+</style>
+</head>
+<body>
+<header class="top">
+  <h1>Coderstanding</h1>
+  <span class="appname">Widgets</span>
+  <div class="tabs" role="tablist"><button role="tab" aria-selected="true">Graph</button><button role="tab" aria-selected="false" disabled>Stack &amp; deps</button><button role="tab" aria-selected="false" disabled>Tours</button></div>
+  <span class="grow"></span>
+  <button class="btn small" id="themeBtn" type="button">Theme: auto</button>
+</header>
+<div class="mocknote">
+  <span class="tag">MOCK-UP</span>
+  <span><b>Domain blocks at level 1</b>, with Widgets's real level-1 graph (35 classes, 288 lines, their domains and hints). Nothing is saved.</span>
+  <span>Try: tick <b>Domains</b> · click a block's header to fold it · drag a block · hover a bundle or a class.</span>
+</div>
+<div class="controls">
+  <div class="ctl"><span class="ctl-label">View</span>
+    <div class="seg" role="group" aria-label="View"><button aria-pressed="true">All types</button><button aria-pressed="false" disabled>Concrete</button></div>
+  </div>
+  <div class="ctl" role="group" aria-label="Show types"><span class="ctl-label">Show</span>
+    <label class="check"><input type="checkbox" checked disabled> Outside code</label>
+    <label class="check"><input type="checkbox" checked disabled> Communications</label>
+    <label class="check"><input type="checkbox" disabled> Tests</label>
+    <label class="check new" title="Sort every class into one framed block per domain"><input type="checkbox" id="domainsBox"> Domains</label>
+  </div>
+  <div class="ctl between off" id="betweenCtl"><span class="ctl-label">Between blocks</span>
+    <div class="seg small" role="group" aria-label="Lines between blocks">
+      <button id="bundledBtn" aria-pressed="true" title="One line per pair of blocks, with a count">Bundled</button>
+      <button id="everyBtn" aria-pressed="false" title="Every line between classes in different blocks">Every line</button>
+    </div>
+  </div>
+</div>
+<div class="controls actions">
+  <div class="ctl"><span class="ctl-label">Layout</span>
+    <div class="seg" role="group" aria-label="Layout mode"><button aria-pressed="true">View</button><button aria-pressed="false" disabled title="Not in this mock-up">Edit layout</button></div>
+  </div>
+  <span class="ctl muted" style="color:var(--muted);font-size:12.5px">View mode: dragged blocks are not saved and snap back when Domains is switched.</span>
+</div>
+<div class="legend" aria-label="Legend">
+  <span><i class="lg"></i>association</span>
+  <span><i class="lg lg-dep"></i>dependency</span>
+  <span><i class="lg lg-sig"></i>signal</span>
+  <span><i class="lg lg-derived"></i>through hidden classes</span>
+  <span><i class="lg-frame"></i>domain block</span>
+  <span><i class="lg lg-bundle"></i>lines between two blocks (bundled, with count)</span>
+</div>
+<div class="stage">
+  <svg id="graph" role="img" aria-label="Widgets level 1 graph">
+    <g id="frameLayer"></g><g id="lineLayer" class="lines"></g><g id="headLayer"></g><g id="nodeLayer"></g><g id="cardLayer"></g><g id="topLayer"></g>
+  </svg>
+  <button class="btn small fitbtn" id="fitBtn" type="button" title="Fit everything in view">Fit</button>
+  <div class="selnote" id="status"></div>
+</div>
+<div class="tip" id="tip" hidden></div>
+
+<script>
+"use strict";
+// Widgets level 1, from /api/view?app=Widgets&level=1 (slimmed). x/y = the real viewer's
+// layered layout (viewer/layout.js); inner = the same layout run on each domain alone (centre
+// inside its block); blocks = block order, from the layered layout of the domain graph.
+const DATA = {"nodes":[{"id":"Alerts","lines":["Alerts"],"kind":"class","domain":"HUD","hint":"Works out look-over-there alerts for one player from what they can see","file":"src/ui/alerts.gd","type":".gd","sub":"51 functions · 40 fields","entry":false,"w":237,"h":46,"inner":[119,72],"x":119,"y":345},{"id":"Armies","lines":["Armies"],"kind":"class","domain":"Content","hint":"Every army a player can pick, built-in or their own, and what it costs","file":"src/content/armies.gd","type":".gd","sub":"31 functions · 4 fields","entry":false,"w":230,"h":46,"inner":[115,23],"x":1687,"y":58},{"id":"ArmyPanel","lines":["ArmyPanel"],"kind":"class","domain":"Menus","hint":"The Army Builder: design your army on the field of a practice match, then save it","file":"src/ui/army_panel.gd","type":".gd","sub":"53 functions · 51 fields","entry":false,"w":237,"h":46,"inner":[119,72],"x":1687,"y":403},{"id":"Blueprints","lines":["Blueprints"],"kind":"class","domain":"Simulation","hint":"Decides what may be built in a match, and by whom: mode rules, bans, unlocked Blueprints","file":"src/sim/blueprints.gd","type":".gd","sub":"22 functions · 7 fields","entry":false,"w":230,"h":46,"inner":[115,72],"x":1687,"y":288},{"id":"CampaignRun","lines":["CampaignRun"],"kind":"class","domain":"Campaign","hint":"One campaign run: its map, where players are, and what each has earned","file":"src/campaign/campaign_run.gd","type":".gd","sub":"34 functions · 17 fields","entry":false,"w":237,"h":46,"inner":[506,23],"x":1300,"y":173},{"id":"DebugConsole","lines":["DebugConsole"],"kind":"class","domain":"Dev Tools","hint":"Drop-down developer console with technical numbers and typed commands","file":"src/ui/debug_console.gd","type":".gd","sub":"34 functions · 21 fields","entry":false,"w":237,"h":46,"inner":[119,23],"x":2855,"y":345},{"id":"Defs","lines":["Defs"],"kind":"class","domain":"Simulation","hint":"The game's data book: every chassis, module, device, game mode and status, in one place","file":"src/sim/defs.gd","type":".gd","sub":"109 functions · 89 fields","entry":false,"w":244,"h":46,"inner":[502,72],"x":509,"y":173},{"id":"DevArgs","lines":["DevArgs"],"kind":"class","domain":"Dev Tools","hint":"Reads developer command-line options used for tests, bots, replays and speed-ups","file":"src/dev/dev_args.gd","type":".gd","sub":"4 functions · 3 fields","entry":false,"w":224,"h":46,"inner":[499,23],"x":2077,"y":173},{"id":"EditorPart","lines":["EditorPart"],"kind":"class","domain":"Map Editor","hint":"Base of every map-editor part: gives each tool access to the editor, map and 3D view","file":"src/ui/editor/editor_part.gd","type":".gd","sub":"4 functions · 4 fields","entry":false,"w":224,"h":46,"inner":[112,72],"x":119,"y":230},{"id":"Fixed","lines":["Fixed"],"kind":"class","domain":"Simulation","hint":"Whole-number maths for the simulation, so every computer gets exactly the same results","file":"src/sim/fixed.gd","type":".gd","sub":"15 functions · 5 fields","entry":false,"w":230,"h":46,"inner":[899,23],"x":509,"y":288},{"id":"Hud","lines":["Hud"],"kind":"class","domain":"HUD","hint":"The on-screen panels during a match: resources, orders, selection, minimap","file":"src/ui/hud.gd","type":".gd","sub":"39 functions · 84 fields","entry":false,"w":237,"h":46,"inner":[1273,23],"x":2855,"y":460},{"id":"HudOverlay","lines":["HudOverlay"],"kind":"class","domain":"HUD","hint":"Draws bars, brackets, orders and range rings over the 3D battlefield","file":"src/ui/hud_overlay.gd","type":".gd","sub":"58 functions · 56 fields","entry":false,"w":237,"h":46,"inner":[886,23],"x":2077,"y":403},{"id":"InfoData","lines":["InfoData"],"kind":"class","domain":"HUD","hint":"Prepares the text and numbers the info panel shows for a thing","file":"src/ui/info/info_data.gd","type":".gd","sub":"20 functions · 5 fields","entry":false,"w":230,"h":46,"inner":[886,121],"x":1687,"y":518},{"id":"ItemTooltip","lines":["ItemTooltip"],"kind":"class","domain":"HUD","hint":"Fills item tooltip sentences with the item real numbers","file":"src/ui/item_tooltip.gd","type":".gd","sub":"16 functions · 9 fields","entry":false,"w":230,"h":46,"inner":[502,72],"x":509,"y":518},{"id":"MapData","lines":["MapData"],"kind":"class","domain":"Simulation","hint":"A map as the game sees it: tile heights, ramps, bridges, blocked cells, starts, routes","file":"src/sim/map_data.gd","type":".gd","sub":"137 functions · 51 fields","entry":false,"w":244,"h":46,"inner":[1296,23],"x":509,"y":58},{"id":"MapEditor","lines":["MapEditor"],"kind":"class","domain":"Map Editor","hint":"The map maker screen: shape terrain, place things, set triggers and waves, save","file":"src/ui/map_editor.gd","type":".gd","sub":"20 functions · 88 fields","entry":false,"w":237,"h":46,"inner":[493,23],"x":906,"y":230},{"id":"MapEditorView","lines":["MapEditorView"],"kind":"class","domain":"Map Editor","hint":"The editor's 3D view: terrain, placed objects, ghosts, overlays and camera","file":"src/ui/map_editor_view.gd","type":".gd","sub":"44 functions · 30 fields","entry":false,"w":237,"h":46,"inner":[493,121],"x":906,"y":345},{"id":"Maps","lines":["Maps"],"kind":"class","domain":"Maps","hint":"Finds and lists every playable map, built-in, player-made or downloaded","file":"src/maps/maps.gd","type":".gd","sub":"19 functions · 12 fields","entry":false,"w":237,"h":46,"inner":[119,23],"x":1300,"y":58},{"id":"MatchScene","lines":["MatchScene"],"kind":"class","domain":"Match Screen","hint":"The 3D match itself: owns the game clock and draws the battlefield and units","file":"src/game/match_scene.gd","type":".gd","sub":"60 functions · 99 fields","entry":false,"w":237,"h":46,"inner":[119,23],"x":2077,"y":288},{"id":"Pal","lines":["Pal"],"kind":"class","domain":"UI Kit","hint":"The one list of interface colours: panels, accent, good/bad, unit category colours","file":"src/ui/kit/pal.gd","type":".gd","sub":"0 functions · 20 fields","entry":false,"w":230,"h":46,"inner":[115,23],"x":1300,"y":518},{"id":"Projectile","lines":["Projectile"],"kind":"class","domain":"Content","hint":"The scene root for a weapon's shot: how it flies, lands and sounds","file":"src/content/projectile.gd","type":".gd","sub":"8 functions · 16 fields","entry":false,"w":230,"h":46,"inner":[115,121],"x":906,"y":460},{"id":"RadialMenu","lines":["RadialMenu"],"kind":"class","domain":"HUD","hint":"Ring menu for fitting modules onto an unfinished chassis","file":"src/ui/radial_menu.gd","type":".gd","sub":"45 functions · 44 fields","entry":false,"w":237,"h":46,"inner":[1273,121],"x":2468,"y":403},{"id":"SimUnit","lines":["SimUnit"],"kind":"class","domain":"Simulation","hint":"One unit's state in the game: position, health, modules, current order, statuses","file":"src/sim/sim_unit.gd","type":".gd","sub":"37 functions · 151 fields","entry":false,"w":244,"h":46,"inner":[1296,121],"x":509,"y":403},{"id":"Simulation","lines":["Simulation"],"kind":"class","domain":"Simulation","hint":"The real game: every unit, crate and shell, moved forward one tick (1/20 s) at a time","file":"src/sim/simulation.gd","type":".gd","sub":"353 functions · 121 fields","entry":false,"w":250,"h":46,"inner":[899,121],"x":906,"y":115},{"id":"UiKit","lines":["UiKit"],"kind":"class","domain":"UI Kit","hint":"Shared helpers every screen and panel uses: icons, clearing lists, boxes, player colours","file":"src/ui/kit/ui_kit.gd","type":".gd","sub":"10 functions · 4 fields","entry":false,"w":230,"h":46,"inner":[115,121],"x":1300,"y":288},{"id":"UiTheme","lines":["UiTheme"],"kind":"class","domain":"UI Kit","hint":"Applies the player's font, text size and spacing choices to every screen live","file":"src/ui/ui_theme.gd","type":".gd","sub":"10 functions · 18 fields","entry":false,"w":237,"h":46,"inner":[499,121],"x":1300,"y":403},{"id":"UnitView","lines":["UnitView"],"kind":"class","domain":"Match Screen","hint":"Draws one unit in 3D: its body, weapons, animation, colour and silhouette","file":"src/game/unit_view.gd","type":".gd","sub":"33 functions · 60 fields","entry":false,"w":237,"h":46,"inner":[506,23],"x":2077,"y":518},{"id":"res://src/ui/campaign_map_screen.gd","lines":["campaign_map_screen.gd"],"kind":"script","domain":"Campaign","hint":"The campaign run map: choose the next mission or event, see your army and rewards","file":"src/ui/campaign_map_screen.gd","type":".gd","sub":"31 functions · 16 fields","entry":false,"w":237,"h":46,"inner":[119,23],"x":2468,"y":288},{"id":"res://src/ui/lobby.gd","lines":["lobby.gd"],"kind":"script","domain":"Menus","hint":"The game lobby: map, mode, teams, colours and armies before a match starts","file":"src/ui/lobby.gd","type":".gd","sub":"50 functions · 45 fields","entry":false,"w":237,"h":46,"inner":[506,121],"x":2468,"y":173},{"id":"res://src/ui/main_menu.gd","lines":["main_menu.gd"],"kind":"script","domain":"Menus","hint":"The main menu: Play, Make, Learn, Options, Online, profile and last-save cards","file":"src/ui/main_menu.gd","type":".gd","sub":"22 functions · 14 fields","entry":true,"w":237,"h":46,"inner":[893,23],"x":2855,"y":115},{"id":"res://scenes/main_menu.tscn","lines":["main_menu.tscn"],"kind":"scene","domain":"Menus","hint":"","file":"scenes/main_menu.tscn","type":".tscn","sub":"0 functions · 0 fields","entry":true,"w":237,"h":46,"inner":[506,23],"x":1687,"y":173},{"id":"res://src/net/net.gd","lines":["net.gd"],"kind":"script","domain":"Network","hint":"The Net autoload: lobby, joining and hosting, match start and passing orders between players","file":"src/net/net.gd","type":".gd","sub":"104 functions · 49 fields","entry":true,"w":244,"h":46,"inner":[122,23],"x":2077,"y":58},{"id":"res://src/ui/settings.gd","lines":["settings.gd"],"kind":"script","domain":"Menus","hint":"The player's saved options: volumes, window, text, key bindings","file":"src/ui/settings.gd","type":".gd","sub":"33 functions · 37 fields","entry":true,"w":237,"h":46,"inner":[893,121],"x":2855,"y":230},{"id":"res://src/ui/ui_sounds.gd","lines":["ui_sounds.gd"],"kind":"script","domain":"UI Kit","hint":"Plays the interface sounds: menus, orders, errors, chat","file":"src/ui/ui_sounds.gd","type":".gd","sub":"9 functions · 9 fields","entry":true,"w":224,"h":46,"inner":[115,219],"x":2468,"y":518},{"id":"comm:res://src/net/net.gd@ENetMultiplayerPeer","lines":["ENetMultiplayerPeer","(listens and connects)"],"kind":"external","domain":null,"hint":"","file":"","type":"","sub":"outside code","entry":false,"w":225,"h":63,"inner":[113,32],"x":2468,"y":58}],"edges":[{"from":"Alerts","to":"Defs","kind":"dependency","direct":true,"calls":7},{"from":"Alerts","to":"Fixed","kind":"dependency","direct":true,"calls":40},{"from":"Alerts","to":"ItemTooltip","kind":"dependency","direct":false,"calls":4},{"from":"Alerts","to":"MapData","kind":"dependency","direct":true,"calls":6},{"from":"Alerts","to":"Projectile","kind":"association","direct":false,"calls":6},{"from":"Alerts","to":"SimUnit","kind":"dependency","direct":true,"calls":31},{"from":"Alerts","to":"Simulation","kind":"dependency","direct":true,"calls":80},{"from":"Armies","to":"Blueprints","kind":"dependency","direct":true,"calls":1},{"from":"Armies","to":"Defs","kind":"dependency","direct":true,"calls":15},{"from":"Armies","to":"Simulation","kind":"dependency","direct":true,"calls":1},{"from":"ArmyPanel","to":"Armies","kind":"dependency","direct":true,"calls":41},{"from":"ArmyPanel","to":"Blueprints","kind":"dependency","direct":true,"calls":14},{"from":"ArmyPanel","to":"Defs","kind":"dependency","direct":true,"calls":24},{"from":"ArmyPanel","to":"DevArgs","kind":"dependency","direct":true,"calls":2},{"from":"ArmyPanel","to":"Fixed","kind":"dependency","direct":true,"calls":2},{"from":"ArmyPanel","to":"Hud","kind":"dependency","direct":false,"calls":3},{"from":"ArmyPanel","to":"HudOverlay","kind":"dependency","direct":false,"calls":3},{"from":"ArmyPanel","to":"ItemTooltip","kind":"dependency","direct":true,"calls":3},{"from":"ArmyPanel","to":"MapData","kind":"dependency","direct":false,"calls":10},{"from":"ArmyPanel","to":"MapEditor","kind":"dependency","direct":false,"calls":3},{"from":"ArmyPanel","to":"MapEditorView","kind":"dependency","direct":false,"calls":3},{"from":"ArmyPanel","to":"MatchScene","kind":"association","direct":true,"calls":6},{"from":"ArmyPanel","to":"Pal","kind":"dependency","direct":true,"calls":4},{"from":"ArmyPanel","to":"SimUnit","kind":"dependency","direct":true,"calls":3},{"from":"ArmyPanel","to":"Simulation","kind":"dependency","direct":false,"calls":2},{"from":"ArmyPanel","to":"UiKit","kind":"dependency","direct":true,"calls":8},{"from":"ArmyPanel","to":"res://scenes/main_menu.tscn","kind":"dependency","direct":false,"calls":3},{"from":"ArmyPanel","to":"res://src/net/net.gd","kind":"dependency","direct":true,"calls":15},{"from":"ArmyPanel","to":"res://src/ui/campaign_map_screen.gd","kind":"dependency","direct":false,"calls":3},{"from":"ArmyPanel","to":"res://src/ui/lobby.gd","kind":"dependency","direct":false,"calls":2},{"from":"Blueprints","to":"Defs","kind":"dependency","direct":true,"calls":23},{"from":"CampaignRun","to":"Armies","kind":"association","direct":true,"calls":1},{"from":"CampaignRun","to":"Blueprints","kind":"dependency","direct":true,"calls":25},{"from":"CampaignRun","to":"Defs","kind":"dependency","direct":true,"calls":41},{"from":"CampaignRun","to":"DevArgs","kind":"dependency","direct":false,"calls":1},{"from":"CampaignRun","to":"MatchScene","kind":"dependency","direct":false,"calls":1},{"from":"CampaignRun","to":"Simulation","kind":"dependency","direct":true,"calls":3},{"from":"DebugConsole","to":"Blueprints","kind":"dependency","direct":false,"calls":6},{"from":"DebugConsole","to":"CampaignRun","kind":"dependency","direct":false,"calls":2},{"from":"DebugConsole","to":"Defs","kind":"dependency","direct":true,"calls":24},{"from":"DebugConsole","to":"DevArgs","kind":"dependency","direct":false,"calls":1},{"from":"DebugConsole","to":"Fixed","kind":"dependency","direct":false,"calls":8},{"from":"DebugConsole","to":"Hud","kind":"association","direct":false,"calls":4},{"from":"DebugConsole","to":"HudOverlay","kind":"association","direct":false,"calls":5},{"from":"DebugConsole","to":"InfoData","kind":"dependency","direct":false,"calls":5},{"from":"DebugConsole","to":"MapEditor","kind":"association","direct":false,"calls":4},{"from":"DebugConsole","to":"MapEditorView","kind":"association","direct":false,"calls":4},{"from":"DebugConsole","to":"MatchScene","kind":"association","direct":true,"calls":35},{"from":"DebugConsole","to":"SimUnit","kind":"dependency","direct":true,"calls":0},{"from":"DebugConsole","to":"Simulation","kind":"dependency","direct":true,"calls":8},{"from":"DebugConsole","to":"res://scenes/main_menu.tscn","kind":"association","direct":false,"calls":4},{"from":"DebugConsole","to":"res://src/net/net.gd","kind":"dependency","direct":true,"calls":9},{"from":"DebugConsole","to":"res://src/ui/campaign_map_screen.gd","kind":"association","direct":false,"calls":4},{"from":"DebugConsole","to":"res://src/ui/settings.gd","kind":"dependency","direct":true,"calls":1},{"from":"Defs","to":"Alerts","kind":"dependency","direct":false,"calls":0},{"from":"Defs","to":"Armies","kind":"association","direct":false,"calls":0},{"from":"Defs","to":"Blueprints","kind":"dependency","direct":true,"calls":5},{"from":"Defs","to":"Fixed","kind":"dependency","direct":false,"calls":2},{"from":"Defs","to":"InfoData","kind":"dependency","direct":false,"calls":2},{"from":"Defs","to":"ItemTooltip","kind":"dependency","direct":false,"calls":12},{"from":"Defs","to":"Projectile","kind":"association","direct":true,"calls":0},{"from":"Defs","to":"Simulation","kind":"dependency","direct":false,"calls":4},{"from":"Defs","to":"UnitView","kind":"association","direct":false,"calls":1},{"from":"EditorPart","to":"MapData","kind":"association","direct":true,"calls":0},{"from":"EditorPart","to":"MapEditor","kind":"association","direct":true,"calls":2},{"from":"EditorPart","to":"MapEditorView","kind":"association","direct":true,"calls":1},{"from":"Hud","to":"ArmyPanel","kind":"dependency","direct":true,"calls":3},{"from":"Hud","to":"Blueprints","kind":"dependency","direct":false,"calls":1},{"from":"Hud","to":"DebugConsole","kind":"composition","direct":true,"calls":6},{"from":"Hud","to":"Defs","kind":"dependency","direct":true,"calls":34},{"from":"Hud","to":"DevArgs","kind":"dependency","direct":true,"calls":1},{"from":"Hud","to":"HudOverlay","kind":"composition","direct":true,"calls":10},{"from":"Hud","to":"InfoData","kind":"dependency","direct":false,"calls":2},{"from":"Hud","to":"ItemTooltip","kind":"dependency","direct":false,"calls":8},{"from":"Hud","to":"MapEditor","kind":"composition","direct":false,"calls":15},{"from":"Hud","to":"MapEditorView","kind":"composition","direct":false,"calls":15},{"from":"Hud","to":"MatchScene","kind":"association","direct":true,"calls":57},{"from":"Hud","to":"Pal","kind":"dependency","direct":false,"calls":8},{"from":"Hud","to":"RadialMenu","kind":"dependency","direct":true,"calls":1},{"from":"Hud","to":"SimUnit","kind":"dependency","direct":true,"calls":73},{"from":"Hud","to":"Simulation","kind":"dependency","direct":true,"calls":26},{"from":"Hud","to":"UiKit","kind":"dependency","direct":true,"calls":5},{"from":"Hud","to":"UiTheme","kind":"dependency","direct":true,"calls":2},{"from":"Hud","to":"UnitView","kind":"dependency","direct":false,"calls":5},{"from":"Hud","to":"res://scenes/main_menu.tscn","kind":"composition","direct":false,"calls":16},{"from":"Hud","to":"res://src/net/net.gd","kind":"dependency","direct":true,"calls":1},{"from":"Hud","to":"res://src/ui/campaign_map_screen.gd","kind":"composition","direct":false,"calls":10},{"from":"Hud","to":"res://src/ui/lobby.gd","kind":"association","direct":false,"calls":10},{"from":"Hud","to":"res://src/ui/settings.gd","kind":"dependency","direct":true,"calls":7},{"from":"HudOverlay","to":"Alerts","kind":"dependency","direct":false,"calls":28},{"from":"HudOverlay","to":"ArmyPanel","kind":"dependency","direct":false,"calls":2},{"from":"HudOverlay","to":"Blueprints","kind":"dependency","direct":false,"calls":2},{"from":"HudOverlay","to":"Defs","kind":"dependency","direct":true,"calls":21},{"from":"HudOverlay","to":"DevArgs","kind":"dependency","direct":true,"calls":4},{"from":"HudOverlay","to":"Fixed","kind":"dependency","direct":true,"calls":19},{"from":"HudOverlay","to":"Hud","kind":"dependency","direct":false,"calls":5},{"from":"HudOverlay","to":"InfoData","kind":"dependency","direct":true,"calls":28},{"from":"HudOverlay","to":"ItemTooltip","kind":"dependency","direct":false,"calls":1},{"from":"HudOverlay","to":"MapEditor","kind":"dependency","direct":false,"calls":2},{"from":"HudOverlay","to":"MapEditorView","kind":"dependency","direct":false,"calls":2},{"from":"HudOverlay","to":"MatchScene","kind":"association","direct":true,"calls":109},{"from":"HudOverlay","to":"Pal","kind":"dependency","direct":true,"calls":10},{"from":"HudOverlay","to":"SimUnit","kind":"dependency","direct":true,"calls":92},{"from":"HudOverlay","to":"Simulation","kind":"association","direct":true,"calls":39},{"from":"HudOverlay","to":"UiTheme","kind":"dependency","direct":true,"calls":2},{"from":"HudOverlay","to":"UnitView","kind":"dependency","direct":true,"calls":35},{"from":"HudOverlay","to":"res://scenes/main_menu.tscn","kind":"dependency","direct":false,"calls":2},{"from":"HudOverlay","to":"res://src/ui/campaign_map_screen.gd","kind":"dependency","direct":false,"calls":2},{"from":"HudOverlay","to":"res://src/ui/settings.gd","kind":"dependency","direct":true,"calls":7},{"from":"InfoData","to":"ArmyPanel","kind":"dependency","direct":false,"calls":2},{"from":"InfoData","to":"Blueprints","kind":"dependency","direct":false,"calls":3},{"from":"InfoData","to":"Defs","kind":"dependency","direct":true,"calls":68},{"from":"InfoData","to":"Fixed","kind":"dependency","direct":true,"calls":1},{"from":"InfoData","to":"Hud","kind":"dependency","direct":true,"calls":4},{"from":"InfoData","to":"HudOverlay","kind":"dependency","direct":false,"calls":29},{"from":"InfoData","to":"ItemTooltip","kind":"dependency","direct":true,"calls":15},{"from":"InfoData","to":"MapEditor","kind":"dependency","direct":false,"calls":3},{"from":"InfoData","to":"MapEditorView","kind":"dependency","direct":false,"calls":3},{"from":"InfoData","to":"MatchScene","kind":"dependency","direct":true,"calls":7},{"from":"InfoData","to":"Pal","kind":"dependency","direct":true,"calls":8},{"from":"InfoData","to":"RadialMenu","kind":"dependency","direct":true,"calls":2},{"from":"InfoData","to":"SimUnit","kind":"dependency","direct":true,"calls":38},{"from":"InfoData","to":"Simulation","kind":"dependency","direct":true,"calls":12},{"from":"InfoData","to":"UiKit","kind":"dependency","direct":true,"calls":4},{"from":"InfoData","to":"res://scenes/main_menu.tscn","kind":"dependency","direct":false,"calls":3},{"from":"InfoData","to":"res://src/ui/campaign_map_screen.gd","kind":"dependency","direct":false,"calls":3},{"from":"ItemTooltip","to":"HudOverlay","kind":"dependency","direct":false,"calls":1},{"from":"ItemTooltip","to":"InfoData","kind":"dependency","direct":false,"calls":1},{"from":"ItemTooltip","to":"Simulation","kind":"dependency","direct":true,"calls":3},{"from":"MapData","to":"Defs","kind":"dependency","direct":true,"calls":34},{"from":"MapData","to":"Fixed","kind":"dependency","direct":true,"calls":10},{"from":"MapData","to":"Simulation","kind":"dependency","direct":true,"calls":19},{"from":"MapEditor","to":"Alerts","kind":"dependency","direct":false,"calls":1},{"from":"MapEditor","to":"Armies","kind":"dependency","direct":false,"calls":2},{"from":"MapEditor","to":"ArmyPanel","kind":"dependency","direct":false,"calls":1},{"from":"MapEditor","to":"Blueprints","kind":"dependency","direct":false,"calls":2},{"from":"MapEditor","to":"Defs","kind":"dependency","direct":true,"calls":120},{"from":"MapEditor","to":"DevArgs","kind":"dependency","direct":true,"calls":31},{"from":"MapEditor","to":"Fixed","kind":"dependency","direct":false,"calls":20},{"from":"MapEditor","to":"MapData","kind":"association","direct":true,"calls":151},{"from":"MapEditor","to":"MapEditorView","kind":"signal","direct":true,"calls":32},{"from":"MapEditor","to":"Maps","kind":"dependency","direct":true,"calls":31},{"from":"MapEditor","to":"MatchScene","kind":"dependency","direct":false,"calls":5},{"from":"MapEditor","to":"Pal","kind":"dependency","direct":true,"calls":9},{"from":"MapEditor","to":"Simulation","kind":"dependency","direct":false,"calls":2},{"from":"MapEditor","to":"UiKit","kind":"dependency","direct":false,"calls":5},{"from":"MapEditor","to":"UiTheme","kind":"dependency","direct":true,"calls":4},{"from":"MapEditor","to":"res://scenes/main_menu.tscn","kind":"signal","direct":false,"calls":25},{"from":"MapEditor","to":"res://src/net/net.gd","kind":"dependency","direct":false,"calls":6},{"from":"MapEditorView","to":"Defs","kind":"dependency","direct":true,"calls":19},{"from":"MapEditorView","to":"Fixed","kind":"dependency","direct":true,"calls":8},{"from":"MapEditorView","to":"MapData","kind":"association","direct":true,"calls":55},{"from":"MapEditorView","to":"Maps","kind":"dependency","direct":false,"calls":6},{"from":"MapEditorView","to":"MatchScene","kind":"composition","direct":false,"calls":9},{"from":"MapEditorView","to":"SimUnit","kind":"dependency","direct":true,"calls":6},{"from":"MapEditorView","to":"UiKit","kind":"dependency","direct":true,"calls":2},{"from":"MapEditorView","to":"UnitView","kind":"dependency","direct":true,"calls":3},{"from":"Maps","to":"Armies","kind":"dependency","direct":true,"calls":3},{"from":"Maps","to":"Defs","kind":"dependency","direct":true,"calls":5},{"from":"Maps","to":"Fixed","kind":"dependency","direct":false,"calls":2},{"from":"Maps","to":"MapData","kind":"dependency","direct":false,"calls":29},{"from":"Maps","to":"MatchScene","kind":"dependency","direct":false,"calls":4},{"from":"MatchScene","to":"Alerts","kind":"composition","direct":true,"calls":6},{"from":"MatchScene","to":"Armies","kind":"dependency","direct":false,"calls":1},{"from":"MatchScene","to":"ArmyPanel","kind":"dependency","direct":false,"calls":1},{"from":"MatchScene","to":"DebugConsole","kind":"composition","direct":false,"calls":2},{"from":"MatchScene","to":"Defs","kind":"dependency","direct":true,"calls":49},{"from":"MatchScene","to":"DevArgs","kind":"dependency","direct":true,"calls":105},{"from":"MatchScene","to":"Fixed","kind":"dependency","direct":true,"calls":146},{"from":"MatchScene","to":"Hud","kind":"association","direct":true,"calls":16},{"from":"MatchScene","to":"HudOverlay","kind":"dependency","direct":false,"calls":28},{"from":"MatchScene","to":"InfoData","kind":"dependency","direct":false,"calls":20},{"from":"MatchScene","to":"MapData","kind":"association","direct":false,"calls":79},{"from":"MatchScene","to":"MapEditor","kind":"dependency","direct":false,"calls":5},{"from":"MatchScene","to":"MapEditorView","kind":"dependency","direct":false,"calls":4},{"from":"MatchScene","to":"Maps","kind":"dependency","direct":true,"calls":3},{"from":"MatchScene","to":"Projectile","kind":"signal","direct":true,"calls":29},{"from":"MatchScene","to":"SimUnit","kind":"dependency","direct":true,"calls":92},{"from":"MatchScene","to":"Simulation","kind":"composition","direct":true,"calls":97},{"from":"MatchScene","to":"UiKit","kind":"dependency","direct":false,"calls":2},{"from":"MatchScene","to":"UnitView","kind":"dependency","direct":true,"calls":72},{"from":"MatchScene","to":"res://scenes/main_menu.tscn","kind":"dependency","direct":false,"calls":3},{"from":"MatchScene","to":"res://src/net/net.gd","kind":"signal","direct":true,"calls":57},{"from":"MatchScene","to":"res://src/ui/campaign_map_screen.gd","kind":"dependency","direct":false,"calls":9},{"from":"MatchScene","to":"res://src/ui/settings.gd","kind":"signal","direct":true,"calls":9},{"from":"MatchScene","to":"res://src/ui/ui_sounds.gd","kind":"dependency","direct":true,"calls":16},{"from":"Pal","to":"Defs","kind":"dependency","direct":true,"calls":1},{"from":"RadialMenu","to":"Blueprints","kind":"dependency","direct":true,"calls":3},{"from":"RadialMenu","to":"Defs","kind":"dependency","direct":true,"calls":26},{"from":"RadialMenu","to":"DevArgs","kind":"dependency","direct":true,"calls":3},{"from":"RadialMenu","to":"Hud","kind":"dependency","direct":false,"calls":4},{"from":"RadialMenu","to":"HudOverlay","kind":"dependency","direct":false,"calls":4},{"from":"RadialMenu","to":"InfoData","kind":"dependency","direct":true,"calls":6},{"from":"RadialMenu","to":"ItemTooltip","kind":"dependency","direct":true,"calls":2},{"from":"RadialMenu","to":"MapEditor","kind":"dependency","direct":false,"calls":4},{"from":"RadialMenu","to":"MapEditorView","kind":"dependency","direct":false,"calls":4},{"from":"RadialMenu","to":"MatchScene","kind":"association","direct":true,"calls":15},{"from":"RadialMenu","to":"Pal","kind":"dependency","direct":true,"calls":9},{"from":"RadialMenu","to":"SimUnit","kind":"dependency","direct":true,"calls":11},{"from":"RadialMenu","to":"Simulation","kind":"dependency","direct":true,"calls":3},{"from":"RadialMenu","to":"UiKit","kind":"dependency","direct":true,"calls":9},{"from":"RadialMenu","to":"UiTheme","kind":"dependency","direct":true,"calls":13},{"from":"RadialMenu","to":"UnitView","kind":"dependency","direct":true,"calls":1},{"from":"RadialMenu","to":"res://scenes/main_menu.tscn","kind":"dependency","direct":false,"calls":4},{"from":"RadialMenu","to":"res://src/ui/campaign_map_screen.gd","kind":"dependency","direct":false,"calls":4},{"from":"RadialMenu","to":"res://src/ui/ui_sounds.gd","kind":"dependency","direct":true,"calls":8},{"from":"SimUnit","to":"Defs","kind":"dependency","direct":true,"calls":12},{"from":"Simulation","to":"Blueprints","kind":"dependency","direct":true,"calls":58},{"from":"Simulation","to":"CampaignRun","kind":"dependency","direct":false,"calls":1},{"from":"Simulation","to":"Defs","kind":"dependency","direct":true,"calls":182},{"from":"Simulation","to":"Fixed","kind":"dependency","direct":true,"calls":151},{"from":"Simulation","to":"MapData","kind":"composition","direct":true,"calls":384},{"from":"Simulation","to":"Maps","kind":"dependency","direct":true,"calls":7},{"from":"Simulation","to":"MatchScene","kind":"association","direct":false,"calls":3},{"from":"Simulation","to":"SimUnit","kind":"association","direct":true,"calls":1944},{"from":"UiKit","to":"Defs","kind":"dependency","direct":true,"calls":4},{"from":"UiKit","to":"UiTheme","kind":"dependency","direct":true,"calls":1},{"from":"UnitView","to":"Defs","kind":"dependency","direct":true,"calls":7},{"from":"UnitView","to":"Fixed","kind":"dependency","direct":true,"calls":6},{"from":"UnitView","to":"HudOverlay","kind":"dependency","direct":false,"calls":1},{"from":"UnitView","to":"InfoData","kind":"dependency","direct":false,"calls":1},{"from":"UnitView","to":"ItemTooltip","kind":"dependency","direct":false,"calls":2},{"from":"UnitView","to":"MapData","kind":"association","direct":true,"calls":15},{"from":"UnitView","to":"MatchScene","kind":"dependency","direct":false,"calls":3},{"from":"UnitView","to":"SimUnit","kind":"dependency","direct":true,"calls":50},{"from":"UnitView","to":"Simulation","kind":"dependency","direct":true,"calls":4},{"from":"res://scenes/main_menu.tscn","to":"UiKit","kind":"dependency","direct":false,"calls":2},{"from":"res://scenes/main_menu.tscn","to":"res://src/net/net.gd","kind":"dependency","direct":false,"calls":2},{"from":"res://scenes/main_menu.tscn","to":"res://src/ui/main_menu.gd","kind":"composition","direct":true,"calls":0},{"from":"res://scenes/main_menu.tscn","to":"res://src/ui/settings.gd","kind":"dependency","direct":false,"calls":2},{"from":"res://src/net/net.gd","to":"Armies","kind":"dependency","direct":true,"calls":15},{"from":"res://src/net/net.gd","to":"ArmyPanel","kind":"dependency","direct":false,"calls":2},{"from":"res://src/net/net.gd","to":"Blueprints","kind":"dependency","direct":true,"calls":8},{"from":"res://src/net/net.gd","to":"CampaignRun","kind":"association","direct":false,"calls":61},{"from":"res://src/net/net.gd","to":"Defs","kind":"dependency","direct":true,"calls":26},{"from":"res://src/net/net.gd","to":"DevArgs","kind":"dependency","direct":true,"calls":17},{"from":"res://src/net/net.gd","to":"MapData","kind":"dependency","direct":false,"calls":14},{"from":"res://src/net/net.gd","to":"Maps","kind":"dependency","direct":true,"calls":34},{"from":"res://src/net/net.gd","to":"MatchScene","kind":"association","direct":false,"calls":19},{"from":"res://src/net/net.gd","to":"Simulation","kind":"dependency","direct":false,"calls":19},{"from":"res://src/net/net.gd","to":"comm:res://src/net/net.gd@ENetMultiplayerPeer","kind":"dependency","direct":true,"calls":4},{"from":"res://src/net/net.gd","to":"res://src/ui/campaign_map_screen.gd","kind":"dependency","direct":false,"calls":15},{"from":"res://src/ui/campaign_map_screen.gd","to":"Armies","kind":"dependency","direct":false,"calls":2},{"from":"res://src/ui/campaign_map_screen.gd","to":"Blueprints","kind":"loaded-by","direct":false,"calls":8},{"from":"res://src/ui/campaign_map_screen.gd","to":"CampaignRun","kind":"dependency","direct":true,"calls":109},{"from":"res://src/ui/campaign_map_screen.gd","to":"DebugConsole","kind":"dependency","direct":true,"calls":1},{"from":"res://src/ui/campaign_map_screen.gd","to":"Defs","kind":"loaded-by","direct":true,"calls":23},{"from":"res://src/ui/campaign_map_screen.gd","to":"DevArgs","kind":"dependency","direct":true,"calls":7},{"from":"res://src/ui/campaign_map_screen.gd","to":"Fixed","kind":"loaded-by","direct":false,"calls":0},{"from":"res://src/ui/campaign_map_screen.gd","to":"Hud","kind":"dependency","direct":false,"calls":1},{"from":"res://src/ui/campaign_map_screen.gd","to":"HudOverlay","kind":"dependency","direct":false,"calls":1},{"from":"res://src/ui/campaign_map_screen.gd","to":"ItemTooltip","kind":"dependency","direct":false,"calls":2},{"from":"res://src/ui/campaign_map_screen.gd","to":"MapData","kind":"loaded-by","direct":false,"calls":3},{"from":"res://src/ui/campaign_map_screen.gd","to":"MapEditor","kind":"dependency","direct":false,"calls":1},{"from":"res://src/ui/campaign_map_screen.gd","to":"MapEditorView","kind":"dependency","direct":false,"calls":1},{"from":"res://src/ui/campaign_map_screen.gd","to":"Maps","kind":"dependency","direct":true,"calls":13},{"from":"res://src/ui/campaign_map_screen.gd","to":"MatchScene","kind":"loaded-by","direct":false,"calls":4},{"from":"res://src/ui/campaign_map_screen.gd","to":"Pal","kind":"dependency","direct":true,"calls":13},{"from":"res://src/ui/campaign_map_screen.gd","to":"SimUnit","kind":"loaded-by","direct":false,"calls":0},{"from":"res://src/ui/campaign_map_screen.gd","to":"Simulation","kind":"loaded-by","direct":false,"calls":4},{"from":"res://src/ui/campaign_map_screen.gd","to":"UiKit","kind":"dependency","direct":true,"calls":13},{"from":"res://src/ui/campaign_map_screen.gd","to":"UiTheme","kind":"dependency","direct":true,"calls":2},{"from":"res://src/ui/campaign_map_screen.gd","to":"res://scenes/main_menu.tscn","kind":"dependency","direct":false,"calls":6},{"from":"res://src/ui/campaign_map_screen.gd","to":"res://src/net/net.gd","kind":"dependency","direct":true,"calls":31},{"from":"res://src/ui/lobby.gd","to":"Armies","kind":"dependency","direct":true,"calls":12},{"from":"res://src/ui/lobby.gd","to":"Blueprints","kind":"dependency","direct":true,"calls":7},{"from":"res://src/ui/lobby.gd","to":"Defs","kind":"dependency","direct":true,"calls":18},{"from":"res://src/ui/lobby.gd","to":"DevArgs","kind":"dependency","direct":true,"calls":42},{"from":"res://src/ui/lobby.gd","to":"MapData","kind":"dependency","direct":false,"calls":10},{"from":"res://src/ui/lobby.gd","to":"Maps","kind":"dependency","direct":true,"calls":16},{"from":"res://src/ui/lobby.gd","to":"Simulation","kind":"dependency","direct":true,"calls":1},{"from":"res://src/ui/lobby.gd","to":"UiKit","kind":"dependency","direct":false,"calls":5},{"from":"res://src/ui/lobby.gd","to":"res://scenes/main_menu.tscn","kind":"association","direct":false,"calls":25},{"from":"res://src/ui/lobby.gd","to":"res://src/net/net.gd","kind":"signal","direct":true,"calls":193},{"from":"res://src/ui/lobby.gd","to":"res://src/ui/campaign_map_screen.gd","kind":"association","direct":false,"calls":36},{"from":"res://src/ui/main_menu.gd","to":"CampaignRun","kind":"dependency","direct":true,"calls":3},{"from":"res://src/ui/main_menu.gd","to":"DebugConsole","kind":"dependency","direct":true,"calls":1},{"from":"res://src/ui/main_menu.gd","to":"Defs","kind":"dependency","direct":true,"calls":2},{"from":"res://src/ui/main_menu.gd","to":"DevArgs","kind":"dependency","direct":true,"calls":22},{"from":"res://src/ui/main_menu.gd","to":"MatchScene","kind":"dependency","direct":false,"calls":6},{"from":"res://src/ui/main_menu.gd","to":"res://scenes/main_menu.tscn","kind":"association","direct":false,"calls":22},{"from":"res://src/ui/main_menu.gd","to":"res://src/net/net.gd","kind":"association","direct":true,"calls":42},{"from":"res://src/ui/main_menu.gd","to":"res://src/ui/settings.gd","kind":"dependency","direct":true,"calls":5},{"from":"res://src/ui/settings.gd","to":"DevArgs","kind":"dependency","direct":true,"calls":23},{"from":"res://src/ui/settings.gd","to":"MatchScene","kind":"dependency","direct":false,"calls":4},{"from":"res://src/ui/settings.gd","to":"UiTheme","kind":"dependency","direct":true,"calls":15},{"from":"res://src/ui/settings.gd","to":"res://src/net/net.gd","kind":"dependency","direct":true,"calls":1},{"from":"res://src/ui/ui_sounds.gd","to":"Projectile","kind":"association","direct":false,"calls":4}],"blocks":[{"name":"HUD","col":0},{"name":"Simulation","col":1},{"name":"Match Screen","col":1},{"name":"Campaign","col":1},{"name":"Network","col":1},{"name":"UI Kit","col":1},{"name":"Content","col":2},{"name":"Menus","col":2},{"name":"Map Editor","col":2},{"name":"Dev Tools","col":2},{"name":"Maps","col":3},{"name":"Unsorted","col":3}]};
+
+// ---------- constants ----------
+const UNSORTED = "Unsorted";
+const MS = 400;
+const PAD = 22, HEAD = 34, COL_GAP = 90, ROW_GAP = 70;  // block geometry
+const CARD = { w: 210, h: 66 };                          // a folded block
+const HUES = [210, 150, 28, 275, 340, 188, 95, 0, 245, 48, 312];
+const TYPE_COLORS = {
+  light: { ".gd": ["#177d49", "#ffffff"], ".tscn": ["#5ea2ee", "#0e1318"], other: ["#a5adb8", "#0e1318"] },
+  dark: { ".gd": ["#3dbd7a", "#0e1318"], ".tscn": ["#8dbcf7", "#0e1318"], other: ["#7d8795", "#0e1318"] },
+};
+
+const $ = (id) => document.getElementById(id);
+const svg = $("graph");
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const byId = new Map(DATA.nodes.map((n) => [n.id, n]));
+const domainOf = (id) => byId.get(id).domain || UNSORTED;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+// ---------- state ----------
+const ui = { domains: false, bundled: true, hoverNode: null, hoverBundle: null };
+const anim = { mode: 0, bund: 1 };      // tweened numbers: mode, bund, fold:<domain>, vb*
+const offsets = new Map();              // block drags (view mode: never saved)
+const folded = new Set();
+let stack = [];                         // block draw order: the last one touched is on top
+let tweens = [];
+
+// ---------- block layout (static; drags add an offset) ----------
+const blocks = DATA.blocks.map((b, i) => {
+  const members = DATA.nodes.filter((n) => domainOf(n.id) === b.name);
+  const innerW = Math.max(...members.map((n) => n.inner[0] + n.w / 2));
+  const innerH = Math.max(...members.map((n) => n.inner[1] + n.h / 2));
+  const titleW = b.name.length * 8.5 + 90;
+  return { ...b, members, hue: b.name === UNSORTED ? 215 : HUES[i % HUES.length],
+    w: Math.max(innerW + 2 * PAD, titleW), h: HEAD + PAD * 0.7 + innerH + PAD };
+});
+const blockByName = new Map(blocks.map((b) => [b.name, b]));
+stack = [...blocks];
+function bringToFront(name) {
+  stack = [...stack.filter((b) => b.name !== name), blockByName.get(name)];
+}
+/** Shelf-pack the blocks in domain-graph order (callers first), rows about as wide as the canvas
+ *  shape asks for, so the blocks fill the screen instead of one long strip. */
+function placeBlocks() {
+  const aspect = Math.max(1, svg.clientWidth / Math.max(1, svg.clientHeight));
+  const area = blocks.reduce((sum, b) => sum + (b.w + COL_GAP) * (b.h + ROW_GAP), 0);
+  const rowWidth = Math.max(Math.sqrt(area * aspect), ...blocks.map((b) => b.w));
+  let x = 0, y = 0, rowH = 0;
+  for (const b of blocks) {
+    if (x > 0 && x + b.w > rowWidth) { x = 0; y += rowH + ROW_GAP; rowH = 0; }
+    b.x = x; b.y = y;
+    x += b.w + COL_GAP; rowH = Math.max(rowH, b.h);
+  }
+}
+
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerpRect = (a, b, t) => ({ x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t), w: lerp(a.w, b.w, t), h: lerp(a.h, b.h, t) });
+const foldOf = (name) => anim["fold:" + name] || 0;
+const offsetOf = (name) => offsets.get(name) || { dx: 0, dy: 0 };
+
+/** Where a block is drawn now: its frame, shrinking into a card as it folds. */
+function blockRect(b) {
+  const o = offsetOf(b.name);
+  const frame = { x: b.x + o.dx, y: b.y + o.dy, w: b.w, h: b.h };
+  return lerpRect(frame, { x: frame.x, y: frame.y, w: CARD.w, h: CARD.h }, foldOf(b.name));
+}
+
+/** Where a class box is drawn now: between its graph spot and its block spot. */
+function nodeRect(n) {
+  const b = blockByName.get(domainOf(n.id));
+  const o = offsetOf(b.name);
+  const inBlock = { x: b.x + o.dx + PAD + n.inner[0], y: b.y + o.dy + HEAD + PAD * 0.7 + n.inner[1] };
+  let x = lerp(n.x, inBlock.x, anim.mode), y = lerp(n.y, inBlock.y, anim.mode);
+  const fold = foldOf(b.name) * anim.mode;
+  const card = blockRect(b);
+  x = lerp(x, card.x + card.w / 2, fold); y = lerp(y, card.y + card.h / 2, fold);
+  const scale = 1 - 0.7 * fold;
+  return { x: x - n.w * scale / 2, y: y - n.h * scale / 2, w: n.w * scale, h: n.h * scale, scale, alpha: 1 - fold };
+}
+
+/** A line's end: the class box, or the card of its folded block. */
+function endOf(id) {
+  const name = domainOf(id);
+  if (anim.mode > 0 && foldOf(name) >= 0.5) return { key: "block:" + name, rect: blockRect(blockByName.get(name)) };
+  return { key: id, rect: nodeRect(byId.get(id)) };
+}
+
+// ---------- geometry ----------
+function clip(r, tx, ty) {  // where the ray from the rect's centre to (tx, ty) leaves the rect
+  const cx = r.x + r.w / 2, cy = r.y + r.h / 2, dx = tx - cx, dy = ty - cy;
+  if (!dx && !dy) return [cx, cy];
+  const s = Math.min(dx ? (r.w / 2) / Math.abs(dx) : Infinity, dy ? (r.h / 2) / Math.abs(dy) : Infinity);
+  return [cx + dx * s, cy + dy * s];
+}
+const centre = (r) => [r.x + r.w / 2, r.y + r.h / 2];
+
+/** Path between two rects; `bend` curves it sideways (two lines in opposite directions). */
+function route(ra, rb, bend = 0) {
+  const [ax, ay] = centre(ra), [bx, by] = centre(rb);
+  const len = Math.hypot(bx - ax, by - ay) || 1;
+  const cx = (ax + bx) / 2 - (by - ay) / len * bend, cy = (ay + by) / 2 + (bx - ax) / len * bend;
+  const a = clip(ra, cx, cy), b = clip(rb, cx, cy);
+  const ux = b[0] - cx, uy = b[1] - cy, ul = Math.hypot(ux, uy) || 1;
+  const sx = a[0] - cx, sy = a[1] - cy, sl = Math.hypot(sx, sy) || 1;
+  return { a, b, c: [cx, cy], end: [ux / ul, uy / ul], start: [sx / sl, sy / sl], mid: [(a[0] + 2 * cx + b[0]) / 4, (a[1] + 2 * cy + b[1]) / 4] };
+}
+const f = (n) => n.toFixed(1);
+function pathD(r, trimEnd = 0, trimStart = 0) {
+  const b = [r.b[0] - r.end[0] * trimEnd, r.b[1] - r.end[1] * trimEnd];
+  const a = [r.a[0] - r.start[0] * trimStart, r.a[1] - r.start[1] * trimStart];
+  return `M${f(a[0])},${f(a[1])} Q${f(r.c[0])},${f(r.c[1])} ${f(b[0])},${f(b[1])}`;
+}
+function arrowHead(tip, dir, size, cls) {  // the "vee" of the real viewer
+  const [x, y] = tip, [dx, dy] = dir, px = -dy, py = dx;
+  const pts = [[x, y], [x - dx * size + px * size * 0.5, y - dy * size + py * size * 0.5],
+    [x - dx * size * 0.65, y - dy * size * 0.65], [x - dx * size - px * size * 0.5, y - dy * size - py * size * 0.5]];
+  return `<path class="mark ${cls}" d="M${pts.map((p) => f(p[0]) + "," + f(p[1])).join(" L")} z"/>`;
+}
+function diamond(at, dir, cls) {  // composition: filled diamond at the owner's end
+  const [x, y] = at, [dx, dy] = [-dir[0], -dir[1]], px = -dy, py = dx;
+  const pts = [[x, y], [x + dx * 6 + px * 4, y + dy * 6 + py * 4], [x + dx * 12, y + dy * 12], [x + dx * 6 - px * 4, y + dy * 6 - py * 4]];
+  return `<path class="mark ${cls}" d="M${pts.map((p) => f(p[0]) + "," + f(p[1])).join(" L")} z"/>`;
+}
+
+// ---------- lines: individual (merged per end pair) and bundles ----------
+/** Every class line, with its ends; lines that land on the same two ends merge (folded blocks). */
+function individualLines() {
+  const groups = new Map();
+  for (const e of DATA.edges) {
+    const a = endOf(e.from), b = endOf(e.to);
+    if (a.key === b.key) continue;  // inside a folded block
+    const key = a.key + ">" + b.key;
+    if (!groups.has(key)) groups.set(key, { key, a, b, edges: [] });
+    groups.get(key).edges.push(e);
+  }
+  return [...groups.values()];
+}
+
+/** One bundle per pair of blocks (either direction). */
+function bundles() {
+  const out = new Map();
+  for (const e of DATA.edges) {
+    const da = domainOf(e.from), db = domainOf(e.to);
+    if (da === db) continue;
+    const [p, q] = da < db ? [da, db] : [db, da];
+    const key = p + "|" + q;
+    if (!out.has(key)) out.set(key, { key, p, q, fwd: 0, back: 0, edges: [] });
+    const b = out.get(key);
+    b.edges.push(e);
+    if (da === p) b.fwd++; else b.back++;
+  }
+  return [...out.values()];
+}
+
+function lineStyle(e) {
+  return { tone: e.direct ? "t-accent" : "t-derived", kind: "k-" + e.kind };
+}
+
+function drawLine(group, r, opacity, extra = "", hot = false) {
+  const many = group.edges.length > 1;
+  const e = group.edges[0];
+  const { tone, kind } = many ? { tone: "t-accent", kind: "" } : lineStyle(e);
+  const t = hot ? "t-hl" : tone;
+  let s = `<g class="${extra}" style="opacity:${f(opacity)}">`;
+  if (!many && !e.direct && !hot) s += `<path class="wire outline ${tone} ${kind}" d="${pathD(r, 7)}"/><path class="wire hollow" d="${pathD(r, 7)}"/>`;
+  else s += `<path class="wire ${t} ${kind}" d="${pathD(r, 7, e.kind === "composition" && !many ? 10 : 0)}"/>`;
+  s += arrowHead(r.b, r.end, 10, t);
+  if (!many && e.kind === "composition") s += diamond(r.a, r.start, t);
+  if (many) {
+    const label = String(group.edges.length), w = label.length * 6.5 + 10;
+    s += `<g class="merge-badge"><rect x="${f(r.mid[0] - w / 2)}" y="${f(r.mid[1] - 8)}" width="${f(w)}" height="16" rx="8"/>` +
+      `<text x="${f(r.mid[0])}" y="${f(r.mid[1] + 3.5)}" text-anchor="middle">${label}</text></g>`;
+  }
+  return s + "</g>";
+}
+
+function hitPath(r, attr) {
+  return `<path class="wire-hit" ${attr} d="${pathD(r)}"/>`;
+}
+
+// ---------- drawing ----------
+function typeColors(type) {
+  const map = TYPE_COLORS[isDark() ? "dark" : "light"];
+  return map[type] || map.other;
+}
+
+function boxSvg(n, r, cls) {
+  const s = r.scale;
+  let out = `<g class="node k-${n.kind} ${cls}" data-node="${esc(n.id)}" style="opacity:${f(r.alpha)}" ` +
+    `transform="translate(${f(r.x)},${f(r.y)}) scale(${f(s)})">`;
+  out += `<rect class="box-bg" width="${n.w}" height="${n.h}" rx="7"/><rect class="cls-head" x="1" y="1" width="${n.w - 2}" height="${n.h - 2}" rx="6"/>`;
+  if (n.type) {
+    const [bg, ink] = typeColors(n.type);
+    out += `<line x1="8" x2="${n.w - 8}" y1="1.5" y2="1.5" stroke="${bg}" stroke-width="3" stroke-linecap="round"/>`;
+    const cw = n.type.length * 6.6 + 8, subTop = 37 + (n.lines.length - 1) * 17;
+    out += `<rect x="28" y="${subTop - 11}" width="${f(cw)}" height="14" rx="4" fill="${bg}"/>` +
+      `<text class="type-chip-text" x="${f(28 + cw / 2)}" y="${subTop - 0.5}" text-anchor="middle" fill="${ink}">${esc(n.type)}</text>` +
+      `<text class="cls-sub" x="${f(28 + cw + 6)}" y="${subTop}">${esc(n.sub)}</text>`;
+  } else {
+    out += `<text class="cls-sub" x="28" y="${37 + (n.lines.length - 1) * 17}">${esc(n.sub)}</text>`;
+  }
+  n.lines.forEach((line, i) => { out += `<text class="cls-name" x="28" y="${21 + i * 17}">${esc(line)}</text>`; });
+  out += `<path class="fan-tri" transform="translate(16.5,16.5)" d="M-3,-4.5 L4,0 L-3,4.5 z"/>`;
+  if (n.entry) out += `<g class="badge"><rect x="10" y="-8" width="38" height="16" rx="8"/><text x="29" y="3.8" text-anchor="middle">start</text></g>`;
+  return out + "</g>";
+}
+
+/** A block as two parts: its body (behind the lines) and its header (above them, so it stays clickable). */
+function frameSvg(b, r, alpha) {
+  const fold = foldOf(b.name);
+  const card = fold >= 0.5;
+  const cls = `frame${b.name === UNSORTED ? " unsorted" : ""}${card ? " card" : ""}`;
+  const count = b.members.length;
+  const open = `<g class="${cls}" data-frame="${esc(b.name)}" style="--h:${b.hue};--s:${b.name === UNSORTED ? "8%" : "55%"};opacity:${f(alpha)}">`;
+  const body = `${open}<rect class="body" x="${f(r.x)}" y="${f(r.y)}" width="${f(r.w)}" height="${f(r.h)}" rx="12"/></g>`;
+  let s = open + `<path class="head" data-head="1" d="M${f(r.x)},${f(r.y + HEAD)} V${f(r.y + 12)} a12,12 0 0 1 12,-12 H${f(r.x + r.w - 12)} a12,12 0 0 1 12,12 V${f(r.y + HEAD)} z"/>`;
+  const tri = card ? "M-3,-4.5 L4,0 L-3,4.5 z" : "M-4.5,-3 L4.5,-3 L0,4 z";
+  s += `<path class="tri" transform="translate(${f(r.x + 16)},${f(r.y + HEAD / 2)})" d="${tri}"/>`;
+  s += `<text class="title" x="${f(r.x + 30)}" y="${f(r.y + 22)}">${esc(b.name)}</text>`;
+  s += `<text class="count" x="${f(r.x + r.w - 14)}" y="${f(r.y + 21.5)}" text-anchor="end">${count} ${count === 1 ? "class" : "classes"}</text>`;
+  if (card && fold > 0.95) {
+    const names = b.members.map((n) => n.lines.join(" ")).join(", ");
+    const short = names.length > 26 ? names.slice(0, 25) + "…" : names;
+    s += `<text class="sub" x="${f(r.x + 14)}" y="${f(r.y + HEAD + 20)}">${esc(short)}</text>`;
+  }
+  return { body, head: s + "</g>" };
+}
+
+function render() {
+  const mode = anim.mode;
+  const bundledWeight = mode * anim.bund;
+  const hotNode = ui.hoverNode, hotBundle = ui.hoverBundle;
+  const related = (e) => (hotNode ? e.from === hotNode || e.to === hotNode : true);
+
+  // block bodies (behind the lines), headers (above them) and folded cards (above the boxes)
+  let frames = "", heads = "", cards = "";
+  if (mode > 0) {
+    for (const b of stack) {
+      const r = blockRect(b);
+      const { body, head } = frameSvg(b, r, Math.min(1, mode * 1.4));
+      if (foldOf(b.name) >= 0.5) cards += body + head;
+      else { frames += body; heads += head; }
+    }
+  }
+
+  // individual lines
+  const groups = individualLines();
+  const pairs = new Set(groups.map((g) => g.key));
+  let lines = "", hits = "", top = "";
+  const still = tweens.length === 0;
+  for (const g of groups) {
+    const cross = g.edges.some((e) => domainOf(e.from) !== domainOf(e.to));
+    let opacity = cross ? 1 - bundledWeight : 1;
+    const inFoldingBlock = !cross && anim.mode > 0 ? foldOf(domainOf(g.edges[0].from)) : 0;
+    opacity *= 1 - inFoldingBlock;
+    if (opacity <= 0.01) continue;
+    const reverse = pairs.has(g.b.key + ">" + g.a.key);
+    const r = route(g.a.rect, g.b.rect, reverse ? 12 : 0);
+    const hot = hotNode && g.edges.some(related);
+    const dim = (hotNode && !hot) || hotBundle;
+    const text = drawLine(g, r, opacity, dim ? "dimmed" : "", hot);
+    if (hot) top += text; else lines += text;
+    if (still && opacity > 0.5) hits += hitPath(r, `data-line="${esc(g.key)}"`);
+  }
+
+  // bundles between blocks
+  if (bundledWeight > 0.01) {
+    for (const bd of bundles()) {
+      const ra = blockRect(blockByName.get(bd.p)), rb = blockRect(blockByName.get(bd.q));
+      const r = route(ra, rb, 0);
+      const n = bd.edges.length, width = 2 + Math.sqrt(n) * 1.6;
+      const hot = hotBundle === bd.key;
+      const dim = (hotBundle && !hot) || (hotNode && !bd.edges.some(related));
+      let s = `<g class="${dim ? "dimmed" : ""}" style="opacity:${f(bundledWeight)}">`;
+      s += `<path class="bundle${hot ? " hot" : ""}" stroke-width="${f(width)}" d="${pathD(r, bd.fwd ? 9 : 0, bd.back ? 9 : 0)}"/>`;
+      if (bd.fwd) s += arrowHead(r.b, r.end, 11 + width * 0.6, hot ? "t-hl" : "t-muted");
+      if (bd.back) s += arrowHead(r.a, r.start, 11 + width * 0.6, hot ? "t-hl" : "t-muted");
+      s += hitPath(r, `data-bundle="${esc(bd.key)}"`).replace("wire-hit", "bundle-hit");
+      const label = bd.fwd && bd.back ? `${n} ⇄` : `${n}`, w = label.length * 7 + 14;
+      s += `<g class="bundle-badge${hot ? " hot" : ""}" data-bundle="${esc(bd.key)}"><rect x="${f(r.mid[0] - w / 2)}" y="${f(r.mid[1] - 10)}" width="${f(w)}" height="20" rx="10"/>` +
+        `<text x="${f(r.mid[0])}" y="${f(r.mid[1] + 4)}" text-anchor="middle">${label}</text></g>`;
+      lines += s + "</g>";
+      if (hot) top += hotBundleLines(bd);
+    }
+  }
+
+  // boxes
+  let nodes = "";
+  for (const n of DATA.nodes) {
+    const r = nodeRect(n);
+    if (r.alpha <= 0.01) continue;
+    const dim = (hotNode && hotNode !== n.id && !DATA.edges.some((e) => related(e) && (e.from === n.id || e.to === n.id)))
+      || (hotBundle && !bundleHas(hotBundle, n.id));
+    nodes += boxSvg(n, r, dim ? "dimmed" : "");
+  }
+
+  $("frameLayer").innerHTML = frames;
+  $("lineLayer").innerHTML = lines + hits;
+  $("headLayer").innerHTML = heads;
+  $("lineLayer").classList.toggle("quiet", Boolean(hotNode || hotBundle));
+  $("nodeLayer").innerHTML = nodes;
+  $("cardLayer").innerHTML = cards;
+  $("topLayer").innerHTML = top;
+  if (anim.vbw) svg.setAttribute("viewBox", `${f(anim.vbx)} ${f(anim.vby)} ${f(anim.vbw)} ${f(anim.vbh)}`);
+  renderStatus();
+}
+
+/** The class lines inside a hovered bundle, drawn on top in the highlight colour. */
+function hotBundleLines(bd) {
+  const keys = new Set(bd.edges.map((e) => e.from + ">" + e.to));
+  let s = "";
+  for (const g of individualLines()) {
+    if (!g.edges.some((e) => keys.has(e.from + ">" + e.to))) continue;
+    s += drawLine(g, route(g.a.rect, g.b.rect, 0), 1, "", true);
+  }
+  return s;
+}
+
+function bundleHas(key, id) {
+  const [p, q] = key.split("|");
+  const d = domainOf(id);
+  if (d !== p && d !== q) return false;
+  return DATA.edges.some((e) => (e.from === id || e.to === id) && [p, q].includes(domainOf(e.from)) && [p, q].includes(domainOf(e.to)) && domainOf(e.from) !== domainOf(e.to));
+}
+
+function renderStatus() {
+  if (!ui.domains) { $("status").textContent = `level 1 · ${DATA.nodes.length} classes · ${DATA.edges.length} lines`; return; }
+  const all = bundles();
+  const cross = all.reduce((sum, b) => sum + b.edges.length, 0);
+  const how = ui.bundled ? `${cross} lines between blocks in ${all.length} bundles` : `${cross} lines between blocks`;
+  $("status").textContent = `Domains · ${blocks.length} blocks${folded.size ? ` (${folded.size} folded)` : ""} · ${how}`;
+}
+
+// ---------- animation ----------
+const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+
+function tweenTo(targets, ms = MS) {
+  for (const t of tweens) for (const k of Object.keys(targets)) delete t.to[k];
+  const from = {};
+  for (const k of Object.keys(targets)) from[k] = anim[k] ?? 0;
+  tweens.push({ from, to: { ...targets }, start: performance.now(), ms: reducedMotion ? 0 : ms });
+  if (tweens.length === 1) requestAnimationFrame(step);
+}
+
+function step(now) {
+  tweens = tweens.filter((t) => {
+    const p = t.ms ? Math.min(1, (now - t.start) / t.ms) : 1;
+    for (const k of Object.keys(t.to)) anim[k] = lerp(t.from[k], t.to[k], ease(p));
+    return p < 1;
+  });
+  render();
+  if (tweens.length) requestAnimationFrame(step);
+}
+
+// ---------- camera ----------
+function contentBox(domains) {
+  const rects = domains
+    ? blocks.map((b) => { const o = offsetOf(b.name); return folded.has(b.name) ? { x: b.x + o.dx, y: b.y + o.dy, ...CARD } : { x: b.x + o.dx, y: b.y + o.dy, w: b.w, h: b.h }; })
+    : DATA.nodes.map((n) => ({ x: n.x - n.w / 2, y: n.y - n.h / 2, w: n.w, h: n.h }));
+  const x1 = Math.min(...rects.map((r) => r.x)), y1 = Math.min(...rects.map((r) => r.y));
+  const x2 = Math.max(...rects.map((r) => r.x + r.w)), y2 = Math.max(...rects.map((r) => r.y + r.h));
+  const m = 40;
+  return { vbx: x1 - m, vby: y1 - m, vbw: x2 - x1 + 2 * m, vbh: y2 - y1 + 2 * m };
+}
+function fit(animate = true) {
+  const box = contentBox(ui.domains);
+  if (animate) tweenTo(box); else Object.assign(anim, box);
+}
+function svgScale() { return 1 / svg.getScreenCTM().a; }
+function toSvg(ev) {
+  const p = svg.createSVGPoint(); p.x = ev.clientX; p.y = ev.clientY;
+  return p.matrixTransform(svg.getScreenCTM().inverse());
+}
+
+// ---------- controls ----------
+function setDomains(on) {
+  ui.domains = on;
+  $("betweenCtl").classList.toggle("off", !on);
+  if (on) { offsets.clear(); stack = [...blocks]; placeBlocks(); }
+  const targets = { mode: on ? 1 : 0 };
+  if (!on) for (const name of folded) targets["fold:" + name] = 0;
+  folded.clear();
+  Object.assign(targets, contentBox(on));
+  tweenTo(targets);
+}
+$("domainsBox").addEventListener("change", (ev) => setDomains(ev.target.checked));
+
+function setBundled(on) {
+  ui.bundled = on;
+  $("bundledBtn").setAttribute("aria-pressed", String(on));
+  $("everyBtn").setAttribute("aria-pressed", String(!on));
+  tweenTo({ bund: on ? 1 : 0 }, 250);
+}
+$("bundledBtn").addEventListener("click", () => setBundled(true));
+$("everyBtn").addEventListener("click", () => setBundled(false));
+$("fitBtn").addEventListener("click", () => fit());
+
+function toggleFold(name) {
+  const fold = !folded.has(name);
+  if (fold) folded.add(name); else folded.delete(name);
+  tweenTo({ ["fold:" + name]: fold ? 1 : 0 }, 320);
+}
+
+// ---------- pointer: pan, drag blocks, click headers, hover ----------
+let drag = null;
+svg.addEventListener("pointerdown", (ev) => {
+  if (ev.button !== 0) return;
+  const frame = ev.target.closest("[data-frame]");
+  if (frame) bringToFront(frame.dataset.frame);
+  drag = { x: ev.clientX, y: ev.clientY, moved: false, frame: frame?.dataset.frame || null, head: Boolean(ev.target.dataset.head) || frame?.classList.contains("card") };
+  svg.setPointerCapture(ev.pointerId);
+  hideTip();
+});
+svg.addEventListener("pointermove", (ev) => {
+  if (!drag) return hover(ev);
+  const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
+  if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+  drag.moved = true;
+  const k = svgScale();
+  drag.x = ev.clientX; drag.y = ev.clientY;
+  if (drag.frame) {
+    const o = offsetOf(drag.frame);
+    offsets.set(drag.frame, { dx: o.dx + dx * k, dy: o.dy + dy * k });
+  } else {
+    svg.classList.add("panning");
+    for (const t of tweens) ["vbx", "vby", "vbw", "vbh"].forEach((key) => delete t.to[key]);
+    anim.vbx -= dx * k; anim.vby -= dy * k;
+  }
+  render();
+});
+svg.addEventListener("pointerup", () => {
+  if (drag && !drag.moved && drag.frame && drag.head) toggleFold(drag.frame);
+  drag = null;
+  svg.classList.remove("panning");
+});
+svg.addEventListener("wheel", (ev) => {
+  ev.preventDefault();
+  for (const t of tweens) ["vbx", "vby", "vbw", "vbh"].forEach((key) => delete t.to[key]);
+  const p = toSvg(ev), z = Math.exp(ev.deltaY * 0.0015);
+  anim.vbx = p.x - (p.x - anim.vbx) * z; anim.vby = p.y - (p.y - anim.vby) * z;
+  anim.vbw *= z; anim.vbh *= z;
+  render();
+}, { passive: false });
+svg.addEventListener("pointerleave", () => { setHover(null, null); hideTip(); });
+
+function hover(ev) {
+  const node = ev.target.closest("[data-node]")?.dataset.node || null;
+  const bundle = ev.target.closest("[data-bundle]")?.dataset.bundle || null;
+  const line = ev.target.closest("[data-line]")?.dataset.line || null;
+  const head = ev.target.closest("[data-frame]") && (ev.target.dataset.head || ev.target.closest(".card"));
+  setHover(node, bundle);
+  if (node) showTip(ev, nodeTip(byId.get(node)));
+  else if (bundle) showTip(ev, bundleTip(bundle));
+  else if (line) showTip(ev, lineTip(line));
+  else if (head) showTip(ev, frameTip(ev.target.closest("[data-frame]").dataset.frame));
+  else hideTip();
+}
+function setHover(node, bundle) {
+  if (node === ui.hoverNode && bundle === ui.hoverBundle) return;
+  ui.hoverNode = node; ui.hoverBundle = bundle;
+  if (!tweens.length) render();
+}
+
+// ---------- tooltips ----------
+function showTip(ev, html) {
+  const tip = $("tip");
+  tip.innerHTML = html; tip.hidden = false;
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(ev.clientX + 14, innerWidth - w - 8) + "px";
+  tip.style.top = (ev.clientY + 16 + h > innerHeight ? ev.clientY - h - 10 : ev.clientY + 16) + "px";
+}
+function hideTip() { $("tip").hidden = true; }
+const lineRow = (e) => `<li>${esc(e.from)} → ${esc(e.to)} <span>${esc(e.kind)}${e.direct ? "" : ", through hidden"}${e.calls ? ` · ${e.calls} call${e.calls === 1 ? "" : "s"}` : ""}</span></li>`;
+function listRows(edges, max = 12) {
+  const rows = edges.slice(0, max).map(lineRow).join("");
+  return `<ul>${rows}${edges.length > max ? `<li><span>… and ${edges.length - max} more</span></li>` : ""}</ul>`;
+}
+function nodeTip(n) {
+  return `<b>${esc(n.lines.join(" "))}</b><div>${esc(n.hint || "No hint yet")}</div>` +
+    `<div class="meta">${esc(n.domain || UNSORTED)} · ${esc(n.file || "outside code")}</div>`;
+}
+function bundleTip(key) {
+  const bd = bundles().find((b) => b.key === key);
+  const sorted = [...bd.edges].sort((a, b) => b.calls - a.calls);
+  return `<b>${esc(bd.p)} ⇄ ${esc(bd.q)}</b> · ${bd.edges.length} lines<div class="meta">${bd.fwd} ${esc(bd.p)} → ${esc(bd.q)}, ${bd.back} back</div>${listRows(sorted)}`;
+}
+function lineTip(key) {
+  const g = individualLines().find((x) => x.key === key);
+  if (!g) return "";
+  return g.edges.length > 1 ? `<b>${g.edges.length} lines</b> (merged on a folded block)${listRows(g.edges)}` : `<ul>${lineRow(g.edges[0])}</ul>`;
+}
+function frameTip(name) {
+  const card = folded.has(name);
+  return `<b>${esc(name)}</b><div>${card ? "Click to open the block" : "Click to fold into one card · drag to move (not saved)"}</div>`;
+}
+
+// ---------- theme ----------
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+}
+$("themeBtn").addEventListener("click", () => {
+  const order = ["auto", "light", "dark"];
+  const now = document.documentElement.dataset.theme || "auto";
+  const next = order[(order.indexOf(now) + 1) % 3];
+  if (next === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = next;
+  $("themeBtn").textContent = `Theme: ${next}`;
+  render();
+});
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", render);
+
+// ---------- start (URL hash for screenshots: #domains, #every, #fold=HUD,Menus, #hover=HUD|Simulation, #dark) ----------
+(function start() {
+  placeBlocks();
+  const hash = new URLSearchParams(location.hash.slice(1));
+  if (hash.has("dark")) { document.documentElement.dataset.theme = "dark"; $("themeBtn").textContent = "Theme: dark"; }
+  if (hash.has("domains")) {
+    ui.domains = true; anim.mode = 1; $("domainsBox").checked = true; $("betweenCtl").classList.remove("off");
+    if (hash.has("every")) { ui.bundled = false; anim.bund = 0; $("bundledBtn").setAttribute("aria-pressed", "false"); $("everyBtn").setAttribute("aria-pressed", "true"); }
+    (hash.get("fold") || "").split(",").filter(Boolean).forEach((name) => { folded.add(name); anim["fold:" + name] = 1; });
+    ui.hoverBundle = hash.get("hover");
+  }
+  fit(false);
+  render();
+})();
+</script>
+</body>
+</html>

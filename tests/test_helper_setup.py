@@ -19,10 +19,13 @@ class FakePlatform:
     def __init__(self, tmp_path, log="line one\nline two"):
         self.dir, self.log, self.started, self.up = tmp_path, log, 0, False
 
-    def files(self, tray):
+    def files(self):
         return {self.dir / "helper.unit": "unit text"}
 
-    def after_install(self, tray):
+    def old_entries(self):
+        return []
+
+    def after_install(self):
         return []
 
     def control(self, action):
@@ -58,8 +61,9 @@ def test_verify_failure_shows_log_lines_and_path(capsys):
 
 def test_fetch_listing_uses_the_given_opener():
     class Opener:
-        def open(self, url, timeout):
-            assert url.endswith("/api/apps")
+        def open(self, request, timeout):
+            assert request.full_url.endswith("/api/apps")
+            assert request.get_header(helper.MONITOR_HEADER.capitalize()) == "1"  # never keeps it up
             raise OSError("down")
     assert helper.fetch_listing(Opener()) is None
 
@@ -71,7 +75,7 @@ def test_install_starts_verifies_and_prints_next_steps(tmp_path, monkeypatch, ca
     monkeypatch.setattr(helper, "fetch_listing",
                         lambda *a, **k: {"apps": []} if platform.up else None)
     monkeypatch.setattr(helper.time, "sleep", no_wait)
-    assert helper.install(tray=False, platform=platform)
+    assert helper.install(platform=platform)
     out = capsys.readouterr().out
     assert platform.started == 1 and (tmp_path / "helper.unit").exists()
     assert "helper running on" in out and "coderstanding add <name> <folder>" in out
@@ -80,14 +84,14 @@ def test_install_starts_verifies_and_prints_next_steps(tmp_path, monkeypatch, ca
 def test_install_reports_a_helper_that_does_not_answer(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: None)
     monkeypatch.setattr(helper.time, "sleep", no_wait)
-    assert not helper.install(tray=False, platform=FakePlatform(tmp_path))
+    assert not helper.install(platform=FakePlatform(tmp_path))
     assert "helper did not start" in capsys.readouterr().out
 
 
 def test_install_no_start(tmp_path, monkeypatch):
     monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: pytest.fail("must not poll"))
     platform = FakePlatform(tmp_path)
-    assert helper.install(tray=False, platform=platform, start=False)
+    assert helper.install(platform=platform, start=False)
     assert platform.started == 0
 
 
@@ -141,13 +145,14 @@ def empty_registry(tmp_path, monkeypatch):
 def test_serve_starts_with_no_projects(empty_registry, monkeypatch, capsys):
     class Stub:
         server_port = 0
+        idle_watch = None
 
         def serve_forever(self):
             raise KeyboardInterrupt
 
         def server_close(self):
             pass
-    monkeypatch.setattr(server, "make_server", lambda hub, port, allow_origin=None: Stub())
+    monkeypatch.setattr(server, "make_server", lambda hub, port, **options: Stub())
     server.serve()  # used to raise AppError("no apps registered")
     assert "no projects yet" in capsys.readouterr().out
 
@@ -231,7 +236,7 @@ def test_service_mode_logs_the_guard_and_keeps_the_pid_file(monkeypatch, tmp_pat
 def test_install_and_start_leave_a_running_helper_alone(tmp_path, monkeypatch, capsys):
     platform = FakePlatform(tmp_path)
     monkeypatch.setattr(helper, "fetch_listing", lambda *a, **k: {"apps": []})
-    assert helper.install(tray=False, platform=platform)
+    assert helper.install(platform=platform)
     assert (tmp_path / "helper.unit").exists() and platform.started == 0  # entry written, no second helper
     monkeypatch.setattr(helper, "backend", lambda: platform)
     assert helper.control("start", verify=True) and platform.started == 0

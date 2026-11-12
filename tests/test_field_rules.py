@@ -24,7 +24,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = tmp_path / "game"
     shutil.copytree(FIXTURE, repo)
-    main(["add", "game", str(repo)])
+    main(["add", "game", str(repo), "--data", str(repo / ".coderstanding")])
     return repo
 
 
@@ -36,7 +36,7 @@ def data_of(repo):
 
 def test_defaults_cover_every_note_field_with_all_parts(tmp_path):
     rules = field_rules.effective(tmp_path)
-    assert list(rules["fields"]) == ["hint", "description", "review", "rules", "status", "tags", "level", "domain", "loaded_by", "loaded_how"]
+    assert list(rules["fields"]) == ["hint", "description", "review", "rules", "status", "tags", "nickname", "level", "domain", "loaded_by", "loaded_how"]
     for name, f in rules["fields"].items():
         assert all(f[k] for k in field_rules.TEXT_KEYS), name
         assert f["custom"] == []
@@ -200,3 +200,26 @@ def test_api_get_put_and_guards(served, monkeypatch):
     assert call(base, "/api/fields", {"bogus": 1}, "PUT")["status"] == 400
     assert call(base, "/api/fields", {"set": {}}, "PUT", content_type="text/plain")["status"] == 415
     assert call(base, "/api/fields", {"set": {}}, "PUT", headers={"Origin": "http://evil.example"})["status"] == 403
+
+
+# --- plain words: line kinds and glossary terms (not note fields) ---
+
+def test_words_cover_every_line_kind_the_view_can_draw():
+    from coderstanding import model, views
+    kinds = field_rules.effective(Path("/nonexistent"))["words"]["kinds"]
+    drawn = {*model.EDGE_KINDS, views.LOADED_BY, "derived"}  # derived = a line through hidden classes
+    assert drawn <= set(kinds)
+    assert all(kinds[k]["word"] and kinds[k]["uml"] and kinds[k]["tip"] for k in drawn)
+
+
+def test_words_are_not_note_fields(tmp_path):
+    rules = field_rules.effective(tmp_path)
+    assert {"level", "hub", "via", "outside code", "god class"} <= set(rules["words"]["terms"])
+    assert not set(rules["words"]["kinds"]) & set(rules["fields"])
+    assert "dependency" not in field_rules.effective_text(rules)
+    assert "dependency" not in field_rules.guide_markdown(rules)
+
+
+def test_api_fields_carries_words(served):
+    base, _ = served
+    assert "dependency" in call(base, "/api/fields")["words"]["kinds"]

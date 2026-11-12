@@ -35,3 +35,16 @@ def test_path_patterns_and_git_ignore(tmp_path):
 def test_assign_files_pairs_files_with_modules(tmp_path):
     write_files(tmp_path, FILES)
     assert assign_files(tmp_path, [FAKE]) == [("src/a.fk", FAKE), ("x.fk", FAKE)]
+
+
+def make_ignored_repo(root):
+    write_files(root, {".gitignore": "gen/\nout/\n", "own.fk": "", "gen/a.fk": "", "gen/sub/b.fk": "",
+                       "out/c.fk": ""})
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+
+
+def test_include_lists_chosen_ignored_folders_and_globs(tmp_path):
+    make_ignored_repo(tmp_path)
+    assert list_files(tmp_path, ["*.fk"]) == ["own.fk"]  # default: ignored files stay out
+    assert list_files(tmp_path, ["*.fk"], include=["gen/"]) == ["gen/a.fk", "gen/sub/b.fk", "own.fk"]
+    assert list_files(tmp_path, ["*.fk"], include=["out/*.fk"]) == ["out/c.fk", "own.fk"]

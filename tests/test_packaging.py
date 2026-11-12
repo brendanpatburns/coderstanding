@@ -83,40 +83,122 @@ def fake_install(tmp_path, monkeypatch):
     return bin_dir
 
 
-def test_systemd_units_use_the_entry_point_with_quoted_paths(fake_install):
-    files = helper.SystemdUser().files(tray=True)
-    names = {path.name: text for path, text in files.items()}
+def unit_texts(platform=None):
+    return {path.name: text for path, text in (platform or helper.SystemdUser()).files().items()}
+
+
+def test_systemd_socket_activates_the_idle_exit_service(fake_install):
+    files = helper.SystemdUser().files()
+    names = unit_texts()
     entry = fake_install / "coderstanding"
-    assert f'ExecStart="{entry}" "serve" "--port" "8517"' in names["coderstanding-helper.service"]
-    assert f'ExecStart="{entry}" "tray"' in names["coderstanding-tray.service"]
+    assert set(names) == {"coderstanding-helper.socket", "coderstanding-helper.service",
+                          "coderstanding-url.desktop"}
+    socket_unit, service = names["coderstanding-helper.socket"], names["coderstanding-helper.service"]
+    assert "ListenStream=127.0.0.1:8517" in socket_unit and "WantedBy=sockets.target" in socket_unit
+    assert (f'ExecStart="{entry}" "serve" "--port" "8517" "--idle-exit" "10" "--tray"' in service)
+    assert "[Install]" not in service  # never started at login, only by the socket
+    assert "Requires=coderstanding-helper.socket" in service
     assert "PYTHONPATH" not in "".join(names.values())
-    assert all(path.parent.name == "user" for path in files)
-    assert "coderstanding-tray.service" not in {p.name for p in helper.SystemdUser().files(tray=False)}
+    assert {path.parent.name for path in files} == {"user", "applications"}
+    assert "coderstanding-tray.service" not in names  # the helper starts the tray now
+
+
+def test_linux_link_handler_desktop_file(fake_install, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "my data"))
+    path, text = next((p, t) for p, t in helper.SystemdUser().files().items() if p.suffix == ".desktop")
+    assert path == tmp_path / "my data" / "applications" / "coderstanding-url.desktop"
+    assert "MimeType=x-scheme-handler/coderstanding;" in text and "NoDisplay=true" in text
+    entry = str(fake_install / "coderstanding")
+    # the URL is one ignored positional after `--`: never an option, never a command
+    assert f'Exec="{entry}" "helper" "url-start" -- %u' in text
+
+
+def test_desktop_quote_escapes():
+    assert helper.desktop_quote('a"b$c\\d%e f') == '"a\\\\"b\\\\$c\\\\\\\\d%%e f"'
 
 
 def test_systemd_quote_escapes():
     assert helper.systemd_quote('a "b" %h $x\\') == '"a \\"b\\" %%h $$x\\\\"'
 
 
-def test_windows_startup_files(fake_install, monkeypatch, tmp_path):
+def test_systemd_install_commands_migrate_and_register_the_link(fake_install, monkeypatch):
+    monkeypatch.setattr(helper.shutil, "which", lambda name: "/usr/bin/" + name)
+    commands = helper.SystemdUser().after_install()
+    # each unit stops on its own: a missing tray unit must not keep the old helper running
+    assert ["systemctl", "--user", "stop", "coderstanding-helper.service"] in commands
+    assert ["systemctl", "--user", "stop", "coderstanding-tray.service"] in commands
+    assert ["systemctl", "--user", "enable", "coderstanding-helper.socket"] in commands
+    assert ["xdg-mime", "default", "coderstanding-url.desktop", "x-scheme-handler/coderstanding"] in commands
+    assert not any("enable" in c and "coderstanding-helper.service" in c for c in commands)
+
+
+def test_systemd_start_opens_the_socket_and_stop_closes_both(monkeypatch):
+    ran = []
+    monkeypatch.setattr(helper, "run_quiet", lambda cmd, **k: ran.append(cmd))
+    helper.SystemdUser().control("start")
+    helper.SystemdUser().control("stop")
+    assert ran == [["systemctl", "--user", "start", "coderstanding-helper.socket"],
+                   ["systemctl", "--user", "stop", "coderstanding-helper.socket", "coderstanding-helper.service"]]
+
+
+def windows(monkeypatch, tmp_path, checkout=False):
     scripts = tmp_path / "Py Env" / "Scripts"
     scripts.mkdir(parents=True)
     (scripts / "pythonw.exe").write_text("")
     monkeypatch.setattr(sys, "executable", str(scripts / "python.exe"))
     monkeypatch.setattr(userconfig, "windows", lambda: True)
+    monkeypatch.setattr(assets, "is_installed", lambda: not checkout)
     monkeypatch.setenv("APPDATA", str(tmp_path / "AppData" / "Roaming"))
-    files = {path.name: text for path, text in helper.WindowsStartup().files(tray=True).items()}
-    assert set(files) == {"coderstanding-helper.cmd", "coderstanding-tray.cmd"}
-    assert f'start "" "{scripts / "pythonw.exe"}" "-m" "coderstanding" "serve" "--port" "8517" "--service"' \
-        in files["coderstanding-helper.cmd"]
-    assert '"tray"' in files["coderstanding-tray.cmd"] and "\r\n" in files["coderstanding-tray.cmd"]
-    startup = next(iter(helper.WindowsStartup().files(False))).parent
+    return scripts / "pythonw.exe"
+
+
+def test_windows_link_handler_registry_commands(fake_install, monkeypatch, tmp_path):
+    pythonw = windows(monkeypatch, tmp_path)
+    platform = helper.WindowsUser()
+    assert platform.files() == {}  # nothing in Startup any more
+    key = r"HKCU\Software\Classes\coderstanding"
+    command = f'"{pythonw}" "-m" "coderstanding" "helper" "url-start"'
+    assert platform.after_install() == [
+        ["reg", "add", key, "/ve", "/d", "URL:Coderstanding helper", "/f"],
+        ["reg", "add", key, "/v", "URL Protocol", "/d", "", "/f"],
+        ["reg", "add", key + r"\shell\open\command", "/ve", "/d", command, "/f"]]
+    assert "%1" not in command  # nothing from the URL reaches the command line
+    assert platform.before_uninstall() == [["reg", "delete", key, "/f"]]
+
+
+def test_windows_checkout_link_sets_pythonpath(monkeypatch, tmp_path):
+    pythonw = windows(monkeypatch, tmp_path, checkout=True)
+    command = helper.WindowsUser().link_command()
+    assert command == (f'cmd.exe /d /s /c "set "PYTHONPATH={SCANNER}"&& '
+                       f'"{pythonw}" "-m" "coderstanding" "helper" "url-start""')
+
+
+def test_windows_start_runs_the_idle_exit_service(monkeypatch, tmp_path):
+    pythonw = windows(monkeypatch, tmp_path)
+    started = []
+    monkeypatch.setattr(helper, "popen_quiet", lambda cmd, **k: started.append(cmd))
+    helper.WindowsUser().control("start")
+    assert started == [[str(pythonw), "-m", "coderstanding", "serve", "--port", "8517", "--idle-exit", "10",
+                        "--tray", "--service"]]
+
+
+def test_windows_install_removes_old_startup_entries(fake_install, monkeypatch, tmp_path):
+    windows(monkeypatch, tmp_path)
+    ran = []
+    monkeypatch.setattr(subprocess, "run", lambda cmd, **k: ran.append(cmd))
+    startup = helper.WindowsUser().startup_folder()
     assert startup.parts[-3:] == ("Start Menu", "Programs", "Startup")
+    startup.mkdir(parents=True)
+    for name in ("coderstanding-helper.cmd", "coderstanding-tray.cmd", "other.cmd"):
+        (startup / name).write_text("old")
+    helper.install(start=False)
+    assert sorted(p.name for p in startup.iterdir()) == ["other.cmd"]
+    assert [cmd[:2] for cmd in ran] == [["reg", "add"]] * 3
 
 
 def test_backend_is_chosen_by_platform(monkeypatch):
     monkeypatch.setattr(userconfig, "windows", lambda: True)
-    assert isinstance(helper.backend(), helper.WindowsStartup)
+    assert isinstance(helper.backend(), helper.WindowsUser)
     monkeypatch.setattr(userconfig, "windows", lambda: False)
     assert isinstance(helper.backend(), helper.SystemdUser)
 
@@ -124,30 +206,43 @@ def test_backend_is_chosen_by_platform(monkeypatch):
 def test_install_dry_run_writes_nothing(fake_install, tmp_path, capsys, monkeypatch):
     calls = []
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: calls.append(a))
-    helper.install(tray=True, dry_run=True)
+    helper.install(dry_run=True)
     out = capsys.readouterr().out
-    assert "would write" in out and "would run: systemctl --user enable" in out
+    assert "would write" in out and "would run: systemctl --user enable coderstanding-helper.socket" in out
     assert calls == [] and not (tmp_path / "home" / ".config" / "systemd").exists()
 
 
-def test_install_and_uninstall_files(fake_install, tmp_path, monkeypatch):
+def test_install_migrates_login_entries_and_uninstall_removes_all(fake_install, tmp_path, monkeypatch):
     ran = []
     monkeypatch.setattr(subprocess, "run", lambda cmd, **k: ran.append(cmd))
-    helper.install(tray=True)
     unit_dir = tmp_path / "home" / ".config" / "systemd" / "user"
-    assert sorted(p.name for p in unit_dir.iterdir()) == ["coderstanding-helper.service",
-                                                          "coderstanding-tray.service"]
+    old = {unit_dir / "coderstanding-tray.service": "old tray",
+           unit_dir / "default.target.wants" / "coderstanding-helper.service": None,
+           unit_dir / "graphical-session.target.wants" / "coderstanding-tray.service": None}
+    for path, text in old.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text) if text else path.symlink_to(unit_dir / "gone.service")  # dangling link
+    helper.install(start=False)
+    assert sorted(p.name for p in unit_dir.iterdir() if p.is_file()) == [
+        "coderstanding-helper.service", "coderstanding-helper.socket"]
+    assert not any(path.is_symlink() or path.exists() for path in old)
     assert ["systemctl", "--user", "daemon-reload"] in ran
+    desktop = tmp_path / "home" / ".local" / "share" / "applications" / "coderstanding-url.desktop"
+    assert desktop.exists()
     helper.uninstall()
-    assert list(unit_dir.iterdir()) == []
+    assert [p for p in unit_dir.iterdir() if p.is_file()] == [] and not desktop.exists()
+    assert ["systemctl", "--user", "disable", "--now", "coderstanding-helper.socket",
+            "coderstanding-helper.service", "coderstanding-tray.service"] in ran
 
 
 def test_checkout_units_get_pythonpath(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "executable", str(tmp_path / "bin" / "python"))
     monkeypatch.setattr(helper.shutil, "which", lambda name: None)
-    text = next(iter(helper.SystemdUser().files(False).values()))
-    assert f'ExecStart="{tmp_path / "bin" / "python"}" "-m" "coderstanding"' in text
-    assert f'Environment="PYTHONPATH={SCANNER}"' in text
+    texts = unit_texts()
+    service = texts["coderstanding-helper.service"]
+    assert f'ExecStart="{tmp_path / "bin" / "python"}" "-m" "coderstanding"' in service
+    assert f'Environment="PYTHONPATH={SCANNER}"' in service
+    assert f'Exec="env" "PYTHONPATH={SCANNER}"' in texts["coderstanding-url.desktop"]
 
 
 # --- hook and skill -----------------------------------------------------------------------------

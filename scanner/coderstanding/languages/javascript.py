@@ -8,10 +8,13 @@ import tree_sitter_typescript
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult,
                                     LanguageModule, Ref, Target, register)
 from coderstanding import tsconfig
-from coderstanding.model import Member, child_id, entry_flags
+from coderstanding.model import Member, child_id, entry_flags, is_public
 
 from . import doc_text
-from .ts_util import children_of_type, descendants, first_child_of_type, end_line, line, make_parser, text
+from .ts_util import (children_of_type, descendants, first_child_of_type, end_line, first_error_line,
+                      lifted_children, line, make_parser, text)
+
+from .stubs import is_stub
 
 TS_PARSER = make_parser(tree_sitter_typescript.language_typescript())
 PARSERS = {".ts": TS_PARSER, ".mts": TS_PARSER, ".cts": TS_PARSER,
@@ -85,6 +88,47 @@ def member_chain(node):
     return [text(node)] + parts if node.type in ("identifier", "this") else []
 
 
+def function_stub(function):
+    """`stubs.is_stub` for a function, method or arrow function (DESIGN 7f): only a `{ }` body
+    counts (an arrow's expression body is real code), and never a constructor."""
+    body = function.child_by_field_name("body")
+    if body is None or body.type != "statement_block" \
+            or text(function.child_by_field_name("name")) == "constructor":
+        return False
+    return is_stub(body)
+
+
+def iife_body(statement):
+    """The body of `(function () { ... })();` / `(() => { ... })()`, else None."""
+    if statement.type != "expression_statement" or not statement.named_children:
+        return None
+    expression = unwrap_parentheses(statement.named_children[0])
+    if expression.type == "unary_expression":  # `!function () { ... }()`
+        expression = unwrap_parentheses(expression.child_by_field_name("argument"))
+    if expression.type != "call_expression":
+        return None
+    function = unwrap_parentheses(expression.child_by_field_name("function"))
+    body = function.child_by_field_name("body") if function.type in ("function_expression", "arrow_function") else None
+    return body if body is not None and body.type == "statement_block" else None
+
+
+def unwrap_parentheses(node):
+    while node is not None and node.type == "parenthesized_expression" and node.named_children:
+        node = node.named_children[0]
+    return node
+
+
+def top_level_statements(root):
+    """The file's top-level statements, with those of a top-level IIFE (a module pattern for
+    classic scripts) in its place: its functions are the module's own."""
+    for statement in lifted_children(root):
+        body = iife_body(statement)
+        if body is None:
+            yield statement
+        else:
+            yield from top_level_statements(body)
+
+
 class JavaScriptFile:
     def __init__(self, ctx):
         self.ctx = ctx
@@ -95,6 +139,7 @@ class JavaScriptFile:
         self.local_types = set()  # type aliases and type parameters: no node, no ref
         self.typed = set()  # ids of type nodes a specific reader already turned into refs
         self.declared = set()  # classic scripts: every name declared anywhere in the file
+        self.own_functions = {}  # module or class id -> its function names (own calls, own_call)
 
     def read(self):
         parser = PARSERS.get(posixpath.splitext(self.ctx.rel_path)[1], JS_PARSER)
@@ -105,8 +150,9 @@ class JavaScriptFile:
         if self.ctx.read_bytes().startswith(b"#!"):  # run directly: a script
             self.module.flags.extend(entry_flags("script-main"))
         self.result.declarations.append(self.module)
+        self.result.parse_error_line = first_error_line(root)
         self.find_classes(root)
-        for node in root.children:
+        for node in top_level_statements(root):
             self.read_top_level(node)
         self.read_calls(root, self.module_id, {}, "")
         self.read_type_uses(root, self.module_id)
@@ -229,10 +275,7 @@ class JavaScriptFile:
         elif node.type == "enum_declaration":
             self.read_enum(node, outer)
         elif node.type == "function_declaration":
-            self.module.members.append(Member(text(node.child_by_field_name("name")),
-                                              "function", line=line(node),
-                                              end=end_line(node)))
-            self.read_signature(node, self.module_id)
+            self.add_module_function(text(node.child_by_field_name("name")), node, node)
         elif node.type in ("lexical_declaration", "variable_declaration"):
             for declarator in children_of_type(node, "variable_declarator"):
                 self.read_declarator(declarator)
@@ -244,9 +287,14 @@ class JavaScriptFile:
         if value.type == "call_expression" and text(value.child_by_field_name("function")) == "require":
             self.read_require(name, value, declarator)
         elif value.type in ("arrow_function", "function_expression") and name.type == "identifier":
-            self.module.members.append(Member(text(name), "function", line=line(declarator),
-                                              end=end_line(declarator)))
-            self.read_signature(value, self.module_id)
+            self.add_module_function(text(name), declarator, value)
+
+    def add_module_function(self, name, node, function):
+        """A top-level function (declared or held by a `const`): a function member of the module."""
+        self.module.members.append(Member(name, "function", line=line(node), end=end_line(node),
+                                          stub=function_stub(function)))
+        self.own_functions.setdefault(self.module_id, set()).add(name)
+        self.read_signature(function, self.module_id)
 
     # --- imports ----------------------------------------------------------------------
 
@@ -370,9 +418,10 @@ class JavaScriptFile:
         fields = self.read_fields(body, class_id, declaration)
         for member in body.named_children:
             if member.type in ("method_definition", "method_signature"):
+                self.own_functions.setdefault(class_id, set()).add(text(member.child_by_field_name("name")))
                 declaration.members.append(Member(text(member.child_by_field_name("name")),
                                                   "method", line=line(member),
-                                                  end=end_line(member)))
+                                                  end=end_line(member), stub=function_stub(member)))
                 self.read_signature(member, class_id)
         self.read_calls(body, class_id, fields, class_id)
         self.read_type_uses(node, class_id)
@@ -505,7 +554,9 @@ class JavaScriptFile:
         if field_name in fields:
             return
         fields[field_name] = type_name
-        declaration.members.append(Member(field_name, "field", type_name, line(node)))
+        words = {text(c) for c in node.children if c.type == "accessibility_modifier"}
+        declaration.members.append(Member(field_name, "field", type_name, line(node),
+                                          public=is_public(field_name, "javascript", words)))
         self.add_type_ref(class_id, type_name, kind, node, "field", from_member=FIELD_MEMBER)
 
     def param_type(self, node, param_name):
@@ -626,6 +677,9 @@ class JavaScriptFile:
             self.read_nested_require(call)
         elif chain[:1] == ["this"]:
             self.read_this_call(chain, call, owner_id, fields, member)
+        elif len(chain) == 1 and owner_id == self.module_id and chain[0] not in self.imported \
+                and self.is_own(owner_id, chain[0]):
+            self.result.refs.append(Ref.own_call(owner_id, chain[0], line(call), member))
         elif len(chain) == 1 and chain[0] in self.imported:
             self.add_type_ref(owner_id, chain[0], "dependency", call, "call", chain[0],
                                from_member=member)
@@ -649,7 +703,13 @@ class JavaScriptFile:
             self.add_import(string_value(first_child_of_type(
                 call.child_by_field_name("arguments"), "string")), call)
 
+    def is_own(self, owner_id, name):
+        return name in self.own_functions.get(owner_id, ())
+
     def read_this_call(self, chain, call, owner_id, fields, member):
+        if len(chain) == 2 and owner_id != self.module_id and self.is_own(owner_id, chain[1]):
+            self.result.refs.append(Ref.own_call(owner_id, chain[1], line(call), member))
+            return
         if len(chain) < 3 or chain[1] not in fields:
             return
         if chain[-1] in EVENT_METHODS and len(chain) == 3 and self.read_event(

@@ -1,5 +1,9 @@
 // End-to-end viewer checks in real headless Chromium (DevTools protocol, real mouse and keys).
-// Run: node tests/e2e/run.mjs [--keep] [--shots DIR] [--app REPO --app-data DIR]
+// Run: node tests/e2e/run.mjs [--keep] [--step NAME-PART] [--only WORDS] [--shots DIR] [--app REPO --app-data DIR]
+// --only runs just the checks whose name contains any of WORDS (repeatable or comma-separated,
+// case-insensitive), e.g. --only "tours,specs". --step takes one exact name part (no comma split).
+// Every check starts from resetPage() (cleared storage, fresh load, deepest level) and builds what it
+// needs with scenario helpers (selectNode, registerSecondApp, ensureLinkedNote, rememberPreset), so any check runs alone.
 // Starts its own server on a spare port against tests/e2e/fixture with a throw-away data folder.
 // --app also checks the layout of a real app (read-only; --app-data must be a scratch folder, it
 // gets graph.json/cache): readable first zoom, no overlapping boxes, short bends.
@@ -19,6 +23,10 @@ const repo = resolve(here, "../..");
 const cli = join(repo, "bin", "coderstanding");
 const fixture = join(here, "fixture");
 const args = process.argv.slice(2);
+const onlyStep = args.includes("--step") ? args[args.indexOf("--step") + 1] : null;
+// --only a,b --only c: every value of every --only, split on commas, lowercased
+const onlyWords = args.flatMap((arg, i) => (arg === "--only" ? (args[i + 1] ?? "").split(",") : []))
+  .map((word) => word.trim().toLowerCase()).filter(Boolean);
 const shots = args.includes("--shots") ? args[args.indexOf("--shots") + 1] : join(homedir(), "Downloads", "coderstanding-wip");
 const data = mkdtempSync(join(tmpdir(), "coderstanding-e2e-data-"));
 const results = [];
@@ -109,7 +117,8 @@ window.__qa = {
     return { x: box.x + 5, y: box.y + 5 };
   },
   showing() { return document.getElementById("details").dataset.showing || ""; },
-  settled() { return document.getElementById("overlay").hidden && cy.nodes().length > 0 && !cy.nodes().some((n) => n.animated()); },
+  settled() { return document.getElementById("overlay").hidden && cy.nodes().length > 0 && !cy.nodes().some((n) => n.animated()) && !cy.animated() && settledDomains(); },
+  frames() { return [...document.querySelectorAll("#domBack .dom-frame, #domFront .dom-frame.card")].map((g) => g.dataset.frame).sort(); },
 };
 true`;
 
@@ -170,8 +179,16 @@ async function main() {
   const expectedErrors = [/favicon\.ico/];  // a step may add one it causes on purpose
   const errorsBefore = () => page.errors.filter((e) => !expectedErrors.some((pattern) => pattern.test(e)));
 
+  // Boxes show names only (Box text "name") unless a check asks for `boxtext=`: the older checks'
+  // spots and sizes assume that face; the "box faces" checks cover the taller ones.
   async function open(query = "") {
-    await page.goto(`${base}?${query.includes("theme=") ? "" : "theme=dark&"}${query}`);
+    // The Details fold under "In plain words" opens for the older checks (they use today's fields); `details=closed` = as first seen.
+    // The checks rely on the switches as they always were (the Explore preset) with More options open (`preset=` / `more=` to test those).
+    const pins = { theme: "dark", boxtext: "name", overview: "0", details: "open", preset: "explore", more: "open" };
+    const query0 = query.replace(/^\?/, "");
+    const names = new Set([...new URLSearchParams(query0).keys()]);
+    const extra = Object.entries(pins).filter(([name]) => !names.has(name)).map(([name, value]) => `${name}=${value}&`).join("");
+    await page.goto(`${base}?${extra}${query0}`);
     await page.eval(HELPERS);
     await page.waitFor("window.cy && document.getElementById('overlay').hidden && cy.nodes().length > 0", { what: "first view" });
     await settle();
@@ -181,14 +198,59 @@ async function main() {
     await page.waitFor("window.__qa && __qa.settled()", { what: "view settled" });
   }
   const qa = (expr) => page.eval(`__qa.${expr}`);
+  /** Drop remembered view switches (their URL names, viewer/view_options.js) so later checks start from the preset. */
+  const forgetOptions = (...names) => page.eval(`Object.keys(localStorage).filter((k) => k.startsWith("coderstanding-view")).forEach((k) => {
+    const v = JSON.parse(localStorage.getItem(k)); ${JSON.stringify(names)}.forEach((n) => delete v.changed?.[n]); localStorage.setItem(k, JSON.stringify(v)); }), true`);
   async function setLevel(key) {  // "Home" = the lowest ruler column, "End" = the deepest
     const levels = await page.eval("[...document.querySelectorAll('#rulerCols .rcol:not(:disabled)')].map((c) => c.dataset.level)");
     await page.clickOn(`#rulerCols .rcol[data-level="${key === "Home" ? levels[0] : levels.at(-1)}"]`);
     await settle();
   }
+  /** Every check starts here: remembered view options cleared, a fresh load of the preset view
+   *  (no selection, no open panels, no URL hash, graph tab, deepest default level). */
+  async function resetPage() {
+    await page.eval("localStorage.clear(), sessionStorage.clear(), true");
+    await open();
+    await setLevel("End");  // the checks were written for the deepest level (every class shown)
+  }
+  // Scenario helpers for the extra apps (idempotent: a check that needs them registers them itself).
+  const withMain = (name) => `class ${name}:\n    pass\n\nif __name__ == "__main__":\n    ${name}()\n`;  // a start, so level 1 shows it
+  const registered = () => (existsSync(isolated.CODERSTANDING_REGISTRY) ? Object.keys(JSON.parse(readFileSync(isolated.CODERSTANDING_REGISTRY, "utf8"))) : []);
+  function writeAppFolder(folder, files) {
+    mkdirSync(folder, { recursive: true });
+    for (const [name, source] of Object.entries(files)) writeFileSync(join(folder, `${name}.py`), source);
+  }
+  function registerSecondApp() {
+    const second = join(data, "second-repo");
+    if (registered().includes("second")) return second;
+    writeAppFolder(second, { alpha: withMain("Alpha"), beta: "class Beta:\n    pass\n" });
+    execFileSync(cli, ["add", "second", second, "--data", join(data, "second-data")], { env: { ...process.env, ...isolated } });
+    return second;
+  }
+  /** The app the picker check adds through Projects… > Add project…, registered directly. */
+  function registerThirdApp() {
+    const third = join(data, "third-repo");
+    if (registered().some((name) => name.startsWith("third"))) return third;
+    writeAppFolder(third, { delta: withMain("Delta") });
+    execFileSync(cli, ["add", "third-repo", third, "--data", join(data, "share", "third-repo")], { env: { ...process.env, ...isolated } });
+    return third;
+  }
+  /** Scenario: the app's view switches are remembered as a preset (a page reload on an app switch
+   *  drops the URL's `?preset=`, so a check that switches apps needs it stored). */
+  const rememberPreset = (app, preset) => page.eval(`localStorage.setItem("coderstanding-view:${app}", JSON.stringify({ preset: "${preset}", changed: {} })), true`);
+  /** Scenario: click a class and wait until the details panel shows it. */
+  async function selectNode(name) {
+    const node = await qa(`node(${JSON.stringify(name)})`);
+    await page.click(node.x + 20, node.y + 4);
+    await sleep(250);
+    await page.waitFor(`__qa.showing().includes(${JSON.stringify(name)})`, { what: `details of ${name}` });
+  }
   async function step(name, fn) {
+    if (onlyStep && !name.includes(onlyStep)) return;  // --step <part of a name>: run just that one
+    if (onlyWords.length && !onlyWords.some((word) => name.toLowerCase().includes(word))) return;  // --only
     const before = errorsBefore().length;
     try {
+      await resetPage();
       await fn();
       const errs = errorsBefore().slice(before);
       assert(!errs.length, `console errors: ${errs.join(" | ")}`);
@@ -267,23 +329,56 @@ async function main() {
       assert(await qa("node(\"requests\")"), "view still drawn after toggling");
     });
 
-    await step("Legend: clicking a line kind hides its lines, again restores them, hover lights them", async () => {
+    await step("Plain words: legend lists the view's kinds with plain words, click lights them and fades the rest, hide control hides", async () => {
       const entry = (kind) => `.legend [data-kind="${kind}"]`;
       const kind = await page.eval(`cy.edges().map((e) => e.data('raw').kinds[0])[0]`);
       const lines = () => page.eval(`cy.edges().filter((e) => e.data('raw').kinds.includes('${kind}')).length`);
       const before = await lines();
       assert(before > 0, "fixture has lines of a kind");
-      const { x, y } = await page.centreOf(entry(kind));
-      await page.move(x, y);
-      assert(await page.eval("cy.edges('.kind-hit').length") === before, "hover lights that kind's lines");
+      const shown = await page.eval(`[...document.querySelectorAll('.legend [data-kind]')].map((b) => b.dataset.kind).sort().join()`);
+      const inView = await page.eval(`[...new Set(cy.edges().flatMap((e) => e.data('raw').kinds))].sort().join()`);
+      assert(shown.split(",").filter((k) => k !== "derived").join() === inView, `legend ${shown} = kinds in the view ${inView}`);
+      assert(await page.eval(`document.querySelector('${entry(kind)}').textContent.length > ${kind.length}`) && await page.eval(`!!document.querySelector('${entry(kind)} .uml')`), "plain word first, UML name small after");
+      await page.clickOn(entry(kind));
+      assert(await page.eval("cy.edges('.kind-hit').length") === before, "click lights that kind's lines");
+      assert(await page.eval(`cy.edges('.kind-dim').length === cy.edges().length - ${before}`), "the other lines fade");
+      assert(await page.eval(`document.querySelector('${entry(kind)}').getAttribute('aria-pressed') === 'true'`), "entry shows it is lit");
+      await page.clickOn(entry(kind));
+      assert(await page.eval("cy.edges('.kind-hit, .kind-dim').length") === 0, "click again clears");
+      await page.clickOn(`.legend [data-hide-kind="${kind}"]`);
+      await settle();
+      assert(await page.eval(`cy.edges().filter((e) => e.data('raw').kinds.every((k) => k === '${kind}')).length`) === 0, "hide removes the kind's lines");
+      assert(await page.eval(`document.querySelector('${entry(kind)}').closest('.legend-entry').classList.contains('off')`), "the entry stays listed, marked hidden");
+      await page.clickOn(`.legend [data-hide-kind="${kind}"]`);
+      await settle();
+      assert(await lines() === before, "show brings them back");
+    });
+
+    await step("Plain words: line hover sentence, glossary terms outside notes, Words list, old helper without words", async () => {
+      // a line whose middle is on screen and clear of every box (taller box faces can cover a short line's middle)
+      const mid = () => page.eval(`(() => { const clear = (m) => m.x > 0 && m.y > 0 && m.x < cy.width() && m.y < cy.height() && !cy.nodes(':visible').some((n) => { const r = n.renderedBoundingBox(); return m.x > r.x1 && m.x < r.x2 && m.y > r.y1 && m.y < r.y2; });
+        const e = cy.edges().filter((x) => x.visible() && clear(x.renderedMidpoint()))[0]; const b = cy.container().getBoundingClientRect(), m = e.renderedMidpoint(); return { x: b.x + m.x, y: b.y + m.y }; })()`);
+      const at = await mid();
+      await page.move(at.x, at.y);
+      await page.waitFor("document.querySelector('.word-tip') && !document.querySelector('.word-tip').hidden", { what: "line tip" });
+      const tip = await page.eval("document.querySelector('.word-tip').textContent");
+      assert(/ = /.test(tip) && (/\(no note yet\)/.test(tip) || /: \S/.test(tip)), `sentence with the kind's tip: ${tip}`);
       await page.move(5, 5);
-      await page.clickOn(entry(kind));
-      await settle();
-      assert(await page.eval(`cy.edges().filter((e) => e.data('raw').kinds.every((k) => k === '${kind}')).length`) === 0, "clicking hides the kind's lines");
-      assert(await page.eval(`document.querySelector('${entry(kind)}').classList.contains('off')`), "the entry stays listed, marked off");
-      await page.clickOn(entry(kind));
-      await settle();
-      assert(await lines() === before, "clicking again brings them back");
+      await page.waitFor("document.querySelector('.word-tip').hidden", { what: "tip hides" });
+      // glossary: first use of a term in the page text gets a dotted underline and a definition; notes and canvas labels do not
+      await page.waitFor("document.querySelector('.controls .term, #details .term, #ruler .term')", { what: "a term underlined" });
+      assert(await page.eval("!document.querySelector('textarea .term, [data-field]:not(dt) .term, #canvas .term, button .term')"), "no terms in notes, boxes or buttons");
+      assert(await page.eval("new Set([...document.querySelectorAll('#details .term')].map((t) => t.dataset.term)).size === document.querySelectorAll('#details .term').length"), "first use only");
+      const term = await page.eval("document.querySelector('.controls .term, #details .term, #ruler .term').dataset.term");
+      await page.eval(`document.querySelector('.term[data-term="${term}"]').focus()`);
+      await page.waitFor("!document.querySelector('.word-tip').hidden && document.querySelector('.word-tip').textContent.length > 20", { what: "definition on focus" });
+      await page.move(5, 5);
+      assert(await page.eval("/god class/.test(FieldHelp.wordsList()) && /uses/.test(FieldHelp.wordsList())"), "Words list in the help");
+      // an older helper sends no `words`: the legend falls back to today's labels and nothing breaks
+      await page.eval(`FieldHelp.setRules({ rule: '', house: '', fields: {} }); renderLegend(state.current)`);
+      assert(await page.eval("document.querySelectorAll('.legend [data-kind]').length > 0 && !document.querySelector('.legend .uml')"), "legend still built, kind names only");
+      await page.eval(`api('/api/fields').then((r) => FieldHelp.setRules(r)).then(() => renderLegend(state.current))`);
+      await page.waitFor("!!document.querySelector('.legend .uml')", { what: "words back" });
     });
 
     await step("Types strip: chips toggle a type's classes, hover lights them, names are never cut", async () => {
@@ -313,6 +408,72 @@ async function main() {
       assert(!(await page.eval("document.querySelector('#fanFront').textContent.includes('…')")), "no ellipsis in box labels");
       mkdirSync(shots, { recursive: true });
       await page.screenshot(join(shots, "type-chips.png"));
+    });
+
+    await step("Filters keep the view: a chip or Show switch only adds or removes its own classes", async () => {
+      // regression: toggling a filter used to refit the camera and re-place every box
+      const spots = () => page.eval(`JSON.stringify([...cy.nodes().map((n) => [n.id(), Math.round(n.position('x')), Math.round(n.position('y'))]), cy.zoom().toFixed(3), Math.round(cy.pan().x), Math.round(cy.pan().y)])`);
+      const opened = await page.eval(`cy.nodes().filter((n) => n.data('type') === '.gd')[0].id()`);
+      await page.eval(`state.expanded.add(${JSON.stringify(opened)}); loadView().then(() => { selectInGraph(${JSON.stringify(opened)}); cy.zoom(0.9); cy.pan({ x: 123, y: 77 }); })`);
+      await settle();
+      const before = await spots();
+      for (const box of ['#typeStrip [data-type=".tscn"]', "#showExternal"]) {
+        await page.clickOn(box);
+        await settle();
+        assert(await page.eval("cy.zoom().toFixed(3)") === "0.900", `${box}: zoom kept`);
+        assert(await page.eval("Math.round(cy.pan().x) + ',' + Math.round(cy.pan().y)") === "123,77", `${box}: pan kept`);
+        await page.clickOn(box);
+        await settle();
+      }
+      const after = await spots();
+      assert(after === before, "after hiding and showing again every box is where it was");
+      assert(await page.eval(`state.expanded.has(${JSON.stringify(opened)}) && state.selected?.raw?.id === ${JSON.stringify(opened)}`), "the open class and the selection stay");
+    });
+
+    await step("Types strip: file-kind chips toggle a kind through the view request", async () => {
+      // the fixture is all code, so draw the chips from a made-up view and check the click's request
+      await page.eval(`renderTypeStrip({ ...state.current, file_kinds: { Code: 5, Data: 2 }, hidden_file_kinds: [] })`);
+      assert(await page.eval("document.querySelectorAll('#typeStrip [data-file-kind]').length") === 2, "one chip per kind");
+      await page.clickOn('#typeStrip [data-file-kind="Data"]');
+      await settle();
+      assert(await page.eval("state.hiddenFileKinds.join()") === "Data", "the click saves the hidden kind");
+      assert(await page.eval("viewParams().getAll('hide_file_kind').join()") === "Data", "and the view request carries it");
+      await page.eval(`toggleFileKind('Data')`);
+      await settle();
+      assert(await page.eval("state.hiddenFileKinds.length") === 0, "toggling again clears it");
+    });
+
+    await step("Nicknames on the box, and tag chips toggle a tag through the view request", async () => {
+      const notesFile = join(data, "notes.jsonl");
+      const saved = existsSync(notesFile) ? readFileSync(notesFile) : null;
+      const levelBefore = await page.eval("state.level");  // later checks go on from this level
+      try {
+        execFileSync(cli, ["set", fixture, "Big", "nickname=World_map", "tags=qa_tag", "--data", data]);
+        await open();
+        await setLevel("End");
+        const box = await page.eval(`(() => { const n = cy.nodes().filter((x) => x.data('raw').name === 'Big')[0];
+          return n && { name: n.data('name'), marks: n.data('marks') }; })()`);
+        assert(box && box.name === "World_map", `nickname is the box's main name: ${JSON.stringify(box)}`);
+        assert(box.marks.split(" · ")[0] === "Big", `the real name is small under it: ${box.marks}`);
+        assert(await page.eval("document.querySelectorAll('#typeStrip [data-tag=\"qa_tag\"]').length") === 1, "one chip for the tag");
+        await page.clickOn('#typeStrip [data-tag="qa_tag"]');
+        await settle();
+        assert(await page.eval("state.hiddenTags.join()") === "qa_tag", "the click saves the hidden tag");
+        assert(await page.eval("viewParams().getAll('hide_tag').join()") === "qa_tag", "and the view request carries it");
+        assert(await page.eval("!cy.nodes().some((x) => x.data('raw').name === 'Big')"), "the tagged class is gone");
+        assert(await page.eval("document.querySelector('#typeStrip [data-tag=\"qa_tag\"]').classList.contains('off')"), "its chip stays, off");
+        await page.eval(`toggleTag('qa_tag')`);
+        await settle();
+        assert(await page.eval("state.hiddenTags.length") === 0, "toggling again clears it");
+      } finally {
+        if (saved) writeFileSync(notesFile, saved); else rmSync(notesFile, { force: true });
+        await forgetOptions("hide_tag");
+        await open();
+        if (await page.eval("state.level") !== levelBefore) {
+          await page.clickOn(`#rulerCols .rcol[data-level="${levelBefore}"]`);
+          await settle();
+        }
+      }
     });
 
     await step("Long class and function names wrap, in the header and in open rows", async () => {
@@ -352,6 +513,10 @@ async function main() {
     });
 
     await step("hover shows, click keeps the details", async () => {
+      // hover only previews while nothing is selected (plain panel rules), and an earlier check left a class selected
+      const blank = await qa("empty()");
+      await page.click(blank.x, blank.y);
+      assert(await page.eval("state.selected === null"), "a click on empty canvas cleared the old selection");
       const player = await qa('node("Player")');
       await page.move(player.x + 20, player.y + 4);
       await sleep(150);
@@ -367,6 +532,7 @@ async function main() {
     });
 
     await step("AI draft Accept", async () => {
+      await selectNode("Player");
       await page.clickOn('#details [data-act="accept"][data-name="hint"]');
       await settle();
       const note = lastNote("node:Player", "hint");
@@ -374,9 +540,8 @@ async function main() {
     });
 
     await step("notes: Enter saves, Esc reverts, Ctrl+Enter and blur save, status", async () => {
+      await selectNode("Big");
       const big = await qa('node("Big")');
-      await page.click(big.x + 20, big.y + 4);
-      await sleep(250);
       const fieldSel = (name) => `#details .note-input[data-note="${name}"]`;
       const zoomBefore = await page.eval("cy.zoom()");
       await page.clickOn(fieldSel("hint"));
@@ -428,6 +593,7 @@ async function main() {
     });
 
     await step("details: Loaded by adds a dashed line, Remove takes it away", async () => {
+      await selectNode("Big");
       await page.clickOn("#loadedPick");
       await page.type("bus");
       await sleep(500);
@@ -494,6 +660,47 @@ async function main() {
       await page.clickOn('#fanFront [aria-label="Collapse Big"]');
       await settle();
       assert(JSON.stringify(await qa("positions()")) === JSON.stringify(before), "collapse restores the picture");
+    });
+
+    await step("open box: private and fields fold into rows, a row opens its list; Self calls switch", async () => {
+      const pid = (await qa('node("Player")')).id;
+      await page.clickOn('#fanFront [aria-label="Expand Player"]');
+      await settle();
+      const labels = () => page.eval("[...document.querySelectorAll('#fanFront .grp-label')].map((t) => t.textContent)");
+      assert(JSON.stringify(await labels()) === JSON.stringify(["1 private", "2 properties"]), `folded rows: ${await labels()}`);
+      assert(!(await page.eval("document.querySelectorAll('#fanFront .fld').length")), "no field text while folded");
+      assert(!(await page.eval("!!document.querySelector('#fanFront rect.fn-row[aria-label=\"Player._clamp_health\"]')")), "private function folded");
+      const selfLink = await page.eval(`state.current.fanout.find((l) => l.internal && l.from === ${JSON.stringify(pid)})`);
+      assert(selfLink && selfLink.to_fn === "_clamp_health", "take_hit -> _clamp_health is a self call");
+      const box = await page.eval(`boxOf(${JSON.stringify(pid)})`);
+      const rowY = await page.eval(`sectionsAt(boxOf(${JSON.stringify(pid)})).groups[0].top + FAN.groupRow / 2 + 2`);
+      assert(await page.eval(`anchorOf(boxOf(${JSON.stringify(pid)}), "_clamp_health", "right").y`) === rowY, "its line attaches to the private row");
+      const others = await qa("positions()");
+      await page.clickOn('#fanFront .grp-row[data-group$="#property"]');
+      await settle();
+      assert(await page.eval("document.querySelectorAll('#fanFront .fld').length") === 2, "properties shown after a click");
+      await page.clickOn('#fanFront .grp-row[data-group$="#private"]');
+      await settle();
+      assert(await page.eval("!!document.querySelector('#fanFront rect.fn-row[aria-label=\"Player._clamp_health\"]')"), "private function listed after a click");
+      const opened = await qa("positions()");
+      assert(Object.keys(others).every((id) => id === pid || String(others[id]) === String(opened[id])), "opening groups moves no other box");
+      assert((await page.eval(`boxOf(${JSON.stringify(pid)})`)).h > box.h, "the box grew");
+      // Self calls: shown by default, the Show switch hides them (remembered), the legend entry follows
+      const internalWires = () => page.eval(`bundlesOf(shownLinks(state.current)).filter((b) => b.internal).length`);
+      assert(await page.eval("document.getElementById('showSelfCalls').checked") && (await internalWires()) > 0, "self calls shown");
+      await page.clickOn("#showSelfCalls");
+      await settle();
+      assert((await internalWires()) === 0 && await page.eval("document.querySelector('.legend [data-fan]').classList.contains('off')"), "Self calls off: none drawn, legend off");
+      assert(JSON.stringify(await qa("positions()")) === JSON.stringify(opened), "hiding self calls moves nothing");
+      await open("");
+      await setLevel("End");  // the steps after this one expect the deepest level
+      assert(!(await page.eval("document.getElementById('showSelfCalls').checked")), "Self calls choice remembered");
+      await page.clickOn('.legend [data-fan]');
+      await settle();
+      assert(await page.eval("document.getElementById('showSelfCalls').checked"), "the legend entry switches it back");
+      await page.clickOn("#collapseAllBtn");
+      await settle();
+      await page.eval("state.openGroups.clear(), true");
     });
 
     await step("opening keeps View-mode moves and the Auto preview in place", async () => {
@@ -575,6 +782,23 @@ async function main() {
       const shown = await page.eval("document.querySelectorAll('#fanFront rect.fn-row').length");
       assert(shown === 10, `filter shows step_10..19 (got ${shown})`);
       assert(big, "Big still drawn");
+      await page.eval("state.fnFilter.clear()");  // later checks open Big again without a filter
+      await page.clickOn("#collapseAllBtn");
+      await settle();
+    });
+
+    await step("class Properties: only public fields are listed (_hidden skipped)", async () => {
+      await page.clickOn('#fanFront [aria-label="Expand Big"]');
+      await settle();
+      const labels = () => page.eval("[...document.querySelectorAll('#fanFront .grp-label')].map((t) => t.textContent)");
+      assert(JSON.stringify(await labels()) === JSON.stringify(["1 private", "1 property"]), `folded rows: ${await labels()}`);
+      assert(await page.eval("document.querySelectorAll('#fanFront .fld').length") === 0, "collapsed by default");
+      await page.eval(`toggleGroup("Big#property")`);  // the Big box is taller than the screen, so no pointer click
+      await settle();
+      const shownFields = await page.eval("[...document.querySelectorAll('#fanFront .fld')].map((t) => t.textContent).join()");
+      assert(shownFields === "count: int", `open shows the public property only: ${shownFields}`);
+      mkdirSync(shots, { recursive: true });
+      await page.screenshot(join(shots, "class-props.png"));
       await page.clickOn("#collapseAllBtn");
       await settle();
     });
@@ -679,7 +903,7 @@ async function main() {
       await page.clickOn('#details [data-act="ignore-warning"]');
       await settle();
       assert(JSON.stringify(lastNote("node:Unused", "ignore_warnings")?.ignore_warnings) === '["unused"]', "ignored");
-      await page.eval("document.querySelector('#details details')?.setAttribute('open', '')");
+      await page.eval("document.querySelector('#details [data-act=\"unignore-warning\"]')?.closest('details')?.setAttribute('open', '')");
       await page.clickOn('#details [data-act="unignore-warning"]');
       await settle();
       const undone = lastNote("node:Unused", "ignore_warnings");
@@ -799,8 +1023,12 @@ async function main() {
       assert(await page.eval("document.querySelector('#specHits [data-hit]').dataset.hit") === "player", "high work priority first");
       await choose("#specSort", "importance");
       await specWait("document.querySelector('#specHits [data-hit]').dataset.hit === 'tools'", "high importance first");
+      // Two quick changes whose first answer arrives last: the newest choice must still win (a stale load once overwrote it).
+      await page.eval(`(() => { const real = window.fetch; window.fetch = (url, ...rest) => /api\\/specs\\?/.test(String(url)) && !/stage=/.test(String(url)) ? new Promise((resolve) => setTimeout(resolve, 600)).then(() => real(url, ...rest)) : real(url, ...rest); window.__realFetch = real; })()`);
       await choose("#specSort", "");
       await choose("#specStageFilter", "implemented");
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await page.eval("window.fetch = window.__realFetch, true");
       await specWait("document.querySelectorAll('#specHits [data-hit]').length === 1", "stage filter");
       assert(await page.eval("document.querySelector('#specHits [data-hit]').dataset.hit") === "tools", "old status done read as implemented");
       await choose("#specStageFilter", "");
@@ -833,7 +1061,13 @@ async function main() {
       await specWait("document.getElementById('cardTabSpecs').getAttribute('aria-selected') === 'true' && document.querySelector('#specTree [data-spec=game]')", "back to specs");
     });
 
+    /** Scenario: the note the Notes tab check adds ("Ask about frames", linked to the Player>Big line), when it is not there yet. */
+    const ensureLinkedNote = () => {
+      if (specFile("new-note", "memos")) return;
+      writeFileSync(join(data, "memos", "new-note.md"), "---\nid: new-note\ntitle: Ask about frames\nlinks: [Player>Big]\nby: sam\n---\n");
+    };
     await step("Links both ways: badges on classes and lines, a line's details list its notes", async () => {
+      ensureLinkedNote();
       await openSpecs("specs=1&level=3");
       assert(/§\d/.test(await page.eval("cy.getElementById('Player').data('marks')")), "class badge");
       const label = await page.eval("cy.edges().filter((e) => e.data('raw').to === 'Big' && e.source().data('raw').name === 'Player')[0].data('label')");
@@ -926,6 +1160,79 @@ async function main() {
       assert(await page.eval("new URLSearchParams(location.search).get('step')") === "2", "step in the URL");
     });
 
+    await step("Tours guide: step highlight in the graph, camera glide, line note popups", async () => {
+      await openTour("tab=tours&tour=first-steps&step=1");
+      const inView = "cy.nodes('.focus').length > 0 && cy.nodes('.focus').every((n) => { const b = n.renderedBoundingBox(); return b.x1 >= 0 && b.y1 >= 0 && b.x2 <= cy.width() && b.y2 <= cy.height(); })";
+      await page.waitFor(`!TourView.state.gliding && state.tourStep && ${inView}`, { what: "step framed in the canvas" });
+      const lit = await page.eval("[...document.querySelectorAll('#fanFront .fn.lit .fn-name')].map((t) => t.textContent).join()");
+      assert(lit === "_ready()", `focused function lit: ${lit}`);
+      assert(await page.eval("document.querySelectorAll('#fanBack .wire.hot, #fanFront .wire.hot').length") > 0, "its lines lit");
+      const more = await page.eval("[...document.querySelectorAll('#fanFront .grp-label')].map((t) => t.textContent).join()");
+      assert((more.match(/\d+ more/g) || []).length >= 2, `the called classes open too, other functions folded: ${more}`);
+      assert(await page.eval(inView), "step framed in the canvas");
+      // the next step glides: the camera passes through in-between spots
+      await page.eval("(() => { window.__cam = []; const t0 = performance.now(); const tick = () => { __cam.push(Math.round(cy.pan().x)); if (performance.now() - t0 < 900) requestAnimationFrame(tick); }; tick(); })()");
+      await page.clickOn("#tourNext");
+      await page.waitFor("TourView.state.cur === 1 && !TourView.state.gliding && state.current.focus?.nodes.includes('Player')", { what: "step 2 framed" });
+      await sleep(300);
+      const cams = await page.eval("[...new Set(window.__cam)].length");
+      assert(cams >= 4, `camera glides (${cams} distinct spots)`);
+      assert(await page.eval(inView), "step 2 framed in the canvas");
+      // line notes: all shown while browsing; hidden at play start, popping up at their cue
+      await page.clickOn("#tourBack");
+      await page.waitFor("TourView.state.cur === 0 && !TourView.state.gliding", { what: "back on step 1" });
+      const note = await page.eval("(() => { const n = document.querySelector('#codeSrc .lnote'); return n && [n.classList.contains('on'), n.textContent, n.previousElementSibling.querySelector('.no').textContent]; })()");
+      assert(note && note[0] && note[1] === "Hands over to Player#spawn." && note[2] === "12", `note under line 12, shown: ${JSON.stringify(note)}`);
+      assert(await page.eval("document.querySelectorAll('#codeSrc .ln.noted').length") === 1, "its line marked");
+      await page.clickOn("#tourPlay");
+      await page.waitFor("TourView.player.playing", { what: "playing" });
+      assert(await page.eval("!document.querySelector('#codeSrc .lnote').classList.contains('on') || TourView.player.word >= TourView.state.noteCues[0]"), "hidden until the narration reaches it");
+      await page.eval("(() => { const bar = document.getElementById('seekBar'); bar.value = 950; bar.dispatchEvent(new Event('input')); })()");
+      await page.waitFor("document.querySelector('#codeSrc .lnote.on')", { what: "note pops up at its cue" });
+      await page.clickOn("#tourPlay");  // pause
+    });
+
+    await step("Tours read notes", async () => {
+      // A fake voice (no sound): each utterance starts after the one before and ends 12 ms per character later.
+      await openTour("tab=tours&tour=first-steps&step=1");
+      await page.eval(`(() => {
+        const env = TourView.player.env;
+        window.__realSynth = env.synth;
+        window.__said = [];
+        let timers = [], busy = Promise.resolve(), gen = 0;
+        env.synth = {
+          getVoices: () => [{ name: "fake", lang: "en-US", localService: true }],
+          cancel: () => { gen++; timers.forEach(clearTimeout); timers = []; busy = Promise.resolve(); },
+          speak: (u) => {
+            const mine = gen;
+            busy = busy.then(() => new Promise((done) => {
+              if (mine !== gen) return done();
+              __said.push(u.text);
+              u.onstart?.();
+              timers.push(setTimeout(() => { if (mine === gen) u.onend?.(); done(); }, 12 * u.text.length));
+            }));
+          },
+        };
+      })()`);
+      assert(await page.eval("localStorage.getItem('coderstanding-tour-read-notes')") !== "1", "off by default");
+      await page.clickOn("#tourReadNotes");
+      assert(await page.eval("TourView.player.readNotes && localStorage.getItem('coderstanding-tour-read-notes') === '1'"), "on and remembered");
+      await page.clickOn("#tourPlay");
+      await page.waitFor("TourView.player.readingNote === 0", { what: "the note is being read", timeout: 15000 });
+      assert(await page.eval("document.querySelector('#codeSrc .lnote.reading')?.textContent.includes('Hands over')"), "popup marked as being read");
+      assert(await page.eval("__said.includes(\"Hands over to Player spawn.\")"), "the note was spoken");
+      const held = await page.eval("[TourView.player.track.pos, TourView.player.word]");
+      await sleep(150);
+      assert(JSON.stringify(await page.eval("[TourView.player.track.pos, TourView.player.word]")) === JSON.stringify(held), "clock and highlight held while the note is read");
+      await page.waitFor("TourView.player.readingNote === -1 && TourView.player.playing && !document.querySelector('#codeSrc .lnote.reading')", { what: "narration resumes", timeout: 15000 });
+      await page.waitFor("TourView.player.track.at > 0 && __said.length > 2", { what: "step spoken again" });
+      await page.clickOn("#tourPlay");  // pause
+      // off again: remembered per viewer, and the note is no longer read
+      await page.clickOn("#tourReadNotes");
+      assert(await page.eval("!TourView.player.readNotes && localStorage.getItem('coderstanding-tour-read-notes') === '0'"), "off and remembered");
+      await page.eval("TourView.player.env.synth = __realSynth");
+    });
+
     await step("Tours keyboard: arrows, Home, Space", async () => {
       await openTour("tab=tours&tour=first-steps&step=1");
       await page.key("ArrowRight");
@@ -1009,6 +1316,79 @@ async function main() {
       assert(await page.eval("navigator.clipboard.readText()") === aiText, "Copy for AI copies the step text");
     });
 
+    await step("Refs: Copy text | Copy location on a tour step and on selected code lines; a ?ref= link opens its view (answer stubbed)", async () => {
+      await openTour("tab=tours&tour=first-steps&step=2");
+      await page.grantClipboard(base.slice(0, -1));
+      const readClip = (type) => page.eval(`navigator.clipboard.read().then(async (items) => (await items[0].getType(${JSON.stringify(type)})).text())`);
+      await page.clickOn("#tourPanel .stephead [data-copy-text]");
+      await page.waitFor("/Copied text/.test(document.querySelector('#tourPanel .stephead [data-copy-text]').textContent)", { what: "copied text" });
+      const stepText = await page.eval("navigator.clipboard.readText()");
+      assert(/^\[\[Player#spawn\]\] tells everyone/.test(stepText), `step text: ${stepText}`);
+      await page.clickOn("#tourPanel .stephead [data-copy-ref]");
+      await page.waitFor("/Copied location/.test(document.querySelector('#tourPanel .stephead [data-copy-ref]').textContent)", { what: "copied location" });
+      const text = await readClip("text/plain"), html = await readClip("text/html");
+      assert(text === "@fixture tour first-steps step 2 (The player spawns)", `step location: ${text}`);
+      assert(html.includes("?app=fixture&amp;ref=%40fixture%20tour%20first-steps%20step%202") && html.includes(">@fixture tour first-steps step 2"), `step link: ${html}`);
+      // selected code lines: Ctrl+C is the normal copy, Ctrl+Shift+C the location
+      await page.eval(`(() => {
+        const lines = document.querySelectorAll('#codeSrc .ln'), range = document.createRange();
+        range.setStart(lines[0].firstChild.firstChild, 0);
+        range.setEnd(lines[1].lastChild, lines[1].lastChild.length);
+        getSelection().removeAllRanges(); getSelection().addRange(range);
+      })()`);
+      const plain = await page.eval("(() => { const e = new ClipboardEvent('copy', { clipboardData: new DataTransfer(), cancelable: true, bubbles: true }); document.getElementById('codeSrc').dispatchEvent(e); return e.defaultPrevented; })()");
+      assert(plain === false, "Ctrl+C on code is left to the browser (normal copy)");
+      await page.key("c", { ctrl: true, shift: true });
+      await page.waitFor("/Copied location/.test(document.getElementById('tourToast').textContent)", { what: "Ctrl+Shift+C" });
+      assert(await page.eval("navigator.clipboard.readText()") === "@fixture src/player.gd:8-9 (Player#spawn +0..+1)", "Ctrl+Shift+C copies the lines' location");
+      // the right-click menu on the selection offers both; Copy text = the raw lines, no numbers
+      await page.eval("document.getElementById('codeSrc').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }))");
+      await page.waitFor("!!document.querySelector('.copy-menu [data-copy-ref]')", { what: "context menu" });
+      assert(await page.eval("document.querySelector('.copy-menu [data-copy-ref]').dataset.copyRef") === "@fixture src/player.gd:8-9 (Player#spawn +0..+1)", "menu location is the selection's");
+      await page.clickOn(".copy-menu [data-copy-text]");
+      await page.waitFor("/Copied text/.test(document.querySelector('.copy-menu [data-copy-text]')?.textContent)", { what: "menu copy text" });
+      const code = await page.eval("navigator.clipboard.readText()");
+      assert(code.split("\n").length === 2 && !/^\d/.test(code), `raw lines: ${JSON.stringify(code)}`);
+      // the code pane's head has the pair for the whole excerpt; a step's right-click menu has both too
+      assert(await page.eval("document.querySelectorAll('#tourCode .codehead .copy-pair button').length") === 2, "code head pair");
+      await page.eval("getSelection().removeAllRanges()");
+      await page.eval("document.getElementById('stepText').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 100, clientY: 100 }))");
+      assert(await page.eval("document.querySelector('.copy-menu [data-copy-ref]')?.dataset.copyRef") === "@fixture tour first-steps step 2 (The player spawns)", "step menu location");
+      await page.key("Escape");
+      assert(await page.eval("!document.querySelector('.copy-menu')"), "Esc closes the menu");
+      // a ?ref= link: /api/ref (stubbed; the backend is another branch) names the view, the page opens it
+      const search = await page.eval(`(async () => {
+        history.replaceState(null, "", "/?app=fixture&ref=" + encodeURIComponent("@fixture tour first-steps step 3"));
+        const real = window.fetch;
+        window.fetch = (url, ...rest) => String(url).includes("/api/ref?")
+          ? Promise.resolve(new Response(JSON.stringify({ ok: true, kind: "step", view: { tab: "tours", tour: "first-steps", step: 3 } }), { status: 200 }))
+          : real(url, ...rest);
+        const found = await openRefFromUrl();
+        window.fetch = real;
+        return { search: location.search, kind: found.kind };
+      })()`);
+      assert(search.kind === "step" && !search.search.includes("ref=") && /tab=tours/.test(search.search) && /step=3/.test(search.search), `rewritten address: ${search.search}`);
+      await openTour(search.search.slice(1));
+      assert(await tourPanel(".stepno") === "Step 3/3", `link opened step: ${await tourPanel(".stepno")}`);
+      // the view options a ref's answer names: hl lights the step's lines, file + hl says where, select shows the class's pair
+      await openTour("tab=tours&tour=first-steps&step=2&hl=9-10");
+      assert(await page.eval("document.querySelectorAll('#codeSrc .ln.ref-hit').length") === 2, "hl lights two lines");
+      await open("file=src/player.gd&hl=8-9");
+      const where = await page.eval("document.getElementById('refNote').hidden ? '' : document.getElementById('refNoteText').textContent");
+      assert(/src\/player\.gd:8-9/.test(where), `file banner: ${where}`);
+      await open("level=9&select=Player");
+      await page.waitFor("!!document.querySelector('#details [data-copy-ref]')", { what: "class details pair" });
+      assert(await page.eval("document.querySelector('#details [data-copy-ref]').dataset.copyRef") === "@fixture Player", "class location");
+      // a miss: a short message with the did-you-mean names
+      await page.eval(`(async () => {
+        history.replaceState(null, "", "/?app=fixture&ref=" + encodeURIComponent("@fixture Plaer"));
+        window.fetch = () => Promise.resolve(new Response(JSON.stringify({ ok: false, error: "no such class", did_you_mean: ["Player"] }), { status: 404 }));
+        await openRefFromUrl();
+      })()`);
+      const miss = await page.eval("document.getElementById('refNote').hidden ? '' : document.getElementById('refNoteText').textContent");
+      assert(/no such class/.test(miss) && /Did you mean: Player/.test(miss), `miss banner: ${miss}`);
+    });
+
     await step("Tours editor: add a step from the selection, reorder, save; record a step", async () => {
       await openTour("tab=tours&tour=first-steps&step=2&edit=1");
       assert(await page.eval("document.getElementById('tabTours').classList.contains('editing') && !!document.querySelector('#tourPanel .tour-editbar')"), "edit bar and stripes");
@@ -1016,6 +1396,9 @@ async function main() {
       // edit step 2: text, and the excerpt one line shorter with one marked line
       await page.eval(`(() => { const set = (id, v) => { const el = document.getElementById(id); el.value = v; el.dispatchEvent(new Event("input", { bubbles: true })); };
         set("edText", "Edited by hand: [[Player#spawn]] announces the player."); set("edLines", "+0..+1"); set("edMark", "9"); })()`);
+      await page.waitFor("!TourView.state.gliding", { what: "step framed" });
+      await page.eval("cy.center(cy.getElementById('Player')) && true");  // the step's own layout may put it anywhere
+      await sleep(100);
       const node = await qa('node("Player")');
       await page.click(node.x, node.top + 10);
       await page.waitFor("!document.querySelector('#tourPanel [data-act=add-sel]').disabled", { what: "selection offered" });
@@ -1028,6 +1411,7 @@ async function main() {
       assert(/key: s1[^]*?targets: \[Player\][^]*?key: s2[^]*?key: s3/.test(file), `new step second, keys kept:\n${file.slice(0, 600)}`);
       assert(/key: s2[^]*?lines: \+0\.\.\+1, mark: \[\+1\]/.test(file) && /Edited by hand/.test(file), `edit stored:\n${file}`);
       assert(/key: s1\n[^]*?lines: \+0\.\.\+5, mark: \[\+3, \+4\]/.test(file) && /key: s3\n[^]*?lines: \+0\.\.\+2, mark: \[\+1, \+2\]/.test(file), "untouched steps keep their lines");
+      assert(/key: s1\n[^]*?notes: \[\{lines: \+4\.\.\+4, text: "Hands over to \[\[Player#spawn\]\]\.", cue: announces the start\}\]/.test(file), "the editor sends a step's line notes back unchanged");
       const saved = await page.eval("TourView.state.tour.steps.find((s) => s.key === 's2').code");
       assert(saved.from === 8 && saved.to === 9 && saved.mark.join() === "9", `round trip: ${JSON.stringify(saved)}`);
       // record step 1 with the fake microphone (the tour as on the server: discard the draft)
@@ -1102,6 +1486,541 @@ async function main() {
       assert(await page.eval("!document.getElementById('tabGraph').hidden && document.getElementById('tabTours').hidden"), "graph tab shown");
     });
 
+    await step("Tour view options: a tour's and a step's view apply while it plays, leaving restores yours, editor View section", async () => {
+      const file = join(data, "tours", "view-steps.md");
+      writeFileSync(file, readFileSync(fixtureTour, "utf8").replace("id: first-steps\ntitle: How the game starts\n",
+        "id: view-steps\ntitle: Viewed steps\nview: {lines: all, selfcalls: false, hide_kind: [dependency]}\n")
+        .replace("    by: claude\n    ai: true\n", "    by: claude\n    ai: true\n    view: {boxtext: full}\n"));
+      try {
+        await open("level=9&boxtext=saved");  // the user's own switches (no URL override of box text)
+        const mine = await page.eval("JSON.stringify({ lines: state.lines, kinds: state.hiddenKinds, fan: state.fanHidden, box: state.boxText })");
+        await openTour("tab=tours&tour=view-steps&step=1&boxtext=saved");
+        assert(await page.eval("state.lines === 'all' && state.fanHidden.includes('self') && state.hiddenKinds.includes('dependency')"), "the tour's view applies");
+        assert(await page.eval("(state.current.hidden_kinds || []).includes('dependency')"), "the step graph asks the server without those lines");
+        assert(/Lines: All equal/.test(await tourPanel("#stepView")), `step panel says the view: ${await tourPanel("#stepView")}`);
+        await page.clickOn("#tourNext");
+        await settle();
+        assert(await page.eval("state.boxText === 'full' && state.lines === 'all'"), "step 2's own view on top of the tour's");
+        await page.clickOn("#tourBack");
+        await settle();
+        assert(await page.eval(`state.boxText === ${JSON.stringify(JSON.parse(mine).box)}`), "back on step 1: the user's box text");
+        await page.clickOn("#tabGraphBtn");
+        await settle();
+        assert(await page.eval("JSON.stringify({ lines: state.lines, kinds: state.hiddenKinds, fan: state.fanHidden, box: state.boxText })") === mine, "leaving the Tours tab restores the user's options");
+        // an old tour (no view) plays with the user's options
+        await openTour("tab=tours&tour=first-steps&step=1&boxtext=saved");
+        assert(await page.eval("JSON.stringify({ lines: state.lines, kinds: state.hiddenKinds, fan: state.fanHidden, box: state.boxText })") === mine, "old tour: unchanged");
+        // the URL beats the tour
+        await openTour("tab=tours&tour=view-steps&step=1&boxtext=saved&lines=explained");
+        assert(await page.eval("state.lines === 'explained' && state.fanHidden.includes('self')"), "URL > tour");
+        // editor: a View section built from the table, tour-wide or this step only, Use current graph settings, Save
+        await openTour("tab=tours&tour=view-steps&step=1&edit=1&boxtext=saved");
+        await page.eval("document.getElementById('edViewBox').open = true, true");
+        const count = await page.eval("document.querySelectorAll('#edViewBox [data-view-opt]').length");
+        assert(count === await page.eval("ViewOptions.TOUR_OPTIONS.length"), `one control per tour option: ${count}`);
+        assert(await page.eval("document.getElementById('edView-lines').value === 'all' && document.getElementById('edView-selfCalls').value === 'false'"), "controls show the tour's view");
+        assert(!(await page.eval("document.getElementById('edViewBox').textContent.includes('Claude')")), "UI says AI");
+        await page.clickOn('#edViewBox [data-view-scope="step"]');
+        assert(await page.eval("/tour: All equal/.test(document.getElementById('edView-lines').options[0].textContent)"), "a step shows what the tour sets");
+        await page.eval("(() => { const el = document.getElementById('edView-boxText'); el.value = 'name'; el.dispatchEvent(new Event('change', { bubbles: true })); })()");
+        await settle();
+        assert(await page.eval("state.boxText === 'name'"), "a live preview of the edited view");
+        await page.clickOn('#edViewBox [data-view-scope="tour"]');
+        await page.clickOn('#edViewBox [data-act="view-current"]');
+        const expected = await page.eval("JSON.stringify(ViewOptions.toStored(ViewOptions.diff(graphOptions(), ViewOptions.defaults(), ViewOptions.TOUR_OPTIONS.map((o) => o.key))))");
+        assert(await page.eval("JSON.stringify(TourView.state.draft.view)") === expected, `Use current graph settings: ${expected}`);
+        await page.clickOn('#tourPanel [data-act="save"]');
+        await settle();
+        const saved = readFileSync(file, "utf8");
+        assert(/\n  - key: s1\n(    .*\n)*    view: \{boxtext: name\}\n/.test(saved), `step 1's view saved: ${saved.split("---")[1]}`);
+        assert(await page.eval("JSON.stringify(TourView.state.tour.view)") === expected, "the tour's view saved");
+      } finally {
+        rmSync(file, { force: true });
+        await open();
+      }
+    });
+
+    await step("Presets: Read / Explore / Edit, Custom, More options marks, remembered per app, ?preset=, search box", async () => {
+      const q = "boxtext=saved&overview=saved&details=saved&level=9";  // no URL switches: what the preset says
+      await open(`${q}&preset=&more=closed`);
+      assert(await page.eval("document.getElementById('moreOptions').hidden && document.getElementById('moreBtn').getAttribute('aria-expanded') === 'false'"), "More options closed");
+      assert(await page.eval("['presetCtl', 'graphSearch', 'ruler', 'moreBtn'].every((id) => document.getElementById(id).closest('#calmbar'))"), "one calm row: preset, search, ruler, More options");
+      await page.clickOn("#moreBtn");
+      assert(await page.eval("!document.getElementById('moreOptions').hidden && /Fewer options/.test(document.getElementById('moreBtn').textContent)"), "More options opens");
+      await page.clickOn("#presetRead");
+      await settle();
+      const pressed = () => page.eval("[...document.querySelectorAll('#presetCtl [aria-pressed=true]')].map((b) => b.dataset.preset).join()");
+      assert(await pressed() === "read" && await page.eval("document.getElementById('presetCustom').hidden"), "Read pressed");
+      assert(await page.eval("!state.show.external && !state.show.test && state.fanHidden.includes('self') && state.domainView.includes('on') && state.boxText === 'short' && state.lines === 'explained'"), "Read's switches");
+      assert(await page.eval("document.getElementById('showExternal').closest('label').querySelector('.set-by')?.textContent === 'Read'"), "More options marks what the preset set");
+      assert(/^Read:/.test(await page.eval("document.getElementById('presetNote').textContent")), "the note says what Read is");
+      await page.clickOn("#showExternal");
+      await settle();
+      assert(await pressed() === "" && !(await page.eval("document.getElementById('presetCustom').hidden")), "a changed switch: Custom");
+      assert(await page.eval("document.getElementById('showExternal').closest('label').querySelector('.set-by.changed')"), "the changed switch is marked");
+      assert(await page.eval("JSON.stringify(JSON.parse(localStorage.getItem('coderstanding-view:fixture')))") === JSON.stringify({ preset: "read", changed: { external: true } }), "Custom remembers the preset and the changed switches");
+      await open(`${q}&preset=`);
+      assert(await page.eval("state.show.external && state.fanHidden.includes('self') && !document.getElementById('presetCustom').hidden"), "remembered per app after a reload");
+      await page.clickOn("#presetExplore");
+      await settle();
+      assert(await pressed() === "explore" && await page.eval("state.show.external && !state.fanHidden.length && !state.domainView.includes('on')"), "Explore = the switches as they always were");
+      assert(await page.eval("JSON.parse(localStorage.getItem('coderstanding-view:fixture')).changed.external === undefined"), "a preset drops the changes");
+      await page.clickOn("#presetEdit");
+      await settle();
+      assert(await page.eval("state.mode === 'edit' && document.getElementById('app').classList.contains('editing')"), "Edit = Edit layout on");
+      await open(`${q}&preset=read`);
+      assert(await page.eval("state.mode === 'view' && !state.show.external"), "?preset=read");
+      assert(await page.eval("JSON.parse(localStorage.getItem('coderstanding-view:fixture')).preset") === "edit", "?preset= is not saved");
+      // search: dims the classes whose name lacks the words, Enter selects the first, Esc clears
+      await page.clickOn("#graphSearch");
+      await page.type("playe");
+      await sleep(150);
+      assert(await page.eval("cy.nodes().filter((n) => !n.hasClass('dim')).map((n) => n.data('raw').name).join() === 'Player'"), "search dims the rest");
+      await page.key("Enter");
+      await settle();
+      assert(await page.eval("state.selected?.raw?.name === 'Player'"), "Enter selects the match");
+      await page.key("Escape");
+      await sleep(100);
+      assert(await page.eval("!cy.nodes('.dim').length"), "Esc clears the search");
+      // phone width: the calm row wraps, nothing sticks out
+      await page.conn.send("Emulation.setDeviceMetricsOverride", { width: 400, height: 860, deviceScaleFactor: 1, mobile: true });
+      await sleep(300);
+      const over = await page.eval("[...document.querySelectorAll('#calmbar > *')].filter((el) => el.getBoundingClientRect().right > window.innerWidth + 1).map((el) => el.id || el.className)");
+      assert(!over.length, `calm row fits a phone: ${over}`);
+      await page.conn.send("Emulation.clearDeviceMetricsOverride", {});
+      await page.clickOn("#presetExplore");  // the other checks expect the switches as they always were
+      await settle();
+      await open();
+    });
+
+    await step("Domains: frames, fold, Every line, drag, remembered, double-click focus, level, Esc", async () => {
+      const notesFile = join(data, "notes.jsonl");
+      const saved = existsSync(notesFile) ? readFileSync(notesFile) : null;
+      try {
+        for (const [cls, domain] of [["Player", "Game"], ["res://src/main.gd", "Game"], ["Big", "World"]]) {
+          execFileSync(cli, ["set", fixture, cls, `domain=${domain}`, "--data", data]);
+        }
+        await open("level=1");
+        await setLevel("End");
+        assert(await page.eval("!document.getElementById('showDomains').disabled"), "Domains toggle is live");
+        assert(await page.eval("document.getElementById('betweenCtl').classList.contains('off')"), "Between frames greyed while off");
+        await page.clickOn("#showDomains");
+        await settle(700);
+        const frames = await qa("frames()");
+        assert(["Game", "Unsorted", "World"].every((f) => frames.includes(f)), `frames: ${frames}`);
+        assert(await page.eval("!document.getElementById('betweenCtl').classList.contains('off')"), "Between frames live");
+        assert(await page.eval("cy.edges('.dom-hide').length > 0 && document.querySelectorAll('#domFront .dom-bundle').length > 0"), "lines between frames bundled");
+        // opening a class keeps every other box and frame where it is; only its own frame grows
+        const frameRects = () => page.eval("Object.fromEntries(dom.frames.map((b) => [b.name, openFrameRect(b)]))");
+        const bigNode = await page.eval("cy.nodes().filter((n) => n.data('raw').name === 'Big').id()");
+        const boxesClosed = await qa("positions()"), framesClosed = await frameRects();
+        await page.eval(`toggleExpand(${JSON.stringify(bigNode)})`);
+        await settle(700);
+        const boxesOpen = await qa("positions()"), framesOpen = await frameRects();
+        const movedBoxes = Object.keys(boxesClosed).filter((id) => id !== bigNode && String(boxesClosed[id]) !== String(boxesOpen[id]));
+        assert(!movedBoxes.length, `opening Big moved boxes: ${movedBoxes}`);
+        const movedFrames = Object.keys(framesClosed).filter((n) => n !== "World" && JSON.stringify(framesClosed[n]) !== JSON.stringify(framesOpen[n]));
+        assert(!movedFrames.length, `opening Big moved frames: ${movedFrames}`);
+        const [wc, wo] = [framesClosed.World, framesOpen.World];
+        assert(wo.x === wc.x && wo.y === wc.y && wo.w >= wc.w && wo.h > wc.h, `World grows in place: ${JSON.stringify(wc)} -> ${JSON.stringify(wo)}`);
+        await page.eval(`toggleExpand(${JSON.stringify(bigNode)})`);
+        await settle(700);
+        assert(JSON.stringify(await qa("positions()")) === JSON.stringify(boxesClosed) && JSON.stringify(await frameRects()) === JSON.stringify(framesClosed), "closing restores boxes and frames");
+        // a click on the header folds the frame into a card; Every line; a click on the card opens it
+        await page.clickOn('#domFront .dom-frame.header[data-frame="Game"] .head');
+        await settle(800);
+        assert(await page.eval("dom.folded.has('Game') && cy.nodes('.dom-gone').length === 2"), "Game folded, its boxes in the card");
+        await page.clickOn("#everyBtn");
+        await settle();
+        assert(await page.eval("state.domainView.includes('every') && cy.edges('.dom-hide').every((e) => [e.source(), e.target()].some((n) => dom.frameOf.get(n.id()) === 'Game'))"), "Every line: only lines on the folded card are redrawn");
+        await page.clickOn('#domFront .dom-frame.card[data-frame="Game"] .head');
+        await settle(800);
+        assert(await page.eval("!dom.folded.size && !cy.nodes('.dom-gone').length"), "card opens again");
+        // drag a frame by its body: its boxes move with it, nothing saved
+        const body = await page.eval(`(() => { const b = dom.byName.get("World"); const r = frameRect(b); const box = cy.container().getBoundingClientRect();
+          const z = cy.zoom(), p = cy.pan(); return { x: box.x + (r.x + 6) * z + p.x, y: box.y + (r.y + r.h - 6) * z + p.y }; })()`);
+        const before = await qa("positions()");
+        await page.drag(body, { x: body.x + 60, y: body.y + 40 });
+        await settle();
+        const after = await qa("positions()");
+        const big = await page.eval("cy.nodes().filter((n) => n.data('raw').name === 'Big').id()");
+        assert(after[big][0] > before[big][0] + 20, "Big moved with its frame");
+        assert(await page.eval("dom.stack.at(-1) === 'World'"), "dragged frame on top");
+        // remembered per app
+        await open("");
+        await setLevel("End");
+        assert(await page.eval("state.domainView.includes('on') && state.domainView.includes('every') && dom.frames.length > 0"), "toggles remembered");
+        // double-click a header: just that domain; the level still works; Esc goes back
+        await page.dblclick(...Object.values(await page.centreOf('#domFront .dom-frame.header[data-frame="Game"] .head')));
+        await settle(700);
+        assert(await page.eval("state.current.domain === 'Game' && !dom.frames.length"), "Game focused");
+        assert(await page.eval("cy.nodes().filter((n) => !n.data('raw').faded).every((n) => n.data('raw').domain === 'Game')"), "only Game's classes");
+        assert(await page.eval("cy.nodes().some((n) => n.data('raw').faded)"), "the rest around it");
+        const playerNode = await page.eval("cy.nodes().filter((n) => n.data('raw').name === 'Player').id()");
+        const focusClosed = await qa("positions()");
+        await page.eval(`toggleExpand(${JSON.stringify(playerNode)})`);
+        await settle(700);
+        const focusOpen = await qa("positions()");
+        const movedInFocus = Object.keys(focusClosed).filter((id) => id !== playerNode && String(focusClosed[id]) !== String(focusOpen[id]));
+        assert(!movedInFocus.length, `opening Player in the focus moved: ${movedInFocus}`);
+        await page.eval(`toggleExpand(${JSON.stringify(playerNode)})`);
+        await settle(700);
+        assert(JSON.stringify(await qa("positions()")) === JSON.stringify(focusClosed), "closing in the focus restores the picture");
+        assert((await page.eval("document.getElementById('crumbs').textContent")).includes("Game"), "breadcrumb names the domain");
+        await setLevel("Home");
+        assert(await page.eval("state.current.domain === 'Game' && state.current.level === 1"), "level 1 inside the focus");
+        await page.key("Escape");
+        await settle(700);
+        assert(await page.eval("!state.domainFocus && !state.current.domain && dom.frames.length > 0"), "Esc: back to the frames");
+        await page.clickOn("#showDomains");
+        await settle(700);
+        assert(await page.eval("!dom.frames.length && !cy.elements('.dom-hide, .dom-gone').length"), "off: no frames");
+      } finally {
+        if (saved) writeFileSync(notesFile, saved); else rmSync(notesFile, { force: true });
+        await forgetOptions("domains", "between");
+        await open();
+      }
+    });
+
+    await step("Overview: story chips, domain cards, Show on map remembered, ?overview=0, Ask AI, themes, phone", async () => {
+      const notesFile = join(data, "notes.jsonl");
+      const saved = existsSync(notesFile) ? readFileSync(notesFile) : null;
+      const shown = "!document.getElementById('overview').hidden";
+      try {
+        for (const [cls, domain] of [["Player", "Game"], ["res://src/main.gd", "Game"], ["Big", "World"]]) {
+          execFileSync(cli, ["set", fixture, cls, `domain=${domain}`, "--data", data]);
+        }
+        execFileSync(cli, ["set", fixture, "domain:Game", "description=The part the player plays in.", "--data", data]);
+        execFileSync(cli, ["set", fixture, "domain:World", "hint=Where everything happens", "--data", data]);
+        await open("level=0&overview=1");
+        assert(await page.eval(shown), "level 0 opens as the overview");
+        assert(await page.eval("document.querySelectorAll('#ovCards .dcard').length === 2 && document.querySelector('.dcard[data-d=Game] .db').textContent.includes('The part the player plays in.')"), "a card per domain with its description");
+        assert(await page.eval("document.querySelector('.dcard[data-d=World] .db').textContent.includes('Where everything happens')"), "hint when there is no description");
+        assert(await page.eval("document.querySelector('.dcard[data-d=Game] .keys code')"), "key classes");
+        assert(await page.eval("/Ask AI/.test(document.getElementById('ovStory').textContent) && document.querySelectorAll('#ovStory .dchip').length > 0"), "no sentence yet: a generated one with chips and an Ask AI button");
+        await page.clickOn("#ovStory [data-ask]");
+        await settle(300);
+        assert(await page.eval("/Copied a request/.test(document.getElementById('copyOut').textContent) || (!document.getElementById('copyBox').hidden && document.getElementById('copyText').value.includes('domain:*'))"), "Ask AI copies a request");
+        // a written sentence: chips for the domain names, the colours of the frames
+        execFileSync(cli, ["set", fixture, "domain:*", "description=You play in the Game, which keeps the World going.", "--data", data]);
+        await open("level=0&overview=1");
+        assert(await page.eval("[...document.querySelectorAll('#ovStory .dchip')].map((c) => c.dataset.d).join() === 'Game,World' && !document.querySelector('#ovStory [data-ask]') && /AI draft/.test(document.getElementById('ovStory').textContent)"), "written sentence: two chips, AI draft mark, no Ask AI");
+        assert(await page.eval("document.querySelector('#ovStory .dchip').style.getPropertyValue('--h') === String(CoderDomains.hueOf('Game'))"), "chip colour = the frame colour");
+        await page.clickOn("#ovStory .dchip[data-d=World]");
+        assert(await page.eval("document.querySelector('.dcard[data-d=Game]').classList.contains('dim') && !document.querySelector('.dcard[data-d=World]').classList.contains('dim')"), "chip click lights its card");
+        await page.clickOn("#ovStory .dchip[data-d=World]");
+        assert(await page.eval("!document.querySelector('.dcard.dim')"), "second click clears");
+        for (const theme of ["light", "dark", "contrast"]) {
+          await open(`level=0&overview=1&theme=${theme}`);
+          assert(await page.eval(shown), `${theme}: overview`);
+          if (theme === "light") await page.screenshot(join(shots, "overview-light.png"));
+          if (theme === "contrast") await page.screenshot(join(shots, "overview-contrast.png"));
+        }
+        await page.conn.send("Emulation.setDeviceMetricsOverride", { width: 400, height: 800, deviceScaleFactor: 1, mobile: false });
+        await open("level=0&overview=1&theme=dark");
+        assert(await page.eval("document.getElementById('overview').scrollWidth <= document.getElementById('overview').clientWidth + 1"), `phone width: no sideways scroll ${await page.eval("JSON.stringify([state.level, document.getElementById('overview').hidden, document.getElementById('overview').scrollWidth, document.getElementById('overview').clientWidth])")}`);
+        await page.screenshot(join(shots, "overview-phone.png"));
+        await page.conn.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
+        // Show on map: remembered; the Overview button comes back; ?overview=0 always the map
+        await open("level=0&overview=1");
+        await page.clickOn("#ovMap");
+        await settle(300);
+        assert(await page.eval("document.getElementById('overview').hidden && !document.getElementById('overviewBtn').hidden && cy.nodes().length > 0"), "map shown with an Overview button");
+        await open("level=0&overview=saved");  // not a value: the remembered choice
+        assert(await page.eval("document.getElementById('overview').hidden"), "the map choice is remembered");
+        await page.clickOn("#overviewBtn");
+        assert(await page.eval(shown + " && document.getElementById('overviewBtn').hidden"), "Overview button brings it back");
+        await open("level=0");
+        assert(await page.eval("document.getElementById('overview').hidden && cy.nodes().length > 0"), "?overview=0 (added by open) forces the map");
+        await open("level=1&overview=1");
+        assert(await page.eval("document.getElementById('overview').hidden && document.getElementById('overviewBtn').hidden"), "only level 0 has it");
+        // a renamed or removed domain leaves its notes harmless
+        execFileSync(cli, ["set", fixture, "Big", "domain=", "--data", data]);
+        await open("level=0&overview=1");
+        assert(await page.eval(shown + " && document.querySelectorAll('#ovCards .dcard').length === 1"), "domain gone: its notes stay, no crash");
+      } finally {
+        if (saved) writeFileSync(notesFile, saved); else rmSync(notesFile, { force: true });
+        await forgetOptions("overview");
+        await open();
+      }
+    });
+
+    await step("box faces: Box text switch, what it does (2 lines), Ask AI, taller boxes never overlap", async () => {
+      const notesFile = join(data, "notes.jsonl");
+      const saved = existsSync(notesFile) ? readFileSync(notesFile) : null;
+      const long = "VeryLongInventoryItemSlotControllerForTheWholeGameUi";
+      try {
+        execFileSync(cli, ["set", fixture, long, `hint=${"Keeps every slot of the inventory in step with the items the player holds, ".repeat(3)}`, "--data", data]);
+        execFileSync(cli, ["set", fixture, "Player", "domain=Game", "--data", data]);
+        await open("level=9&theme=light&boxtext=default");  // not a mode: the saved choice, else the default
+        assert(await page.eval("document.querySelector('#boxTextCtl [data-boxtext=short]').getAttribute('aria-pressed') === 'true'"), "Name + what it does is the default");
+        const face = (id) => page.eval(`(() => { const n = cy.nodes().filter((x) => x.data('raw').name === ${JSON.stringify(id)})[0];
+          return n && { desc: n.data('descLines'), foot: n.data('footLines'), h: n.data('h'), w: n.data('w') }; })()`);
+        const player = await face("Player");
+        assert(player.desc.join(" ") === "AI wrote this", `Player says what it does: ${JSON.stringify(player.desc)}`);
+        const longFace = await face(long);
+        assert(longFace.desc.length === 2 && longFace.desc[1].endsWith("…"), `long text clamped to 2 lines: ${JSON.stringify(longFace.desc)}`);
+        assert(await page.eval("document.querySelectorAll('#fanFront .ask-btn').length > 0 && /No description yet/.test(document.getElementById('fanFront').textContent)"), "no description: Ask AI");
+        assert(!(await page.eval("document.getElementById('fanFront').textContent.includes('Claude')")), "UI says AI");
+        const past = await page.eval(`[...document.querySelectorAll('#fanFront .face')].filter((g) => {
+          const frame = g.querySelector('.box-bg')?.getBoundingClientRect();
+          return frame && [...g.querySelectorAll('.cls-name, .cls-desc, .cls-sub, .ask-btn, .b-used')].some((t) => { const r = t.getBoundingClientRect(); return r.right > frame.right + 0.5 || r.bottom > frame.bottom + 0.5; });
+        }).length`);
+        assert(past === 0, `${past} boxes have text past their frame`);
+        await page.grantClipboard(base.slice(0, -1));
+        await page.eval("document.querySelector('#fanFront .ask-btn').dispatchEvent(new MouseEvent('click', { bubbles: true }))");
+        await page.waitFor("/Copied a request for the AI/.test(document.getElementById('copyOut').textContent) || !document.getElementById('copyBox').hidden", { what: "Ask AI note" });
+        const request = await page.eval("document.getElementById('copyBox').hidden ? navigator.clipboard.readText() : document.getElementById('copyText').value");
+        assert(/coderstanding set .* hint=/.test(request), `Ask AI copies a request, never calls an AI: ${request}`);
+        await page.eval("document.getElementById('copyBox').hidden = true");
+        await checkLayout("short faces");
+        await page.clickOn("#boxTextCtl [data-boxtext=full]");
+        await settle();
+        assert((await face(long)).desc.length > 2 && (await face("Player")).foot.join(" ").includes("Game"), "Full: all of it, domain in the footer");
+        await checkLayout("full faces");
+        await page.clickOn("#boxTextCtl [data-boxtext=name]");
+        await settle();
+        const named = await face("Player");
+        assert(!named.desc && named.h < player.h, "Name: today's face, shorter");
+        await open("level=9&boxtext=saved");
+        assert(await page.eval("state.boxText === 'name'"), "Box text remembered per app");
+        await open("level=9&boxtext=short");
+        assert(await page.eval("state.boxText === 'short' && cy.nodes().some((n) => n.data('descLines'))"), "boxtext= URL option");
+        await page.clickOn("#boxTextCtl [data-boxtext=short]");
+      } finally {
+        if (saved) writeFileSync(notesFile, saved); else rmSync(notesFile, { force: true });
+      }
+    });
+
+    await step("box faces: explained lines first, faint until an end is hovered or selected; All equal; old helper", async () => {
+      const notesFile = join(data, "notes.jsonl");
+      const saved = existsSync(notesFile) ? readFileSync(notesFile) : null;
+      try {
+        execFileSync(cli, ["set", fixture, "Player>Big", "hint=The player steps the big class", "--data", data]);
+        await open("level=9&theme=light");
+        const counts = await page.eval("document.getElementById('linesCount').textContent");
+        assert(/^\d+ explained · \d+ faint$/.test(counts), `count text: ${counts}`);
+        const quiet = await page.eval("cy.edges('.quiet').map((e) => e.id())");
+        assert(quiet.length > 0 && await page.eval("cy.edges().filter((e) => !e.hasClass('quiet')).some((e) => e.data('raw').hint)"), "hinted lines full, the rest quiet");
+        const end = await page.eval(`cy.getElementById(${JSON.stringify(quiet[0])}).source().id()`);
+        await page.eval(`void cy.getElementById(${JSON.stringify(end)}).emit('mouseover')`);
+        assert(await page.eval(`cy.getElementById(${JSON.stringify(quiet[0])}).hasClass('near')`), "hovering an end brings the line back");
+        await page.eval(`void cy.getElementById(${JSON.stringify(end)}).emit('mouseout')`);
+        assert(!(await page.eval(`cy.getElementById(${JSON.stringify(quiet[0])}).hasClass('near')`)), "and faint again after");
+        await page.eval(`void select({ type: "node", raw: cy.getElementById(${JSON.stringify(end)}).data("raw") })`);
+        assert(await page.eval(`cy.getElementById(${JSON.stringify(quiet[0])}).hasClass('near')`), "selecting an end keeps it full");
+        await page.eval("void select(null)");
+        await page.clickOn("#linesCtl [data-lines=all]");
+        await settle();
+        assert(await page.eval("cy.edges('.quiet').length === 0 && /all at the same weight/.test(document.getElementById('linesCount').textContent)"), "All equal: no faint lines");
+        await open("level=9&lines=explained");
+        assert(await page.eval("cy.edges('.quiet').length > 0"), "lines= URL option");
+        // an older helper sends no `quiet` / `lines`: everything still draws, all equal
+        await page.eval("draw({ ...state.current, lines: undefined, domains: undefined, edges: state.current.edges.map(({ quiet, ...e }) => e), nodes: state.current.nodes.map(({ used_by, ...n }) => n) })");
+        await settle();
+        assert(await page.eval("cy.edges('.quiet').length === 0 && cy.nodes().length > 0 && document.querySelectorAll('#fanFront .face').length > 0"), "old helper's view renders");
+        await page.clickOn("#linesCtl [data-lines=explained]");
+        await settle();
+      } finally {
+        if (saved) writeFileSync(notesFile, saved); else rmSync(notesFile, { force: true });
+      }
+    });
+
+    await step("Plain panel: click fades the unconnected, In plain words on top, Details fold, hover keeps it, Esc, lines, reduced motion", async () => {
+      await open("level=9&details=closed&boxtext=short");
+      await page.eval("cy.fit(undefined, 30), true");
+      await settle(200);
+      const dimmed = () => page.eval("cy.nodes('.foc-dim').map((n) => n.data('raw').name).sort().join()");
+      const player = await qa('node("Player")');
+      await page.click(player.x + 20, player.y + 4);
+      await page.waitFor("[...document.querySelectorAll('#fanFront .face.foc-fade')].some((g) => getComputedStyle(g).animationName === 'foc-fade')", { what: "faces fade out" });
+      await settle(250);
+      assert((await qa("showing()")) === "node:Player", `Player selected: ${await qa("showing()")}`);
+      const near = await page.eval("cy.getElementById('Player').closedNeighborhood('node').map((n) => n.id()).sort().join()");
+      const faded = await dimmed();
+      assert(faded && !near.split(",").some((id) => faded.split(",").includes(id)), `unconnected fade, neighbours stay: ${faded} / ${near}`);
+      assert(await page.eval("cy.edges('.foc-dim').every((e) => e.source().id() !== 'Player' && e.target().id() !== 'Player')"), "Player's lines stay lit");
+      assert(await page.eval("document.querySelectorAll('#fanFront .face.dim').length") > 0, "faded faces too");
+      const panel = await page.eval(`(() => { const d = document.getElementById('details'); const p = d.querySelector('.plain');
+        return { first: d.firstElementChild === p, title: p?.querySelector('h3')?.textContent, text: p?.textContent || '',
+          fold: d.querySelector('details.details-fold')?.open, zoom: Boolean(d.querySelector('details.details-fold [data-act="zoom-node"]')) }; })()`);
+      assert(panel.first && panel.title === "Player", `In plain words on top: ${JSON.stringify(panel)}`);
+      assert(/Used by \(\d+\)/.test(panel.text) && /Uses \(\d+\)/.test(panel.text) && /level \d+/.test(panel.text), `lists and where: ${panel.text}`);
+      assert(panel.fold === false && panel.zoom, "today's panel under a closed Details fold");
+      assert(!/Claude/.test(panel.text), "UI says AI");
+      // hover another class: the panel stays on Player
+      const big = await qa('node("Big")');
+      const other = await page.eval("cy.nodes('.foc-dim').filter((n) => !n.data('raw').faded)[0]?.data('raw').name || ''");
+      const hover = other ? await qa(`node(${JSON.stringify(other)})`) : big;
+      await page.move(hover.x + 20, hover.y + 4);
+      await sleep(150);
+      assert(await page.eval("cy.nodes('.hover').length === 1 && cy.$('.hover').id() !== 'Player'"), "the pointer is over another class");
+      assert((await qa("showing()")) === "node:Player", "hover does not replace the selected panel");
+      // an un-hinted line: Ask AI copies a request for that line's hint
+      const ask = await page.eval("Boolean(document.querySelector('#details .plain [data-act=\"ask-line\"]'))");
+      assert(ask, "un-hinted lines have Ask AI");
+      await page.eval("navigator.clipboard.writeText = async (text) => { window.__copied = text; }, true");  // what Ask AI copies
+      await page.clickOn('#details .plain [data-act="ask-line"]');
+      await page.waitFor("/Copied a request for the AI/.test(document.getElementById('copyOut').textContent)", { what: "Ask AI note" });
+      const request = await page.eval("window.__copied");
+      assert(/the line .* → .*coderstanding set \S+ \S+>\S+ hint=/.test(request), `line hint request: ${request}`);
+      await page.eval("document.getElementById('copyBox').hidden = true");
+      // the Details fold is remembered
+      await page.eval("document.querySelector('#details details.details-fold > summary').click()");
+      await sleep(100);
+      assert(await page.eval("state.detailsOpen && JSON.parse(localStorage.getItem('coderstanding-view')).changed.details === 'open'"), "fold state kept");
+      await page.eval("document.querySelector('#details details.details-fold > summary').click()");
+      await page.screenshot(join(shots, "plain-panel-dark.png"));
+      // Esc clears the selection and the fade
+      await page.move((await qa("empty()")).x, (await qa("empty()")).y);
+      await page.key("Escape");
+      await settle(250);
+      assert(!(await qa("showing()")) && !(await dimmed()), "Esc clears");
+      // a line: "A uses B" in plain words, both ends lit
+      const edge = await qa('edge("Player", "Big")');
+      assert(edge, "line Player → Big drawn");
+      await page.click(edge.x, edge.y);
+      await settle(250);
+      const sentence = await page.eval("document.querySelector('#details .plain .line-sentence')?.textContent || ''");
+      assert(/^Player .+ Big/.test(sentence), `line sentence: ${sentence}`);
+      const lineDim = await dimmed();
+      assert(!lineDim.split(",").includes("Player") && !lineDim.split(",").includes("Big") && lineDim, `both ends lit, the rest fades: ${lineDim}`);
+      // click on empty canvas clears
+      const away = await qa("empty()");
+      await page.click(away.x, away.y);
+      await settle(250);
+      assert(!(await qa("showing()")) && !(await dimmed()), "empty canvas click clears");
+      // nothing selected: hover previews as before
+      const again = await qa('node("Player")');
+      await page.move(again.x + 20, again.y + 4);
+      await sleep(150);
+      assert((await qa("showing()")) === "node:Player", `hover previews with nothing selected: ${await qa("showing()")}`);
+      // themes and phone width
+      for (const theme of ["light", "contrast", "extreme"]) {
+        await open(`level=9&details=closed&boxtext=short&theme=${theme}&select=Player`);
+        await page.screenshot(join(shots, `plain-panel-${theme}.png`));
+      }
+      // extreme theme: no fades; what the focus leaves out is dashed at full opacity
+      const extreme = await page.eval(`(() => { const face = document.querySelector('#fanFront .face.dim'); const node = cy.nodes('.foc-dim')[0]; const edge = cy.edges('.foc-dim')[0];
+        return { face: face && getComputedStyle(face).opacity, dash: face && getComputedStyle(face.querySelector('.box-bg')).strokeDasharray,
+          node: node && [node.style('opacity'), node.style('border-style')], edge: edge ? [edge.style('opacity'), edge.style('line-style')] : null }; })()`);
+      assert(extreme.face === "1" && extreme.dash && extreme.dash !== "none", `extreme: dimmed faces dashed at opacity 1: ${JSON.stringify(extreme)}`);
+      assert(extreme.node && Number(extreme.node[0]) === 1 && extreme.node[1] === "dashed", `extreme: dimmed boxes dashed: ${JSON.stringify(extreme)}`);
+      assert(!extreme.edge || (Number(extreme.edge[0]) === 1 && extreme.edge[1] === "dashed"), `extreme: dimmed lines dashed: ${JSON.stringify(extreme)}`);
+      await page.send("Emulation.setDeviceMetricsOverride", { width: 400, height: 860, deviceScaleFactor: 1, mobile: true });
+      try {
+        await open("level=9&details=closed&boxtext=short&theme=light&select=Player");
+        const wide = await page.eval("document.querySelector('#details .plain').getBoundingClientRect().width");
+        assert(wide >= 250, `phone: the plain block keeps a readable width (${wide})`);
+        assert(await page.eval("document.documentElement.scrollWidth <= window.innerWidth + 1"), "phone: no sideways scroll");
+        await page.eval("document.getElementById('details').scrollIntoView(), true");
+        await page.screenshot(join(shots, "plain-panel-phone.png"));
+      } finally {
+        await page.send("Emulation.setDeviceMetricsOverride", { width: 1780, height: 1000, deviceScaleFactor: 1, mobile: false });
+      }
+      // reduced motion: no fade animation
+      await page.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] });
+      try {
+        await open("level=9&details=closed&boxtext=short");
+        await page.eval("cy.fit(undefined, 30), true");
+        await settle(200);
+        const target = await qa('node("Player")');
+        await page.click(target.x + 20, target.y + 4);
+        await sleep(30);
+        const faces = await page.eval("[...document.querySelectorAll('#fanFront .face.dim')].map((g) => getComputedStyle(g).animationName)");
+        assert(faces.length && faces.every((n) => n === "none"), `reduced motion: no fade animation (${faces})`);
+      } finally {
+        await page.send("Emulation.setEmulatedMedia", { features: [] });
+      }
+    });
+
+    await step("Planned work: Add box asks first on a real name, planned face and details, Only / Hide, stub row, Delete", async () => {
+      await page.clickOn("#modeEdit");
+      await sleep(200);
+      await page.clickOn("#addBoxBtn");
+      await sleep(150);
+      await page.eval(`document.getElementById("planName").value = "Big"`);
+      await page.clickOn('#planForm button[type="submit"]');
+      await settle();
+      assert(await page.eval(`!document.getElementById("planAsk").hidden && /real code/.test(document.getElementById("planAsk").textContent)`), "asks first on a real name");
+      assert(!notes().some((n) => n.key === "node:Big" && n.made), "nothing written while asking");
+      await page.eval(`(() => { document.getElementById("planName").value = "node_store"; document.getElementById("planHint").value = "Keeps hand-made boxes"; document.getElementById("planStage").value = "todo"; })()`);
+      await page.clickOn('#planForm button[type="submit"]');
+      await settle(600);
+      const made = lastNote("node:node_store", "made");
+      assert(made?.made === "planned" && made.stage === "todo" && made.by === "Sam Tester" && !made.ai, `planned box saved: ${JSON.stringify(made)}`);
+      assert(await page.eval(`document.querySelectorAll(".face.made-planned").length === 1`), "planned face drawn (dashed)");
+      assert(await page.eval(`/1 planned/.test(document.getElementById("planCount").textContent) && !document.getElementById("planCount").hidden`), "toolbar count");
+      await page.eval(`select({ type: "node", raw: cy.getElementById("node_store").data("raw") })`);
+      await sleep(150);
+      assert(await page.eval(`/Not built yet/.test(document.getElementById("details").textContent)`), "details banner");
+      await page.eval(`(() => { const s = document.querySelector('#details select[data-note="priority"]'); s.value = "high"; s.dispatchEvent(new Event("change", { bubbles: true })); })()`);
+      await settle();
+      assert(lastNote("node:node_store", "priority")?.priority === "high", "work priority saved");
+      await page.clickOn("#planCount");
+      await page.waitFor(`document.getElementById("app").classList.contains("plan-only") && cy.nodes(".plan-dim").length > 0`, { what: "Only planned work fades the rest" });
+      await page.eval(`setOption("planned", "hide")`);
+      await settle();
+      assert(await page.eval(`cy.getElementById("node_store").empty()`), "Hide leaves it off the map");
+      await page.eval(`setOption("planned", "show")`);
+      await settle();
+      await page.eval(`select({ type: "node", raw: cy.getElementById("node_store").data("raw") })`);
+      await sleep(150);
+      await page.clickOn('#details [data-act="plan-drop"]');
+      await page.clickOn('#details [data-act="plan-drop-yes"]');
+      await settle();
+      assert(await page.eval(`cy.getElementById("node_store").empty()`) && !notes().some((n) => n.key === "node:node_store" && n.made), "Delete removes it");
+      await page.eval(`toggleExpand("res://src/bus.gd")`);
+      await settle();
+      assert(await page.eval(`[...document.querySelectorAll(".fn.stub .fn-mark")].some((m) => m.textContent.trim() === "stub")`), "a stub function row is marked");
+      await page.eval(`toggleExpand("res://src/bus.gd")`);
+      await settle();
+      await page.clickOn("#modeView");
+      await sleep(200);
+    });
+
+    await step("Progress tracks: picker, ring pills, project number, click selects, details, overview bars, spec chips, themes", async () => {
+      const notesFile = join(data, "notes.jsonl"), settingsFile = join(data, "settings.json");
+      const saved = existsSync(notesFile) ? readFileSync(notesFile) : null;
+      const savedSettings = existsSync(settingsFile) ? readFileSync(settingsFile) : null;
+      try {
+        const settings = savedSettings ? JSON.parse(savedSettings) : {};
+        writeFileSync(settingsFile, JSON.stringify({ ...settings, tracks: [{ name: "Checked", done: { tag: "checked" } }] }));
+        execFileSync(cli, ["set", fixture, "Player", "tags=checked", "domain=Game", "--data", data]);
+        await open("track=Checked");
+        assert(await page.eval(`[...document.getElementById("trackCtl").options].map((o) => o.value).join() === ",Described,Tested,Built,Checked"`), "picker: none, the built-in tracks, the project's own");
+        assert(await page.eval(`document.getElementById("trackCtl").value === "Checked"`), "?track= picks it");
+        const pills = await page.eval(`[...document.querySelectorAll(".prog-pill")].map((p) => p.getAttribute("aria-label"))`);
+        assert(pills.length === await page.eval(`cy.nodes().filter((n) => n.data("raw").progress).length`) && pills.length > 1, `a pill on every box that counts something: ${pills.length}`);
+        assert(pills.some((t) => /^Checked: 1 of \d+ done \(\d+%\)$/.test(t)) && pills.some((t) => /^Checked: 0 of \d+ done \(0%\)$/.test(t)), `pill words: ${pills.join(" | ")}`);
+        assert(await page.eval(`/^\\d+% \\(1\\/\\d+\\)/.test(document.getElementById("trackSum").textContent) && !document.getElementById("trackSum").hidden`), "the project's number beside the picker");
+        const lit = await page.eval(`(() => { const p = document.querySelector(".prog-pill:has(.prog-done)"); p.dispatchEvent(new MouseEvent("click", { bubbles: true })); return p.dataset.id; })()`);
+        await sleep(150);
+        assert(await page.eval(`state.selected?.raw?.id === ${JSON.stringify(lit)} && Boolean(document.querySelector("#details .prog-bar"))`), "a pill click selects its box; the details show its bar");
+        for (const theme of ["light", "contrast", "extreme"]) {
+          await open(`track=Checked&theme=${theme}`);
+          const looks = await page.eval(`(() => { const p = document.querySelector(".prog-pill:has(.prog-done)"); const s = (sel) => getComputedStyle(p.querySelector(sel));
+            return { done: s(".prog-done").stroke, track: s(".prog-track").stroke, text: s("text").fill, back: s("rect").fill }; })()`);
+          assert(looks.done !== looks.track && looks.text !== looks.back, `${theme}: ring and text stand out ${JSON.stringify(looks)}`);
+        }
+        await open("level=0&overview=1&track=Checked");
+        assert(await page.eval(`/Checked 100% · 1\\/1/.test(document.querySelector('.dcard[data-d=Game] .prog-bar')?.textContent || "")`), "overview: a bar on the domain card");
+        assert(await page.eval(`getComputedStyle(document.querySelector('.dcard[data-d=Game] .prog-meter i')).width !== "0px"`), "the bar is filled (CSSOM width)");
+        await open("specs=1&track=Checked");
+        await page.waitFor(`document.querySelector('[data-spec="player"] .chip.prog')`, { what: "spec chip" });
+        const chip = await page.eval(`document.querySelector('[data-spec="player"] .chip.prog').textContent`);
+        assert(/^50% Checked$/.test(chip), `a spec reads its own and its finer specs' linked classes (Player done, Big not): ${chip}`);
+        await page.eval(`setOption("track", "")`);
+        await settle();
+        assert(await page.eval(`!document.querySelector(".prog-pill") && document.getElementById("trackSum").hidden && !document.querySelector(".chip.prog")`), "none: no pills, no number, no chips");
+      } finally {
+        if (saved) writeFileSync(notesFile, saved); else rmSync(notesFile, { force: true });
+        if (savedSettings) writeFileSync(settingsFile, savedSettings); else rmSync(settingsFile, { force: true });
+        await forgetOptions("track");
+        await open();
+      }
+    });
+
     await step("dark and light themes: readable text", async () => {
       for (const theme of ["dark", "light"]) {
         await open(`level=9&theme=${theme}`);
@@ -1120,6 +2039,44 @@ async function main() {
         assert(theme === "dark" ? lum(colours.page) < 0.2 : lum(colours.page) > 0.6, `${theme}: page background ${colours.page}`);
         await page.screenshot(join(shots, `qa-e2e-${theme}.png`));
       }
+    });
+
+    await step("Contrast theme", async () => {
+      await open("level=9&theme=contrast");
+      assert(await page.eval("document.documentElement.getAttribute('data-theme')") === "contrast", "root attribute");
+      assert(await page.eval("getComputedStyle(document.documentElement).colorScheme") === "dark", "color-scheme dark");
+      assert(await page.eval("getComputedStyle(document.body).backgroundColor") === "rgb(0, 0, 0)", "black page");
+      assert(await page.eval("document.getElementById('themeBtn').textContent") === "Theme: contrast", "button label");
+      await page.eval("document.getElementById('themeBtn').click()");  // contrast -> extreme
+      assert(await page.eval("document.documentElement.getAttribute('data-theme')") === "extreme", "button cycles to extreme");
+      await page.eval("applyTheme('contrast')");
+      assert(await page.eval("localStorage.getItem('coderstanding-theme')") === "contrast", "remembered");
+      await settle();
+      await page.screenshot(join(shots, "contrast-graph.png"));
+      await openTour("tab=tours&tour=first-steps&step=2&theme=contrast");
+      assert(await page.eval("document.documentElement.getAttribute('data-theme')") === "contrast", "tours keep the theme");
+      await page.screenshot(join(shots, "contrast-tour.png"));
+    });
+
+    await step("Extreme theme", async () => {
+      await open("level=1&theme=extreme");
+      assert(await page.eval("document.documentElement.getAttribute('data-theme')") === "extreme", "root attribute");
+      assert(await page.eval("getComputedStyle(document.body).backgroundColor") === "rgb(0, 0, 0)", "black page");
+      assert(await page.eval("document.getElementById('themeBtn').textContent") === "Theme: extreme", "button label");
+      assert(await page.eval("getComputedStyle(document.documentElement).getPropertyValue('--op-dim').trim()") === "1", "no fade token");
+      await page.eval("document.getElementById('themeBtn').click()");  // extreme -> auto
+      assert(await page.eval("document.documentElement.hasAttribute('data-theme')") === false, "button cycles back to auto");
+      await page.eval("applyTheme('extreme')");
+      assert(await page.eval("localStorage.getItem('coderstanding-theme')") === "extreme", "remembered");
+      await page.eval("(() => { const f = document.getElementById('filter'); f.selectedIndex = 1; f.dispatchEvent(new Event('change', { bubbles: true })); })()");
+      await settle();
+      assert(await page.eval("cy.nodes('.dim').length") > 0, "a class is picked, the rest are dimmed");
+      assert(await page.eval("cy.nodes('.dim')[0].style('opacity')") === "1", "dimmed boxes keep full opacity");
+      assert(await page.eval("cy.nodes('.dim')[0].style('border-style')") === "dashed", "dimmed boxes are dashed");
+      await page.screenshot(join(shots, "extreme-graph.png"));
+      await openTour("tab=tours&tour=first-steps&step=1&theme=extreme");
+      assert(await page.eval("document.documentElement.getAttribute('data-theme')") === "extreme", "tours keep the theme");
+      await page.screenshot(join(shots, "extreme-tour.png"));
     });
 
     /** Layout quality of the drawn view: readable first zoom, no overlapping boxes, no long
@@ -1152,6 +2109,27 @@ async function main() {
       assert(!report.piled, `${label}: ${report.piled} piled labels`);
     }
 
+    await step(`box layers: selected on top, open under the rest (fixture)`, async () => {
+      await open("level=3");
+      const ids = await page.eval("cy.nodes().filter((n) => isExpandable(n.data('raw'))).map((n) => n.id()).slice(0, 3)");
+      if (ids.length < 3) return;
+      await page.eval(`toggleExpand(${JSON.stringify(ids[0])})`);
+      await settle();
+      // faces are SVG groups; later in the DOM = drawn on top
+      const order = () => page.eval(`stackedNodes().map((n) => n.id())`);
+      let ranked = await order();
+      assert(ranked[0] === ids[0], `open unselected box should be drawn first (under), got ${ranked.slice(0, 2)}`);
+      await page.eval(`select({ type: "node", raw: cy.getElementById(${JSON.stringify(ids[0])}).data("raw") })`);
+      await settle();
+      ranked = await order();
+      assert(ranked.at(-1) === ids[0], "selected box should be drawn last (on top)");
+      const faces = await page.eval(`[...document.querySelectorAll("#fanFront g.face")].filter((g) => g.querySelector(".box-bg")).length`);
+      assert(faces > 0, "each face carries its own opaque background");
+      await page.eval("select(null)");
+      await settle();
+      ranked = await order();
+      assert(ranked[0] === ids[0], "deselected open box goes back under the others");
+    });
     for (const level of [1, 9]) {
       await step(`layout quality (fixture, level ${level})`, async () => {
         await open(`level=${level}`);
@@ -1199,12 +2177,8 @@ async function main() {
     }
 
     await step("app picker: switch apps and back, refresh, Projects… → Add project…", async () => {
-      const second = join(data, "second-repo");
-      mkdirSync(second, { recursive: true });
-      const withMain = (name) => `class ${name}:\n    pass\n\nif __name__ == "__main__":\n    ${name}()\n`;  // a start, so level 1 shows it
-      writeFileSync(join(second, "alpha.py"), withMain("Alpha"));
-      writeFileSync(join(second, "beta.py"), "class Beta:\n    pass\n");
-      execFileSync(cli, ["add", "second", second, "--data", join(data, "second-data")], { env: { ...process.env, ...isolated } });
+      const second = registerSecondApp();
+      await rememberPreset("fixture", "explore");
       await open();
       const reloaded = async (app) => {
         await sleep(600);
@@ -1214,7 +2188,7 @@ async function main() {
       };
       const names = () => page.eval("cy.nodes().map((n) => n.data('raw').name).sort().join(',')");
       const optionTexts = await page.eval("[...document.querySelectorAll('#appPick option')].map((o) => o.textContent).join(' | ')");
-      assert(/fixture · .*ago.* · \d+ classes/.test(optionTexts) && /second/.test(optionTexts), `picker lists both apps: ${optionTexts}`);
+      assert(/fixture · .*(ago|just now).* · \d+ classes/.test(optionTexts) && /second/.test(optionTexts), `picker lists both apps: ${optionTexts}`);
       const home = await names();
       await page.eval("void (cy.zoom(1.37), cy.pan({ x: 41, y: 23 }))");
       const levelBefore = await page.eval("state.level");
@@ -1240,8 +2214,7 @@ async function main() {
       assert(!existsSync(join(second, ".coderstanding")), "rescan wrote nothing into the repo");
       // Scan a folder: registers, scans, and switches to it
       const third = join(data, "third-repo");
-      mkdirSync(third, { recursive: true });
-      writeFileSync(join(third, "delta.py"), withMain("Delta"));
+      writeAppFolder(third, { delta: withMain("Delta") });
       await page.clickOn("#appsBtn");  // Projects…
       await page.waitFor("document.getElementById('appsDialog').open", { what: "Projects… modal open" });
       await page.clickOn("#appsScanFolder");  // Add project…
@@ -1258,6 +2231,8 @@ async function main() {
       const registry = () => JSON.parse(readFileSync(isolated.CODERSTANDING_REGISTRY, "utf8"));
       const row = (name) => `#appsList li[data-app="${name}"]`;
       const press = (name, text) => page.eval(`[...document.querySelectorAll('${row(name)} button')].find((b) => b.textContent === ${JSON.stringify(text)}).click()`);
+      registerSecondApp();
+      registerThirdApp();
       await open();
       await page.clickOn("#appsBtn");
       await page.waitFor(`document.getElementById('appsDialog').open && document.querySelectorAll('#appsList li[data-app]').length === ${Object.keys(registry()).length + 1}`, { what: "manager lists every app" });
@@ -1307,6 +2282,8 @@ async function main() {
         await page.waitFor("/Step 2/.test(document.querySelector('#tourPanel .stepno')?.textContent || '')", { what: "hosted tour step" });
         assert(await page.eval("Boolean(document.querySelector('#tourPanel [data-act=edit]'))"), "hosted page edits tours through the helper");
         assert(await page.eval("Boolean(document.querySelector('#tourPanel a[data-act=md]'))"), "Save as Markdown on the hosted page");
+        await page.eval("window.beats = []; const real = window.fetch; window.fetch = (u, o) => real(u, o).then((r) => { if (String(u).endsWith('/api/alive')) window.beats.push(r.status); return r; }); 1");
+        await page.waitFor("window.beats.includes(200)", { what: "heartbeat answered by the helper" });
       } finally {
         shell.close();
       }
@@ -1317,12 +2294,51 @@ async function main() {
         await page.goto(base);
         await page.waitFor("!document.getElementById('overlay').hidden && /Open this page on your PC/.test(document.getElementById('overlay').textContent)", { what: "no-helper empty state" });
         const text = await page.eval("document.getElementById('overlay').textContent");
-        assert(/systemctl --user start coderstanding-helper/.test(text) && /install-helper\.sh/.test(text), `how-to: ${text}`);
+        assert(/coderstanding helper install/.test(text) && /install-helper\.sh/.test(text), `how-to: ${text}`);
+        assert(await page.eval("document.querySelector('#overlay a[data-act=start-helper]')?.getAttribute('href') === 'coderstanding://start'"), "Start helper link");
       } finally {
         dead.close();
         base = home;
       }
       await open();
+    });
+
+    await step("Start here: button lists start tours, plays one in the Tours tab, numbered badges on the boxes", async () => {
+      const startTour = join(data, "tours", "start-game.md");
+      const body = ["res://src/main.gd", "Player", "Big"].map((t) => `## ${t.split("/").pop()}\n[[${t}]] is on the path.\n`).join("\n");
+      writeFileSync(startTour, `---\nid: start-game\ntitle: "Start here: the game"\nstart: true\nby: claude\nai: true\nsteps:\n${["res://src/main.gd", "Player", "Big"].map((t, i) => `  - key: p${i}\n    targets: [${t}]\n`).join("")}---\n${body}`);
+      try {
+        await open("");
+        const btn = "document.getElementById('startHereBtn')";
+        assert(await page.eval(`!!${btn} && ${btn}.textContent.trim() === 'Start here'`), "Start here button on the graph tab");
+        await page.eval(`${btn}.click()`);
+        await page.waitFor("!document.getElementById('tabTours').hidden && /Step 1\\/3/.test(document.querySelector('#tourPanel .stepno')?.textContent || '')", { what: "start tour opened at step 1" });
+        await settle();
+        assert(await page.eval("document.querySelector('#tourList .pick[aria-current] .chip')?.textContent") === "Start", "list marks the start tour");
+        const badges = () => page.eval("[...document.querySelectorAll('#startBadges .stepbadge')].map((b) => b.textContent + (b.classList.contains('now') ? '*' : ''))");
+        await page.waitFor("document.querySelectorAll('#startBadges .stepbadge').length > 0", { what: "step badges" });
+        assert((await badges()).includes("1*"), `badge 1 is the current step: ${await badges()}`);
+        await page.screenshot(join(shots, "start-here-tour.png"));
+        await page.eval("document.getElementById('tourNext').click()");
+        await settle();
+        await page.waitFor("document.querySelector('#startBadges .stepbadge.now')?.textContent === '2'", { what: "badge 2 current" });
+        await open("tab=tours");  // leaving the tab clears the badges
+        await page.eval("document.getElementById('tabGraphBtn').click()");
+        await settle();
+        assert(await page.eval("document.querySelectorAll('#startBadges .stepbadge').length") === 0, "no badges on the graph tab");
+        // Two start tours: the button offers a picker; none: a request for the AI.
+        writeFileSync(join(data, "tours", "start-two.md"), readFileSync(startTour, "utf8").replace("id: start-game", "id: start-two").replace("the game", "the second way"));
+        await page.eval("document.getElementById('startHereBtn').click()");
+        await page.waitFor("!document.getElementById('startMenu').hidden && document.querySelectorAll('#startMenu .start-pick').length === 2", { what: "route picker" });
+        await page.screenshot(join(shots, "start-here-picker.png"));
+        await page.eval("document.getElementById('startHereBtn').click()");
+      } finally {
+        rmSync(startTour, { force: true });
+        rmSync(join(data, "tours", "start-two.md"), { force: true });
+      }
+      await page.eval("document.getElementById('startHereBtn').click()");
+      await page.waitFor("!document.getElementById('startMenu').hidden && document.querySelector('#startMenu [data-ask]')", { what: "no start tours: copy a request for AI" });
+      await page.eval("document.getElementById('startHereBtn').click()");
     });
 
     await step("offline: strict CSP on the page, every request to this PC or data:/blob:", async () => {

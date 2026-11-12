@@ -53,7 +53,7 @@ def desk(tmp_path):
 def test_list_get_and_markdown(desk):
     base, _ = desk
     assert call(base, "/api/tours?app=app")["tours"][0] == {
-        "id": "walk", "title": "A walk", "by": "you", "ai": False, "steps": 2, "changed": 0,
+        "id": "walk", "title": "A walk", "by": "you", "ai": False, "start": False, "steps": 2, "changed": 0,
         "ai_steps": 1, "comments": 0}
     tour = call(base, "/api/tours/walk?app=app")
     assert tour["steps"][0]["code"]["lines"] == ["        self.hp -= 1", "        self.flash()"]
@@ -81,6 +81,7 @@ def test_view_takes_focus(desk):
     base, _ = desk
     view = call(base, "/api/view?app=app&level=5&focus=m.Player%23hit")
     assert view["focus"]["functions"] == ["m.Player#hit"] and "m.Player" in view["expanded"]
+    assert "near" in view["focus"]  # near=1 opens them (test_tours: open_near)
 
 
 def test_put_still_true_accept(desk):
@@ -126,3 +127,34 @@ def test_cross_site_audio_upload_is_refused(desk):
     with pytest.raises(HTTPError) as error:
         urlopen(request)
     assert error.value.code == 403
+
+
+def test_put_and_get_line_notes(desk):
+    base, _ = desk
+    tour = call(base, "/api/tours/walk?app=app")
+    assert [s["notes"] for s in tour["steps"]] == [[], []]  # a tour without notes
+    first = tour["steps"][0]
+    body = {"title": "A walk", "steps": [{**{k: first[k] for k in ("key", "title", "text", "targets")},
+             "code": {"at": first["code"]["at"], "lines": "+1..+2", "mark": first["code"]["mark"]},
+             "notes": [{"from": 4, "to": 4, "text": "The flash.", "cue": "health"}]}]}
+    saved = call(base, "/api/tours/walk?app=app", body, "PUT")
+    assert saved["steps"][0]["notes"] == [{"from": 4, "to": 4, "text": "The flash.", "cue": "health"}]
+    assert call(base, "/api/tours/walk?app=app")["steps"][0]["notes"] == saved["steps"][0]["notes"]
+    body["steps"][0]["notes"] = [{"text": "no lines"}]
+    assert call(base, "/api/tours/walk?app=app", body, "PUT")["status"] == 400
+
+
+def test_put_and_get_view_options(desk):
+    base, _ = desk
+    tour = call(base, "/api/tours/walk?app=app")
+    assert tour["view"] == {} and [s["view"] for s in tour["steps"]] == [{}, {}]
+    first = tour["steps"][0]
+    step = {**{k: first[k] for k in ("key", "title", "text", "targets")},
+            "code": {"at": first["code"]["at"], "lines": "+1..+2", "mark": first["code"]["mark"]}}
+    body = {"title": "A walk", "view": {"lines": "all", "hide_kind": ["signal"]}, "steps": [{**step, "view": {"selfcalls": False}}]}
+    saved = call(base, "/api/tours/walk?app=app", body, "PUT")
+    assert saved["view"] == {"lines": "all", "hide_kind": ["signal"]} and saved["steps"][0]["view"] == {"selfcalls": False}
+    assert call(base, "/api/tours/walk?app=app")["view"] == saved["view"]
+    older = call(base, "/api/tours/walk?app=app", {"title": "A walk", "steps": [step]}, "PUT")  # an older page: no view
+    assert older["view"] == saved["view"] and older["steps"][0]["view"] == {"selfcalls": False}
+    assert call(base, "/api/tours/walk?app=app", {**body, "view": [1]}, "PUT")["status"] == 400

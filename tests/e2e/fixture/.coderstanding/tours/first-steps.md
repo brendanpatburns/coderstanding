@@ -6,6 +6,7 @@ steps:
   - key: s1
     targets: [res://src/main.gd#_ready, res://src/main.gd>Player]
     code: {at: res://src/main.gd#_ready, lines: +0..+5, mark: [+3, +4]}
+    notes: [{lines: +4..+4, text: "Hands over to [[Player#spawn]].", cue: announces the start}]
   - key: s2
     targets: [Player#spawn]
     code: {at: Player#spawn, lines: +0..+2, mark: [+1, +2], fp: deadbeef00, was: 6-8}

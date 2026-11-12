@@ -56,10 +56,29 @@ test("empty page: start-the-helper how-to on the hosted page, else how to add an
   Object.assign(apps, { hosted: true, helper: null });
   const html = apps.emptyHtml();
   assert.match(html, /Open this page on your PC with Coderstanding running/);
-  assert.match(html, /systemctl --user start coderstanding-helper/);
+  assert.match(html, /<a class="btn" href="coderstanding:\/\/start" data-act="start-helper">Start helper<\/a>/);
+  assert.match(html, /coderstanding helper install/);
   assert.match(html, /scripts\/install-helper\.sh/);
   Object.assign(apps, { hosted: false });
   assert.match(apps.emptyHtml(), /No projects registered.*&lt;name&gt;/);
+  Object.assign(apps, { lost: true });  // a local page whose helper went away
+  assert.match(apps.emptyHtml(), /Start helper/);
+  Object.assign(apps, { lost: false });
+});
+
+test("Start helper: polls about every second, loads when the helper answers, gives up after ~15 s", async () => {
+  const status = { textContent: "" };
+  const reloads = [];
+  globalThis.location = { reload: () => reloads.push(1) };
+  let probes = 0, slept = 0;
+  const up = await apps.waitForStart(status, async (ms) => { slept += ms; }, async () => ++probes === 3);
+  assert.equal(up, true);
+  assert.deepEqual([probes, slept, reloads.length], [3, 2000, 1]);
+  probes = 0; slept = 0;
+  assert.equal(await apps.waitForStart(status, async (ms) => { slept += ms; }, async () => { probes++; return false; }), false);
+  assert.equal(probes, 15);
+  assert.match(status.textContent, /Nothing answered/);
+  delete globalThis.location;
 });
 
 test("app manager: sizes and the facts line", () => {
@@ -70,4 +89,11 @@ test("app manager: sizes and the facts line", () => {
   assert.equal(apps.factsText({ scannedAt: "2026-10-29T11:48:00Z", scannerVersion: 7, staleScanner: true, nodes: 3, edges: 4,
     graphBytes: 12_000, notes: 2, tours: 1 }, now), "12 min ago · scanner 7 (old, refresh) · 3 classes, 4 connections · graph.json 12 kB · 2 notes · 1 tours");
   assert.equal(apps.factsText({ scannedAt: null, nodes: null, notes: 0, tours: 0 }, now), "never scanned · 0 notes · 0 tours");
+});
+
+test("editor and web links", () => {
+  assert.equal(apps.editorUrl("/home/me/My Repo", "src/a b.py", 12), "vscode://file/home/me/My%20Repo/src/a%20b.py:12");
+  assert.equal(apps.editorUrl("/r", "a.py", 0), "vscode://file/r/a.py:1");
+  assert.equal(apps.webUrl("https://f.org/o/r/src/commit/abc", "src/a b.py", 12), "https://f.org/o/r/src/commit/abc/src/a%20b.py#L12");
+  assert.equal(apps.webUrl(null, "a.py", 3), null);
 });

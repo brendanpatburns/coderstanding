@@ -88,7 +88,7 @@ test("source: a recording beats the voice and may be out of date", () => {
   assert.deepEqual(T.source({ audio: { rec: { by: "you", stale: true } } }), { kind: "rec", by: "you", stale: true });
 });
 
-test("voices: offer the page language, skip the default Afrikaans, plain before variants", () => {
+test("voices: offer the page language, skip the default Afrikaans, best first, variants last", () => {
   const voices = [
     { name: "Afrikaans espeak-ng", lang: "af", default: true },
     { name: "English (America)+Adam espeak-ng", lang: "en-US" },
@@ -97,11 +97,57 @@ test("voices: offer the page language, skip the default Afrikaans, plain before 
     { name: "en_US-amy-medium", lang: "en_US" },
   ].map((v) => ({ ...v, localService: true }));
   assert.deepEqual(T.voiceChoices(voices, "en-US").map((v) => v.name),
-    ["English (Great Britain) espeak-ng", "English (America) espeak-ng", "en_US-amy-medium", "English (America)+Adam espeak-ng"]);
-  assert.equal(T.pickVoice(voices, "", "en-US").name, "English (America) espeak-ng");
+    ["en_US-amy-medium", "English (America) espeak-ng", "English (Great Britain) espeak-ng"]);
+  assert.equal(T.voiceChoices(voices, "en-US", true).at(-1).name, "English (America)+Adam espeak-ng");
+  assert.equal(T.pickVoice(voices, "", "en-US").name, "en_US-amy-medium");
   assert.equal(T.pickVoice(voices, "English (America)+Adam espeak-ng", "en-US").name, "English (America)+Adam espeak-ng");
-  assert.equal(T.pickVoice(voices, "gone", "de-DE").name, "Afrikaans espeak-ng");  // nothing matches: all offered
+  assert.equal(T.pickVoice(voices, "gone", "de-DE").name, "en_US-amy-medium");  // nothing matches: all offered
   assert.equal(T.pickVoice([], "", "en"), null);
+});
+
+/** A Chromium + speech-dispatcher list as a friend saw it: hundreds of espeak variants, all localService false. */
+function espeakList() {
+  const variants = ["female5", "Robosoft5", "klatt4", "Mario", "Michael", "male1", "whisper", "croak", "Adam"];
+  const dialects = [["English (Shavian alphabet)", "en-SHAW"], ["English (West Midlands)", "en-GB-X-GBCWMD"],
+    ["English (Scotland)", "en-GB-SCOTLAND"], ["English (Caribbean)", "en-029"], ["English (America)", "en-US"], ["English (Great Britain)", "en-GB"]];
+  const list = [];
+  for (let i = 0; i < 12; i++) for (const [n, l] of dialects) for (const v of variants) list.push({ name: `${n}+${v}${i}`, lang: l, localService: false });
+  return list;
+}
+
+test("voices: espeak variants are not online, the short list is the best 8, More voices has all", () => {
+  const natural = { name: "Microsoft Jenny Natural", lang: "en-US", localService: true };
+  const plain = { name: "Fancy Voice", lang: "en-US", localService: true };
+  const base = { name: "English (America)", lang: "en-US", localService: false };
+  const gb = { name: "English (Great Britain)", lang: "en-GB", localService: false };
+  const all = [...espeakList(), gb, base, plain, natural];
+  const short = T.voiceChoices(all, "en-US");
+  assert.deepEqual(short.map((v) => v.name), [natural.name, plain.name, base.name, gb.name]);
+  assert.ok(T.voiceChoices(all, "en-US", true).length > 500, "every voice under More");
+  assert.ok(T.hasMoreVoices(all, "en-US"));
+  assert.ok(T.voiceChoices(all, "en-US", true).slice(4).every((v) => v.name.includes("+")), "variants last");
+  assert.ok(!all.some((v) => T.isOnline(v)), "espeak is not online");
+  assert.equal(T.pickVoice(all, "", "en-US"), natural);
+  assert.equal(T.onlyRobotVoices(all, "en-US"), false);
+});
+
+test("voices: only espeak found = top 8 exact-language variants, a hint, auto-picked; remembered name wins", () => {
+  const all = espeakList();
+  const short = T.voiceChoices(all, "en-GB");
+  assert.equal(short.length, 8);
+  assert.ok(short.every((v) => v.lang === "en-GB" && !/klatt|Robosoft|whisper|croak/i.test(v.name)), "exact language, no robots first");
+  assert.equal(T.pickVoice(all, "", "en-GB"), short[0]);
+  assert.equal(T.onlyRobotVoices(all, "en-GB"), true);
+  assert.equal(T.pickVoice(all, "English (West Midlands)+Mario3", "en-GB").name, "English (West Midlands)+Mario3");
+  assert.equal(T.pickVoice(all, "", "en-GB").localService, false, "an on-device voice is picked despite localService false");
+});
+
+test("voices: the old behaviour (all voices, labelled online, when none is localService) is gone", () => {
+  const all = espeakList();
+  assert.ok(T.voiceChoices(all, "en-US").length <= 8, "was hundreds");
+  assert.equal(T.isOnline(all[0]), false, "was labelled online");
+  assert.equal(T.isOnline({ name: "Google US English", lang: "en-US", localService: false }), true);
+  assert.equal(T.isOnline({ name: "Microsoft Aria Online (Natural) - English", lang: "en-US", localService: false }), true);
 });
 
 test("recorder type: Opus in WebM, else Ogg, else browser default", () => {
@@ -114,14 +160,23 @@ test("voices: on-device only; online voices (Google, Microsoft Online) are never
   const google = { name: "Google US English", lang: "en-US", localService: false, default: true };
   const edge = { name: "Microsoft Aria Online (Natural) - English (United States)", lang: "en-US", localService: false };
   const sapi = { name: "Microsoft David - English (United States)", lang: "en-US", localService: true };
-  const unknown = { name: "no flag", lang: "en-US" };  // localService missing: not trusted
-  const all = [google, edge, unknown, sapi];
+  const all = [google, edge, sapi];
   assert.deepEqual(T.localVoices(all), [sapi]);
   assert.deepEqual(T.voiceChoices(all, "en-US"), [sapi]);
   assert.equal(T.pickVoice(all, "", "en-US"), sapi);
   assert.equal(T.pickVoice(all, google.name, "en-US"), sapi, "a saved online voice is ignored");
   assert.equal(T.pickVoice([google, edge], "", "en-US"), null);
-  assert.deepEqual(T.voiceChoices([google, edge], "en-US"), []);
+});
+
+test("only online voices: offered by name so the picker is not empty, but never picked for you", () => {
+  const google = { name: "Google US English", lang: "en-US", localService: false, default: true };
+  const edge = { name: "Microsoft Aria Online", lang: "en-US", localService: false };
+  assert.deepEqual(T.voiceChoices([google, edge], "en-US"), [google, edge]);
+  assert.equal(T.isOnline(google), true);
+  assert.equal(T.pickVoice([google, edge], "", "en-US"), null, "no automatic online voice");
+  assert.equal(T.pickVoice([google, edge], edge.name, "en-US"), edge, "your own choice is used");
+  const sapi = { name: "Microsoft David", lang: "en-US", localService: true };
+  assert.deepEqual(T.voiceChoices([google, sapi], "en-US"), [sapi], "any local voice hides the online ones");
 });
 
 test("only online voices: the player stays silent on its timeline with the no-voice note", () => {
@@ -351,4 +406,33 @@ test("recording: plays the audio element, follows its time, ends with it; no spe
   assert.equal(audio.currentTime, 8);
   audio.onended();
   assert.equal(env.ends, 1);
+});
+
+test("a new step loaded while playing starts cleanly: play() is not skipped (auto-play / Next)", () => {
+  const env = fakeEnv();
+  const player = new T.StepPlayer(env);
+  player.load(STEP);
+  player.play();
+  assert.equal(env.spoken.length > 0, true);
+  const before = env.spoken.length;
+  player.load(LONG);  // the step changes while playing
+  assert.equal(player.playing, false, "a freshly loaded step is stopped");
+  player.play();
+  assert.equal(player.playing, true);
+  assert.equal(env.spoken.length - before, player.track.chunks.length, "the new step is spoken from its start");
+  assert.equal(env.spoken[before].text.startsWith("Chunks"), true);
+});
+
+test("a step that ended can be followed by the next one playing", () => {
+  const env = fakeEnv();
+  const player = new T.StepPlayer(env);
+  player.load(STEP);
+  player.play();
+  const count = player.track.chunks.length;
+  for (let k = 0; k < count; k++) { env.spoken[k].onstart(); env.run(100); env.spoken[k].onend(); }
+  assert.equal(env.ends, 1, "onEnd fired");
+  const before = env.spoken.length;
+  player.load(LONG);
+  player.play();
+  assert.ok(env.spoken.length > before, "the next step speaks");
 });

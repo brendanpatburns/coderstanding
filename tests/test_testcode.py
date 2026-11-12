@@ -70,3 +70,27 @@ def test_tests_are_never_level_one_roots(tmp_path):
     mark_tests(graph)
     guess_levels(graph)
     assert graph.nodes["A"].level == 1 and graph.nodes["B"].level == 2
+
+
+MODULE_REPO = {
+    "language.fk": "type LanguageModule class\n",
+    "reader.fk": ("type FooModule class\nref generalization LanguageModule\nref dependency FooReader call\n"
+                  "type FooReader class\n"),
+    "other.fk": "type Other class\n",
+    "tests/test_foo.fk": "type TestFoo class\nref dependency FooModule call\n",
+}
+
+
+def test_a_test_using_a_language_module_covers_the_code_in_its_file(tmp_path):
+    graph = scan_fake(tmp_path, MODULE_REPO)
+    assert covering_tests(graph, "FooModule") == ["tests/test_foo.fk"]
+    assert covering_tests(graph, "FooReader") == ["tests/test_foo.fk"]  # reached only through the module
+    assert covering_tests(graph, "Other") == []
+
+
+def test_a_test_using_a_language_module_also_covers_the_helpers_its_code_uses(tmp_path):
+    files = {**MODULE_REPO, "stubs.fk": "type Stubs class\n",
+             "reader.fk": MODULE_REPO["reader.fk"] + "ref dependency Stubs call\n"}
+    graph = scan_fake(tmp_path, files)
+    assert covering_tests(graph, "Stubs") == ["tests/test_foo.fk"]
+    assert covering_tests(graph, "Other") == []

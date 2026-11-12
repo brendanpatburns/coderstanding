@@ -38,16 +38,21 @@ function shownLevel() {
   return v().level;  // spec levels are not graph levels
 }
 
+let loadCount = 0;  // only the newest load may render: an older, slower answer must not overwrite it
+
 async function load() {
   const t = v();
+  const thisLoad = ++loadCount;
   const params = new URLSearchParams();
   if (shownLevel() != null) params.set("level", shownLevel());
   for (const name of ["zoom", "query", "stage", "priority", "importance", "sort"]) {
     if (t[name]) params.set(name === "query" ? "q" : name, t[name]);
   }
   try {
-    t.data = await api(`/api/${sv.folder}?${params}`);
+    [t.data] = await Promise.all([api(`/api/${sv.folder}?${params}`), ProgressView.loadCards(sv.folder)]);
+    if (thisLoad !== loadCount) return;
   } catch (error) {
+    if (thisLoad !== loadCount) return;
     if (t.zoom && /no (spec|memo)/.test(error.message)) { t.zoom = null; return load(); }
     message(`Could not load: ${error.message}`, true);
     return;
@@ -117,7 +122,7 @@ function boxHtml(box) {
   return `<div class="spec-box${selected ? " sel" : ""}" data-spec="${esc(box.id)}">
     <div class="spec-row" data-drop="${esc(box.id)}" draggable="true" title="Drag onto another item to move it there">
       <button class="spec-pick" type="button" data-pick="${esc(box.id)}" aria-pressed="${selected}" title="L${item.level} · ${esc(item.id)}">${esc(item.title)}</button>
-      ${stagePicker(item)}${priorityChips(item)}${aiChip(item)}${item.problems.length ? `<span class="chip stale" title="${esc(item.problems.join("\n"))}">!</span>` : ""}${finer}
+      ${stagePicker(item)}${priorityChips(item)}${ProgressView.cardChip(box.id, sv.folder)}${aiChip(item)}${item.problems.length ? `<span class="chip stale" title="${esc(item.problems.join("\n"))}">!</span>` : ""}${finer}
     </div>
     ${selected ? cardHtml(item, box) : ""}
     ${box.children.length ? `<div class="spec-kids">${box.children.map(boxHtml).join("")}</div>` : ""}
@@ -206,6 +211,7 @@ function cardHtml(item, box) {
       <button class="btn small" type="button" data-act="add-sub">+ Sub-${oneWord()}</button>
       ${moveButtons(item)}
       <button class="btn small" type="button" data-act="delete">Delete</button>
+      ${CoderRefs.copyButtons(CoderRefs.formatRef(CoderApps.current, CoderRefs.target.card(sv.folder === "specs" ? "spec" : "memo", item.id), item.title), item.text)}
     </div>
     ${v().confirming ? confirmHtml(item) : ""}
   </div>`;

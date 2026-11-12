@@ -1,12 +1,18 @@
 // Code-type chips (DESIGN 12d): the one place for the file type -> colour map and for wrapping
 // a long name onto lines. Boxes (fanout.js) and the types strip (app.js) both use it.
-// Pure functions; tests: tests/js/test_typechips.mjs.
+// Also wraps prose (box descriptions) and clamps it to a few lines. Pure functions; tests:
+// tests/js/test_typechips.mjs.
 
 const TYPE_COLORS = {
   light: { ".ts": "#063a46", ".cs": "#5b34a0", ".kt": "#b02f68", ".gd": "#177d49", ".tres": "#d4682a",
     ".tscn": "#5ea2ee", ".py": "#e0b020", ".js": "#f2e27a", other: "#a5adb8" },
   dark: { ".ts": "#15667a", ".cs": "#a07de8", ".kt": "#c14a7c", ".gd": "#3dbd7a", ".tres": "#e88a4c",
     ".tscn": "#8dbcf7", ".py": "#e9c24f", ".js": "#f7ec9f", other: "#7d8795" },
+  contrast: { ".ts": "#4fd8f0", ".cs": "#b78cff", ".kt": "#ff5fa2", ".gd": "#5cf29a", ".tres": "#ff8a3d",
+    ".tscn": "#8fc4ff", ".py": "#ffc82c", ".js": "#fffbc0", other: "#dde3ea" },
+  // Few full-strength signal colours (>= 12:1 on black); the chip text tells types apart.
+  extreme: { ".ts": "#00ffff", ".cs": "#ffa8ff", ".kt": "#ffbb00", ".gd": "#00ff00", ".tres": "#ffff00",
+    ".tscn": "#00ffff", ".py": "#ffff00", ".js": "#ffbb00", other: "#ffffff" },
 };
 const INK_DARK = "#141b24";
 const INK_LIGHT = "#ffffff";
@@ -31,7 +37,7 @@ function contrast(a, b) {
   return (hi + 0.05) / (lo + 0.05);
 }
 
-/** {bg, ink} for a type in a theme ("light" | "dark"); unknown types are grey. */
+/** {bg, ink} for a type in a theme ("light" | "dark" | "contrast" | "extreme"); unknown types are grey. */
 function typeColors(type, theme) {
   const palette = TYPE_COLORS[theme] || TYPE_COLORS.light;
   const bg = palette[type] || palette.other;
@@ -81,7 +87,23 @@ function wrapSub(sub, measure, maxW) {
   return measure(sub) <= maxW ? [sub] : packLines(subParts(sub), measure, maxW).map((l) => l.trimEnd());
 }
 
-/** "dark" or "light": the page's theme setting, else the system's. */
+/** Prose (a box's description) on lines no wider than `maxW`, broken between words. */
+function wrapText(text, measure, maxW) {
+  const words = String(text).split(/\s+/).filter(Boolean).map((w, i, all) => (i < all.length - 1 ? `${w} ` : w));
+  return packLines(words, measure, maxW).map((l) => l.trimEnd());
+}
+
+/** At most `max` lines; when some are cut, the last kept line ends in "…" and still fits `maxW`. */
+function clampLines(lines, max, measure, maxW) {
+  if (lines.length <= max) return lines;
+  const kept = lines.slice(0, max);
+  let last = kept[max - 1];
+  while (last && measure(`${last}…`) > maxW) last = last.slice(0, -1).trimEnd();
+  kept[max - 1] = `${last.replace(/[\s,.;:]+$/, "")}…`;
+  return kept;
+}
+
+/** "extreme", "contrast", "dark" or "light": the page's theme setting, else the system's. */
 function themeName() {
   const set = document.documentElement.getAttribute("data-theme");
   if (set) return set;

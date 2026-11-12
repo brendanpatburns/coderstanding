@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from .cache import SCANNER_VERSION
+from .textindex import write_index
 from .model import Call, Edge, Graph, Location, Member, Node
 
 VERSION = 2  # 2: node size (lines, span), warnings, test flag
@@ -30,9 +31,11 @@ def external_to_json(edge):
 
 
 def member_to_json(member):
-    """A member as a dict; `rpc` only when set, so graphs without RPCs stay as they were."""
-    data = vars(member)
-    return data if member.rpc else {k: v for k, v in data.items() if k != "rpc"}
+    """A member as a dict; `rpc`, `stub` and `public` only when not the default, so graphs stay
+    small; `made` (a planned row from notes, planned.py) never."""
+    defaults = {"rpc": "", "stub": False, "public": True}
+    return {k: v for k, v in vars(member).items()
+            if k != "made" and not (k in defaults and v == defaults[k])}
 
 
 def node_to_json(node):
@@ -41,8 +44,12 @@ def node_to_json(node):
             "base": node.base, "level": node.level, "lines": node.lines}
     if node.span:
         data["span"] = True
+    if node.file_lines:
+        data["file_lines"] = node.file_lines
     if node.doc:
         data["doc"] = node.doc
+    if node.file_kind:
+        data["file_kind"] = node.file_kind
     if node.hub_degree:
         data["hub_degree"] = node.hub_degree
     if node.warnings:
@@ -53,6 +60,10 @@ def node_to_json(node):
         data["members"] = [member_to_json(m) for m in node.members]
     if node.comm:
         data["comm"] = node.comm
+    if node.global_name:
+        data["global"] = {"name": node.global_name, "kind": node.global_kind}
+    if node.lookups:
+        data["lookups"] = node.lookups
     if node.external_refs:
         data["external_refs"] = [external_to_json(e)
                                  for _, e in sorted(node.external_refs.items())]
@@ -92,10 +103,13 @@ def node_from_json(data):
         id=data["id"], name=data["name"], kind=data["kind"], lang=data["lang"],
         file=data["file"], line=data.get("line", 1), flags=list(data.get("flags", [])),
         base=data.get("base", ""), namespace=data.get("namespace", ""),
-        doc=data.get("doc", ""),
+        doc=data.get("doc", ""), file_kind=data.get("file_kind", ""),
         level=data.get("level", 0), lines=data.get("lines", 0), span=data.get("span", False),
+        file_lines=data.get("file_lines", 0),
         warnings=list(data.get("warnings", [])), hub_degree=data.get("hub_degree", 0),
         members=[Member(**m) for m in data.get("members", [])], comm=data.get("comm", {}),
+        global_name=data.get("global", {}).get("name", ""),
+        global_kind=data.get("global", {}).get("kind", ""), lookups=list(data.get("lookups", [])),
     )
     for ext in data.get("external_refs", []):
         node.add_external(edge_from_json(ext, from_id=node.id))
@@ -122,6 +136,8 @@ def write_graph(graph, path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(graph_to_json(graph), indent=1, ensure_ascii=False) + "\n",
                     encoding="utf-8")
+    if graph.names:
+        write_index(graph.names, path)
 
 
 def graph_summary(path):

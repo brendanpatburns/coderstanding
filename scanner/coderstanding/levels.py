@@ -3,6 +3,7 @@
 from collections import deque
 
 from .checks import checked_ids, god_threshold, neighbours
+from .filekinds import NON_CODE_LEVEL_STEP, is_supporting_file
 from .model import APP_START_FLAGS, HOLDING_KINDS, TOOL_FLAGS
 from .testcode import is_test
 
@@ -95,6 +96,10 @@ def guess_levels(graph, max_level=DEFAULT_MAX_LEVEL, hub_threshold=AUTO):
     Hubs (too many connections, see find_hubs) are level 1 too; their parts follow from them.
     Sets graph.settings and graph.hubs."""
     children = holding_children(graph)
+    for node in graph.nodes.values():  # a rerun (library marks changed) drops hubs of the last run
+        node.hub_degree = 0
+        if "hub" in node.flags:
+            node.flags.remove("hub")
     threshold, hubs = find_hubs(graph, hub_threshold)
     graph.settings = {"hub_threshold": hub_threshold}
     graph.hubs = {"threshold": threshold, "ids": list(hubs)}
@@ -117,4 +122,6 @@ def guess_levels(graph, max_level=DEFAULT_MAX_LEVEL, hub_threshold=AUTO):
                 distance[child] = distance[node_id] + 1
                 queue.append(child)
     for node_id, node in graph.nodes.items():
-        node.level = min(distance.get(node_id, max_level) + 1, max_level)
+        # data and config sit below the code; an app start (the main scene) stays on top
+        step = NON_CODE_LEVEL_STEP if is_supporting_file(node) and not is_app_start(node) else 0
+        node.level = min(distance.get(node_id, max_level) + 1 + step, max_level)

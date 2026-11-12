@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Readability Mock-up</title>
+<style>
+/* Tokens from viewer/style.css (same names as tours.html / domain-blocks.html); system fonts only, no fetches. */
+:root {
+  --bg: #f3f5f8; --surface: #ffffff; --ink: #141b24; --muted: #5a6574; --line: #d4dae3;
+  --accent: #2f58cc; --accent-ink: #ffffff; --derived: #b5620c; --hl: #d63f7a; --faded: #8d97a4;
+  --ext: #eaf0e4; --scene: #e3ebfb; --row: #eef2f8; --dim: #b9c1cc; --signal: #7a4fc4;
+  --caution: #f2b705; --error: #b3261e; --warn: #b45309; --ok: #1e7a46;
+  --dom-l: 42%; --dom-fill: .10; --dom-line: .55;
+  --f-display: "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
+  --f-body: system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --ext: #1e2a1f; --scene: #1f2c48; --row: #1c2530; --dim: #3a4552; --signal: #b892ff; --error: #ff8a80; --warn: #f5b041; --ok: #6fd39b;
+  --dom-l: 70%; --dom-fill: .16; --dom-line: .6;
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --ext: #1e2a1f; --scene: #1f2c48; --row: #1c2530; --dim: #3a4552; --signal: #b892ff; --error: #ff8a80; --warn: #f5b041; --ok: #6fd39b;
+  --dom-l: 70%; --dom-fill: .16; --dom-line: .6;
+  color-scheme: dark }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+h1, h2, h3 { font-family: var(--f-display); line-height: 1.25; }
+h1 { font-size: 1.5rem; margin: 0 0 6px; }
+h2 { font-size: 1.2rem; margin: 0; }
+h3 { font-size: 1rem; margin: 18px 0 6px; }
+code { font-family: var(--f-mono); font-size: .88em; background: var(--row); border-radius: 4px; padding: 0 4px; }
+a { color: var(--accent); }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.muted { color: var(--muted); }
+.wrap { max-width: 1120px; margin: 0 auto; padding: 0 16px 60px; }
+
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 10px 16px; padding-block: 10px; flex-wrap: wrap; }
+.top b { font: 700 1.05rem var(--f-display); }
+.appname { font: 12px var(--f-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.toc { display: flex; gap: 4px 12px; flex-wrap: wrap; font-size: 13px; }
+.toc a { text-decoration: none; color: var(--muted); }
+.toc a:hover { color: var(--accent); }
+.grow { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 5px 11px; font-size: 13px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn:disabled { color: var(--muted); cursor: default; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex-wrap: wrap; }
+.seg button { border: none; background: var(--surface); padding: 5px 11px; font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.mocknote { background: var(--row); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 18px 0; font-size: 14px; }
+.mocknote .tag { font: 600 11px var(--f-mono); color: var(--hl); border: 1px solid var(--hl); border-radius: 4px; padding: 0 5px; margin-right: 6px; }
+
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin: 18px 0; }
+.goals { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.goals ul { margin: 6px 0 0; padding-left: 20px; }
+.goals li { margin: 3px 0; }
+.brain { columns: 3 220px; column-gap: 24px; font-size: 13.5px; padding-left: 18px; margin: 8px 0 0; }
+.brain li { break-inside: avoid; margin: 2px 0; }
+.brain li.pick { font-weight: 600; }
+.brain li.pick::after { content: " ✓"; color: var(--ok); }
+.research { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px 18px; font-size: 13.5px; }
+.research div b { display: block; }
+
+.tablewrap { overflow-x: auto; }
+table.rank { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 640px; }
+table.rank th, table.rank td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.rank th { font-weight: 600; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.pips { font-family: var(--f-mono); letter-spacing: 1px; white-space: nowrap; }
+.pips.v { color: var(--ok); } .pips.e { color: var(--warn); }
+
+/* Idea sections */
+.idea { scroll-margin-top: 70px; }
+.idea-head { display: flex; gap: 8px 14px; align-items: baseline; flex-wrap: wrap; }
+.idea-num { font: 700 13px var(--f-mono); color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 1px 9px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; font-size: 12px; }
+.chip { border: 1px solid var(--line); border-radius: 999px; padding: 0 8px; color: var(--muted); white-space: nowrap; }
+.chip b { color: var(--ink); font-weight: 600; }
+.www { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px 20px; margin: 12px 0 14px; font-size: 14px; }
+.www p { margin: 2px 0 0; }
+.www .lab { font: 600 11px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.extends { font-size: 13px; color: var(--muted); border-left: 3px solid var(--line); padding-left: 10px; margin: 10px 0 0; }
+.extends b { color: var(--ink); }
+.demo { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 12px; }
+.demo-bar { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; font-size: 13px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 12px; }
+@media (max-width: 820px) { .split { grid-template-columns: 1fr; } }
+
+/* Shared mini graph */
+.gscroll { overflow-x: auto; border-radius: 8px; background: var(--surface); border: 1px solid var(--line); }
+svg.g { display: block; width: 100%; min-width: 620px; height: auto; }
+.nbox { fill: var(--surface); stroke: var(--ink); stroke-width: 1.2; }
+.nstrip { opacity: .9; }
+.nname { font: 600 13px var(--f-mono); fill: var(--ink); }
+.nsub { font: 10.5px var(--f-body); fill: var(--muted); }
+.node { cursor: pointer; transition: opacity .2s; }
+.node.dim, .edge.dim { opacity: .14; }
+.node.sel .nbox { stroke: var(--hl); stroke-width: 2.4; }
+.edge { transition: opacity .2s; }
+.edge path.w { fill: none; stroke-width: 1.5; }
+.edge.k-dep path.w { stroke: var(--accent); stroke-dasharray: 6 4; }
+.edge.k-comm path.w { stroke: var(--signal); stroke-width: 2; }
+.edge.k-comp path.w { stroke: var(--accent); }
+.edge.k-via path.w.o { stroke: var(--derived); stroke-width: 4.6; stroke-dasharray: none; }
+.edge.k-via path.w.i { stroke: var(--surface); stroke-width: 1.8; }
+.edge path.hit { fill: none; stroke: transparent; stroke-width: 12; cursor: help; }
+.edge.faint { opacity: .13; }
+.edge.faint path.w { stroke-width: 1; }
+.edge.lit { opacity: 1; }
+.edge.lit path.w:not(.i) { stroke: var(--hl); stroke-width: 2.6; }
+.edge.lit.k-via path.w.o { stroke-width: 5; }
+.edge.on path.w:not(.i) { stroke-width: 3; }
+.elabel rect { fill: var(--surface); stroke: var(--line); }
+.elabel text { font: 10.5px var(--f-body); fill: var(--ink); }
+.stepbadge circle { fill: var(--hl); } .stepbadge text { font: 700 11px var(--f-mono); fill: #fff; text-anchor: middle; }
+.ah-accent { fill: var(--accent); } .ah-derived { fill: var(--derived); } .ah-signal { fill: var(--signal); } .ah-hl { fill: var(--hl); }
+
+.tip { position: fixed; z-index: 20; max-width: 300px; background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 6px 22px rgb(0 0 0 / .18); padding: 8px 10px; font-size: 13px; pointer-events: none; }
+.tip .k { font: 600 11px var(--f-mono); color: var(--muted); display: block; margin-top: 4px; }
+
+/* Legend (idea 3) */
+.legend { display: flex; flex-wrap: wrap; gap: 6px 8px; font-size: 13px; }
+.legend button { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.legend button[aria-pressed="true"] { border-color: var(--hl); }
+.legend .uml { font: 11px var(--f-mono); color: var(--muted); }
+.sw { display: inline-block; width: 26px; height: 0; border-top: 2px solid var(--accent); }
+.sw.dep { border-top-style: dashed; }
+.sw.comm { border-top: 2px solid var(--signal); }
+.sw.via { height: 6px; border: 2px solid var(--derived); border-left: none; border-right: none; }
+
+/* Box faces (idea 1) */
+.faces { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; }
+.face { background: var(--surface); border: 1.3px solid var(--ink); border-radius: 6px; overflow: hidden; }
+.face .hd { background: var(--row); padding: 6px 10px; display: flex; gap: 8px; align-items: center; }
+.face .tri { color: var(--accent); font-size: 11px; }
+.face .nm { font: 600 13.5px var(--f-mono); }
+.face .tc { font: 700 10px var(--f-mono); background: #f2d64b; color: #1b1b1b; border-radius: 3px; padding: 0 4px; }
+.face .badge { margin-left: auto; font: 600 10.5px var(--f-body); background: var(--accent); color: var(--accent-ink); border-radius: 4px; padding: 0 6px; }
+.face .badge.warn { background: var(--warn); color: #fff; }
+.face .ds { padding: 6px 10px 2px; font-size: 13px; line-height: 1.35; }
+.face .ds.none { color: var(--muted); font-style: italic; }
+.face .ft { padding: 2px 10px 7px; font: 11px var(--f-mono); color: var(--muted); display: flex; gap: 10px; flex-wrap: wrap; }
+.face .ft .imp { display: inline-flex; gap: 2px; align-items: center; }
+.face .ft .imp i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--dim); }
+.face .ft .imp i.on { background: var(--accent); }
+.face.before .ft { padding-top: 6px; }
+.label-tag { font: 600 11px var(--f-mono); color: var(--muted); text-transform: uppercase; letter-spacing: .06em; margin: 0 0 6px; }
+.frame-demo { border: 1.5px solid hsl(var(--h) 50% var(--dom-l) / var(--dom-line)); border-radius: 8px; background: hsl(var(--h) 60% 50% / var(--dom-fill)); overflow: hidden; }
+.frame-demo .fh { background: hsl(var(--h) 60% 50% / calc(var(--dom-fill) + .1)); padding: 5px 10px; font: 700 13.5px var(--f-display); }
+.frame-demo .fd { padding: 4px 10px 8px; font-size: 12.5px; color: var(--ink); }
+.frame-demo .fd.old { font: 11px var(--f-mono); color: var(--muted); }
+
+/* Plain-words panel (idea 4) */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; font-size: 13.5px; }
+.panel h4 { margin: 0 0 2px; font: 600 15px var(--f-mono); }
+.panel .where { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.panel .lead { font-size: 14.5px; margin: 0 0 10px; }
+.panel .grp { font: 600 11px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 10px 0 4px; }
+.panel ul { margin: 0; padding-left: 18px; }
+.panel li { margin: 3px 0; }
+.panel .nonote { color: var(--muted); }
+.panel .ask { font-size: 12px; padding: 1px 8px; margin-left: 4px; }
+.panel details { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+
+/* Start here (idea 6) */
+.route-steps { list-style: none; margin: 0; padding: 0; counter-reset: s; font-size: 13.5px; }
+.route-steps li { display: grid; grid-template-columns: 26px 1fr; gap: 8px; padding: 6px 4px; border-radius: 7px; cursor: pointer; }
+.route-steps li.cur { background: var(--row); outline: 1px solid var(--hl); }
+.route-steps .n { width: 22px; height: 22px; border-radius: 50%; background: var(--hl); color: #fff; font: 700 11px var(--f-mono); display: grid; place-items: center; }
+.route-steps .t b { font-family: var(--f-mono); }
+.route-steps .t span { display: block; color: var(--muted); font-size: 12.5px; }
+
+/* Overview (idea 5) */
+.story { font-size: 16px; line-height: 2; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 12px 16px; }
+.dchip { display: inline-block; border-radius: 6px; padding: 0 8px; line-height: 1.6; font-weight: 600; cursor: pointer;
+  background: hsl(var(--h) 60% 50% / calc(var(--dom-fill) + .06)); border: 1.5px solid hsl(var(--h) 50% var(--dom-l) / var(--dom-line)); }
+.dchip.on { outline: 2px solid var(--hl); }
+.arrow { color: var(--muted); margin: 0 4px; }
+.dcards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin-top: 12px; }
+.dcard { border-radius: 9px; background: var(--surface); border: 1.5px solid hsl(var(--h) 50% var(--dom-l) / var(--dom-line)); overflow: hidden; transition: opacity .2s; }
+.dcard.dim { opacity: .35; }
+.dcard .dh { background: hsl(var(--h) 60% 50% / calc(var(--dom-fill) + .06)); padding: 5px 10px; font: 700 14px var(--f-display); display: flex; justify-content: space-between; }
+.dcard .dh span { font: 11px var(--f-mono); color: var(--muted); align-self: center; }
+.dcard .db { padding: 6px 10px 9px; font-size: 13px; }
+.dcard .keys { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.dcard .keys code { font-size: 11.5px; }
+
+/* Toolbar (idea 7) */
+.tb { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 12.5px; }
+.tb.old { color: var(--ink); }
+.tb.old .r { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 3px 0; }
+.tb.old .r span { white-space: nowrap; }
+.tb.old .r .lab { color: var(--muted); }
+.tb.new { display: flex; gap: 8px 12px; flex-wrap: wrap; align-items: center; }
+.tb.new .search { flex: 1 1 200px; border: 1px solid var(--line); border-radius: 7px; padding: 5px 10px; background: var(--bg); color: var(--muted); }
+.more { margin-top: 8px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 4px 14px; font-size: 13px; }
+.more label { display: flex; gap: 6px; align-items: center; }
+.more .set { color: var(--hl); font: 600 10.5px var(--f-mono); }
+.ruler { display: flex; gap: 4px; align-items: end; flex: 1 1 260px; }
+.ruler div { flex: 1; font: 10.5px var(--f-mono); color: var(--muted); border-top: 3px solid var(--dim); padding-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ruler div.on { border-color: var(--accent); color: var(--ink); font-weight: 600; }
+
+/* Glossary (idea 8) */
+.term { border-bottom: 1.5px dotted var(--accent); cursor: help; }
+.uitext { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 13px var(--f-mono); line-height: 1.9; }
+.gloss { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13.5px; margin-top: 12px; }
+.gloss dt { font-weight: 600; }
+.gloss dd { margin: 0; color: var(--muted); }
+@media (max-width: 520px) { .gloss { grid-template-columns: 1fr; } .gloss dd { margin-bottom: 6px; } }
+
+.fit li { margin: 6px 0; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+  <b>Coderstanding</b><span class="appname">readability mock-up</span>
+  <nav class="toc" aria-label="Sections">
+    <a href="#goals">Goals</a><a href="#ideas">Ranking</a><a href="#i1">1 Box text</a><a href="#i2">2 Quiet lines</a><a href="#i3">3 Legend</a><a href="#i4">4 Plain words</a><a href="#i5">5 Overview</a><a href="#i6">6 Start here</a><a href="#i7">7 Toolbar</a><a href="#i8">8 Words</a><a href="#fit">Fit</a>
+  </nav>
+  <span class="grow"></span>
+  <button class="btn" id="theme" type="button">Theme: auto</button>
+</div></header>
+
+<main class="wrap">
+  <div class="mocknote"><span class="tag">MOCK-UP</span>
+    Ideas to make the map readable at a glance, for someone who builds code with an AI and wants to understand it.
+    Sample data is the real Coderstanding map, level 1 <code>Systems</code> (12 of its 22 classes, hints and descriptions as saved).
+    Nothing here is built. Tours highlighting / popup notes and auto-layout alignment are other work; section <a href="#fit">Fit</a> says how these ideas meet them.
+  </div>
+
+  <section class="card" id="goals">
+    <h2>What "readable" means: checkable goals</h2>
+    <div class="goals">
+      <div><h3>In 30 seconds, a newcomer can say…</h3><ul>
+        <li>what the app does, in one sentence;</li>
+        <li>its 5–9 big parts and what each is for;</li>
+        <li>where it starts (which box runs first);</li>
+        <li>what a box means and what a line means, without opening the legend.</li>
+      </ul></div>
+      <div><h3>In 5 minutes, they can…</h3><ul>
+        <li>follow one main flow end to end (e.g. "how a scan works");</li>
+        <li>pick any box and explain what it does and who uses it;</li>
+        <li>tell explained lines from plain "uses" lines;</li>
+        <li>find the class behind a feature by name or word;</li>
+        <li>know the jargon on screen (level, domain, via, hub).</li>
+      </ul></div>
+      <div><h3>Today (screenshots of the real viewer)</h3><ul>
+        <li>Boxes say <code>30 functions · 0 fields</code>, not what they do.</li>
+        <li>Domain frames say <code>double-click to show only it</code>.</li>
+        <li>10 line kinds in the legend, UML names, all shown even when absent.</li>
+        <li>~35 lines at level 1, most are bare <code>[dependency]</code>, same weight as explained ones.</li>
+        <li>Two rows of ~20 controls before the map.</li>
+      </ul></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Brainstorm (✓ = mocked below)</h2>
+    <ul class="brain">
+      <li class="pick">Plain summary on every box</li>
+      <li class="pick">Explained lines first, the rest faint</li>
+      <li class="pick">Legend of only what's on screen, plain words</li>
+      <li class="pick">Hover a line: one sentence of what it means</li>
+      <li class="pick">"In plain words" details panel</li>
+      <li class="pick">Focus: fade everything not next to the selection</li>
+      <li class="pick">30-second overview story of the domains</li>
+      <li class="pick">Start here: numbered main path from the entry point</li>
+      <li class="pick">Calm toolbar with presets</li>
+      <li class="pick">Glossary hovers for jargon</li>
+      <li class="pick">Importance cue on boxes (used by N, size)</li>
+      <li>Search-first landing page</li>
+      <li>Guided first run (coach marks)</li>
+      <li>Breadcrumbs "Domain › class › function"</li>
+      <li>Colour = domain everywhere (box strip, chip, frame)</li>
+      <li>Hide outside code until asked</li>
+      <li>Box size by importance</li>
+      <li>"Ask AI about this box" button</li>
+      <li>Matrix view (DSM) for big maps</li>
+      <li>Diff view: what changed since last look</li>
+      <li>Sequence strip for one call chain</li>
+      <li>Readable labels: no truncated hints on lines</li>
+      <li>Level names as questions ("What are the parts?")</li>
+      <li>Read-aloud summary of the map</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <h2>Ideas from other tools (idea only, not their look)</h2>
+    <div class="research">
+      <div><b>C4 model diagrams</b>Every box carries a one-line responsibility and every diagram has a key. → ideas 1, 3.</div>
+      <div><b>Sourcetrail</b>Search first, then only the selected symbol and its neighbours. → ideas 4, 7 (search in the bar).</div>
+      <div><b>CodeSee maps / tours</b>Onboarding paths through the map. → idea 6 (as a tour, not a new system).</div>
+      <div><b>Structure101 / NDepend</b>Levelized layers, dependency weight shown by line thickness, a matrix for big graphs. → idea 2 (quiet weight), brainstorm.</div>
+      <div><b>CodeScene</b>Hotspots: size × change rate tells what matters. → importance cue in idea 1.</div>
+      <div><b>Obsidian local graph</b>Depth-1 neighbourhood with everything else faded. → idea 4 focus.</div>
+    </div>
+  </section>
+
+  <section class="card" id="ideas">
+    <h2>Ranked by value vs effort</h2>
+    <div class="tablewrap"><table class="rank">
+      <thead><tr><th>#</th><th>Idea</th><th>Value</th><th>Effort</th><th>Extends (no new system)</th></tr></thead>
+      <tbody>
+        <tr><td>1</td><td><a href="#i1">Say what each box does</a></td><td class="pips v">●●●</td><td class="pips e">●○○</td><td>Box faces (<code>fanout.js</code>), Code docs / note <code>hint</code>, Hotspots</td></tr>
+        <tr><td>2</td><td><a href="#i2">Explained lines first</a></td><td class="pips v">●●●</td><td class="pips e">●○○</td><td>View engine Show switches (<code>compute_view</code>), wires in <code>app.js</code></td></tr>
+        <tr><td>3</td><td><a href="#i3">Plain-words legend + line hover</a></td><td class="pips v">●●●</td><td class="pips e">●○○</td><td>Legend (<code>index.html</code>), Field rules / <code>field_help.js</code></td></tr>
+        <tr><td>4</td><td><a href="#i4">Focus + "In plain words" panel</a></td><td class="pips v">●●●</td><td class="pips e">●●○</td><td>Details panel (<code>app.js</code>), Details-panel lists (<code>lists.js</code>), <code>.dimmed</code></td></tr>
+        <tr><td>5</td><td><a href="#i5">30-second overview</a></td><td class="pips v">●●○</td><td class="pips e">●●○</td><td>Domain frames (<code>domains.js</code>), notes on domains, Slim text</td></tr>
+        <tr><td>6</td><td><a href="#i6">Start here path</a></td><td class="pips v">●●●</td><td class="pips e">●●○</td><td>Tours (<code>tours.py</code>, Tours tab), Entry kinds / start badges</td></tr>
+        <tr><td>7</td><td><a href="#i7">Calm toolbar with presets</a></td><td class="pips v">●●○</td><td class="pips e">●●○</td><td>Viewer controls (<code>index.html</code>), URL options, per-app remembered switches</td></tr>
+        <tr><td>8</td><td><a href="#i8">Words explained</a></td><td class="pips v">●○○</td><td class="pips e">●○○</td><td>Field rules (<code>field_help.js</code>, <code>field_rules.json</code>) as the one glossary</td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted" style="font-size:13px;margin:8px 0 0">Value = how much it helps the 30 s / 5 min goals. Effort = viewer work, given what already exists. 1–3 are a small first batch; 4–6 a second.</p>
+  </section>
+
+  <!-- 1 -->
+  <section class="card idea" id="i1">
+    <div class="idea-head"><span class="idea-num">1</span><h2>Say what each box does</h2>
+      <div class="chips"><span class="chip">value <b>high</b></span><span class="chip">effort <b>low</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>The box face shows the class's one-line description under its name. Counts move to a quiet footer, with a small "how much it matters" cue.</p></div>
+      <div><div class="lab">Why</div><p>A map of names only asks the reader to know the code already. The descriptions exist (code header or note <code>hint</code>); they just sit in the details panel.</p></div>
+      <div><div class="lab">How</div><p>Box text setting: <i>Name</i> / <i>Name + what it does</i> (default) / <i>Full</i>. Wraps to 2 lines max, using the existing name/sub-line wrapping. No description → "No description yet" with Ask AI. Domain frames show the domain's description instead of the click hint.</p></div>
+    </div>
+    <div class="demo">
+      <div class="demo-bar"><span class="muted">Box text</span>
+        <div class="seg" id="faceMode"><button type="button" data-m="name">Name</button><button type="button" data-m="short" aria-pressed="true">Name + what it does</button><button type="button" data-m="full">Full</button></div></div>
+      <div class="faces">
+        <div><p class="label-tag">Today</p>
+          <div class="face before"><div class="hd"><span class="tri">▶</span><span class="nm">scan</span><span class="tc">.py</span></div><div class="ft">6 functions · 0 fields</div></div>
+          <p class="label-tag" style="margin-top:12px">Today (domain frame)</p>
+          <div class="frame-demo" style="--h:45"><div class="fh">Scanning</div><div class="fd old">double-click to show only it</div></div>
+        </div>
+        <div><p class="label-tag">Proposed</p><div id="faceNew" style="display:grid;gap:10px"></div>
+          <p class="label-tag" style="margin-top:12px">Proposed (domain frame)</p>
+          <div class="frame-demo" style="--h:45"><div class="fh">Scanning</div><div class="fd">Reads your code and turns it into the map. <span class="muted">31 classes</span></div></div>
+        </div>
+      </div>
+    </div>
+    <p class="extends">Extends <b>Viewer fan-out and box faces</b> (<code>fanout.js</code>, the one place that draws a box face), <b>Code-type chips</b> wrapping, <b>Code docs</b> + <b>Notes store</b> (description source: human note › AI note › code comment, as the details panel already picks), <b>Hotspots</b> / hub flag for the importance dots. Box height grows by up to 2 lines, so <b>Viewer layout</b> spacing must use the real face height.</p>
+  </section>
+
+  <!-- 2 -->
+  <section class="card idea" id="i2">
+    <div class="idea-head"><span class="idea-num">2</span><h2>Explained lines first</h2>
+      <div class="chips"><span class="chip">value <b>high</b></span><span class="chip">effort <b>low</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>Lines that have a hint ("Rescanning a project runs the scanner") are drawn full; bare <code>[dependency]</code> lines are drawn thin and faint until you hover or select one of their ends.</p></div>
+      <div><div class="lab">Why</div><p>At level 1 most lines are unexplained "uses" lines. Drawn at the same weight they bury the 18 that tell the story.</p></div>
+      <div><div class="lab">How</div><p>A Lines switch: <i>Explained first</i> (default) / <i>All equal</i>. Hover a box: its faint lines come back. The count shows what is faint, so nothing feels hidden. It also gives the AI a clear job: explain the faint ones.</p></div>
+    </div>
+    <div class="demo">
+      <div class="demo-bar"><span class="muted">Lines</span>
+        <div class="seg" id="quietMode"><button type="button" data-q="1" aria-pressed="true">Explained first</button><button type="button" data-q="0">All equal</button></div>
+        <span class="muted" id="quietCount"></span></div>
+      <div class="gscroll"><svg class="g" id="g2" viewBox="0 0 1030 440" role="img" aria-label="Level 1 map with explained lines first"></svg></div>
+    </div>
+    <p class="extends">Extends the <b>View engine</b> Show switches (a <code>show["lines"]="explained"</code> flag marks edges <code>quiet</code>, so Copy for AI and <code>coderstanding graph</code> can sort explained lines first too) and the wire drawing in <code>app.js</code> (the existing <code>.lines.quiet</code> style). No new component.</p>
+  </section>
+
+  <!-- 3 -->
+  <section class="card idea" id="i3">
+    <div class="idea-head"><span class="idea-num">3</span><h2>Plain-words legend + line hover</h2>
+      <div class="chips"><span class="chip">value <b>high</b></span><span class="chip">effort <b>low</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>The legend lists only the line kinds on screen, in plain words first ("uses", "goes through hidden classes"), the UML name small after. Click a legend entry to light those lines. Hover a line for one sentence.</p></div>
+      <div><div class="lab">Why</div><p>Ten UML terms up front (realization, association…) are a test, not a key. Most views use 2–3 kinds.</p></div>
+      <div><div class="lab">How</div><p>Legend built from the view's edge kinds. Line hover sentence = "<i>A</i> <i>verb</i> <i>B</i>: hint", e.g. "cli uses offline: Every command switches on the offline guard first". Tap works on phones.</p></div>
+    </div>
+    <div class="demo">
+      <div class="demo-bar"><span class="muted">On this map:</span><div class="legend" id="legend3"></div></div>
+      <div class="gscroll"><svg class="g" id="g3" viewBox="0 0 1030 440" role="img" aria-label="Level 1 map with plain legend"></svg></div>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 0">Hover (or tap) any line.</p>
+    </div>
+    <p class="extends">Extends the <b>Viewer</b> legend (built from the view, not fixed HTML) and <b>Field rules</b> (<code>field_help.js</code>): the plain words per kind live in one table there, which the legend, line hover and glossary (idea 8) all read.</p>
+  </section>
+
+  <!-- 4 -->
+  <section class="card idea" id="i4">
+    <div class="idea-head"><span class="idea-num">4</span><h2>Focus + "In plain words" panel</h2>
+      <div class="chips"><span class="chip">value <b>high</b></span><span class="chip">effort <b>medium</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>Click a box: everything not directly connected fades, and the details panel opens with sentences, not fields: what it does, who uses it and why, what it uses and why, where it sits.</p></div>
+      <div><div class="lab">Why</div><p>Answers "what does this do and how does it fit" in one look. Today the panel starts with help text and lists of names.</p></div>
+      <div><div class="lab">How</div><p>"In plain words" is the top block of the existing panel; the current lists stay below under "Details". Unexplained links get an Ask AI button (makes a hint draft, as notes already allow AI drafts).</p></div>
+    </div>
+    <div class="demo split">
+      <div class="gscroll"><svg class="g" id="g4" viewBox="0 0 1030 440" role="img" aria-label="Level 1 map, click a class"></svg></div>
+      <div class="panel" id="panel4" aria-live="polite"></div>
+    </div>
+    <p class="extends">Extends the <b>Viewer</b> details panel and <b>Details-panel lists</b> (<code>lists.js</code> folds long lists), the existing <code>.dimmed</code> style and neighbour focus (<code>test_focus_neighbours</code>); the same fade is what tours use to highlight a step, so both share one "focus set" helper.</p>
+  </section>
+
+  <!-- 5 -->
+  <section class="card idea" id="i5">
+    <div class="idea-head"><span class="idea-num">5</span><h2>30-second overview</h2>
+      <div class="chips"><span class="chip">value <b>medium-high</b></span><span class="chip">effort <b>medium</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>Level 0 opens as a short story of the domains, one sentence of flow, then a card per domain: what it is for, its key classes, who it talks to. "Show on map" opens the frames view.</p></div>
+      <div><div class="lab">Why</div><p>The first question is "what is this app made of?", and prose answers it faster than 20 boxes and 30 bundled lines.</p></div>
+      <div><div class="lab">How</div><p>Built from what exists: domain descriptions (new note field on the domain), level 0 lines and their hints, hub/size for "key classes". The flow sentence is a note too (AI drafts it, you edit).</p></div>
+    </div>
+    <div class="demo">
+      <div class="story" id="story"></div>
+      <div class="dcards" id="dcards"></div>
+    </div>
+    <p class="extends">Extends <b>Domain frames</b> (<code>domains.js</code> data, same order and colours), <b>Notes store</b> (a description on <code>domain:&lt;name&gt;</code> keys, like class notes) and <b>Slim text</b> (the same overview prints in <code>coderstanding graph &lt;app&gt; 0</code>, so the AI reads what you read).</p>
+  </section>
+
+  <!-- 6 -->
+  <section class="card idea" id="i6">
+    <div class="idea-head"><span class="idea-num">6</span><h2>Start here: the main path</h2>
+      <div class="chips"><span class="chip">value <b>high</b></span><span class="chip">effort <b>medium</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>A "Start here" button numbers the main flow on the map from the entry point: 1 → 2 → 3 …, each step a box and the hint of the line that leads to it. A second path for the other main flow.</p></div>
+      <div><div class="lab">Why</div><p>A newcomer doesn't know where to start reading. A path through 4–5 boxes gives the spine; everything else hangs off it.</p></div>
+      <div><div class="lab">How</div><p>A start path is a short tour flagged <code>start</code>: no new store. The AI drafts it from the start badges and the strongest hinted lines; "Play as tour" opens the full tour.</p></div>
+    </div>
+    <div class="demo">
+      <div class="demo-bar">
+        <div class="seg" id="routePick"><button type="button" data-r="scan" aria-pressed="true">When you scan a project</button><button type="button" data-r="viewer">When you open the viewer</button></div>
+        <button class="btn" id="routeBack" type="button">Back</button><button class="btn primary" id="routeNext" type="button">Next</button>
+        <button class="btn" type="button" disabled title="Opens the Tours tab (mock)">Play as tour ▸</button>
+      </div>
+      <div class="split">
+        <div class="gscroll"><svg class="g" id="g6" viewBox="0 0 1030 440" role="img" aria-label="Level 1 map with numbered path"></svg></div>
+        <ol class="route-steps panel" id="routeSteps"></ol>
+      </div>
+    </div>
+    <p class="extends">Extends <b>Tours</b> (<code>tours.py</code> item store, a <code>start: true</code> front-matter flag; the Tours tab draws the badges) and <b>Entry kinds</b> (the start badge picks step 1). The step highlight is the tours highlight being built now.</p>
+  </section>
+
+  <!-- 7 -->
+  <section class="card idea" id="i7">
+    <div class="idea-head"><span class="idea-num">7</span><h2>Calm toolbar with presets</h2>
+      <div class="chips"><span class="chip">value <b>medium</b></span><span class="chip">effort <b>medium</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>One row: tabs, the level ruler, a search box, and a preset: <i>Read</i> / <i>Explore</i> / <i>Edit</i>. Every other switch goes under "More options" and shows which ones the preset set.</p></div>
+      <div><div class="lab">Why</div><p>~20 controls before the map tell a newcomer this is hard. Most visits want one of three set-ups.</p></div>
+      <div><div class="lab">How</div><p>A preset is just a set of the existing switches (same as the URL options). Changing any switch shows "Custom". Remembered per project like the domain switches.</p></div>
+    </div>
+    <div class="demo">
+      <p class="label-tag">Today</p>
+      <div class="tb old">
+        <div class="r"><span class="lab">View</span><span>All types | Concrete</span><span class="lab">Show</span><span>☑ Outside code</span><span>☑ Communications</span><span>☐ Tests</span><span>☑ Specs &amp; notes</span><span>☑ Self calls</span><span>☐ Domains</span><span class="lab">Between frames</span><span>Bundled | Every line</span><span class="lab">Highlight</span><span>All classes ▾</span></div>
+        <div class="r"><span class="lab">Layout</span><span>View | Edit layout</span><span>Auto layout</span><span>Layered ▾</span><span class="lab">Functions</span><span>Expand all | Collapse all</span><span class="lab">Copy</span><span>for AI | command only</span></div>
+        <div class="r"><span>1 · Systems · Double-click a line or class to zoom · ▸ opens a class into its functions</span><span class="lab">37 of 204 classes</span><span>Levels…</span></div>
+      </div>
+      <p class="label-tag" style="margin-top:14px">Proposed</p>
+      <div class="tb new">
+        <div class="seg" id="preset"><button type="button" data-p="read" aria-pressed="true">Read</button><button type="button" data-p="explore">Explore</button><button type="button" data-p="edit">Edit</button></div>
+        <span class="search">Find a class, function or word…</span>
+        <div class="ruler"><div>0 Domains</div><div class="on">1 Systems</div><div>2 Parts</div><div>3 Pieces</div><div>4 Details</div></div>
+        <button class="btn" type="button" id="moreBtn" aria-expanded="false">More options ▾</button>
+      </div>
+      <div class="more" id="more" hidden></div>
+      <p class="muted" style="font-size:12.5px;margin:6px 0 0" id="presetNote"></p>
+    </div>
+    <p class="extends">Extends the <b>Viewer</b> controls and the URL options parser (a preset = a URL option set, so <code>?preset=read</code> works in tests), per-app remembered switches (as <b>Domain view</b> does). Edit maps to the existing Edit layout mode.</p>
+  </section>
+
+  <!-- 8 -->
+  <section class="card idea" id="i8">
+    <div class="idea-head"><span class="idea-num">8</span><h2>Words explained</h2>
+      <div class="chips"><span class="chip">value <b>medium</b></span><span class="chip">effort <b>low</b></span></div></div>
+    <div class="www">
+      <div><div class="lab">What</div><p>Jargon on screen gets a dotted underline; hover or tap shows one plain sentence. A "Words" list sits in the help.</p></div>
+      <div><div class="lab">Why</div><p>The CLI text and the viewer use terms like <code>via 2</code>, hub, level, domain, outside code, that are clear to us and not to a newcomer.</p></div>
+      <div><div class="lab">How</div><p>One glossary table (with idea 3's line words) in the field-help data; a small helper wraps known terms in labels and panel text.</p></div>
+    </div>
+    <div class="demo">
+      <div class="uitext" id="uitext"></div>
+      <dl class="gloss" id="gloss"></dl>
+    </div>
+    <p class="extends">Extends <b>Field rules</b> (<code>field_rules.json</code> → <code>field_help.js</code>): it already holds the help text for note fields; terms join it so there is one place for wording the viewer and the AI guide share.</p>
+  </section>
+
+  <section class="card" id="fit">
+    <h2>Fit with work in progress</h2>
+    <ul class="fit">
+      <li><b>Tours highlighting / popup notes:</b> idea 6 is a tour with a flag, so it gets the highlight and popups for free. Idea 4's fade and the tour step highlight should be one focus helper; the popup note can show the same "in plain words" sentence as the panel.</li>
+      <li><b>Auto-layout alignment:</b> idea 1 makes boxes taller (up to 2 description lines), so alignment must use real face heights. Ideas 2 and 6 read best when the main path lines up left to right; the start path could be a layout hint ("keep these in one row").</li>
+      <li><b>Order:</b> 1–3 first (small, independent, big win), then 4 and 6 once tours highlighting lands, then 5, 7, 8.</li>
+    </ul>
+    <h3>Open questions for you</h3>
+    <ul class="fit">
+      <li>Default box text: <i>Name + what it does</i>, or keep names only and add it as an option?</li>
+      <li>Explained-first lines as the default for everyone, or only in the Read preset?</li>
+      <li>Should level 0 open as the overview (idea 5) or keep opening as the map?</li>
+    </ul>
+  </section>
+</main>
+
+<div class="tip" id="tip" hidden></div>
+
+<script>
+"use strict";
+/* ---------- Sample data: real Coderstanding classes (level 1) ---------- */
+const DOMAINS = {
+  Commands: { h: 210, d: "The coderstanding command: one command per thing you can ask.", keys: ["cli", "textout"], n: 7 },
+  Helper:   { h: 0,   d: "The local helper the viewer page talks to; it only listens on this PC.", keys: ["server", "Handler"], n: 13 },
+  Projects: { h: 330, d: "Which projects you registered, where their files live, and rescans.", keys: ["apps"], n: 3 },
+  Scanning: { h: 45,  d: "Reads your code and turns it into the map.", keys: ["scan", "cache"], n: 31 },
+  Languages:{ h: 300, d: "One reader per language (Python, JS/TS, C#, Godot…).", keys: ["python", "javascript", "gdscript"], n: 53 },
+  "Map data": { h: 180, d: "What the map is made of, plus the warnings found in it.", keys: ["model", "checks"], n: 11 },
+  Views:    { h: 265, d: "Decides what to show at each level, zoom and filter.", keys: ["views", "fanout"], n: 10 },
+  Notes:    { h: 120, d: "Your and the AI's notes, specs, memos and tours.", keys: ["notes", "cards", "tours"], n: 20 },
+  Viewer:   { h: 20,  d: "The page in your browser that draws the map.", keys: ["app.js", "fanout.js"], n: 16 },
+  System:   { h: 90,  d: "Offline guard, folders and child processes.", keys: ["offline", "procs"], n: 6 },
+};
+const W = 132, H = 44;
+const NODES = {
+  "app.js": { x: 20,  y: 70,  dom: "Viewer",   d: "The viewer page: draws the map the helper sends and handles clicks", fns: 164, used: 0, hot: true },
+  cli:      { x: 20,  y: 300, dom: "Commands", d: "The coderstanding command line: one command per thing you can ask", fns: 107, used: 3, warn: "god class" },
+  server:   { x: 210, y: 70,  dom: "Helper",   d: "The local helper: serves the viewer and answers its questions", fns: 9, used: 2 },
+  apps:     { x: 420, y: 18,  dom: "Projects", d: "The list of registered projects, where their files live, and rescans", fns: 30, used: 5 },
+  views:    { x: 420, y: 150, dom: "Views",    d: "Decides what to show at each level, zoom and filter, for both CLI and viewer", fns: 91, used: 7 },
+  tours:    { x: 420, y: 275, dom: "Notes",    d: "Guided walks through the code, step by step, with optional recordings", fns: 13, used: 3 },
+  cards:    { x: 420, y: 380, dom: "Notes",    d: "Specs (the plan) and memos (comments and information) linked to the map", fns: 9, used: 3 },
+  scan:     { x: 640, y: 18,  dom: "Scanning", d: "Reads a whole repo and turns it into the map; every scan goes through here", fns: 6, used: 2 },
+  notes:    { x: 640, y: 210, dom: "Notes",    d: "Keeps the hints, descriptions and other notes people and AI add to the map", fns: 11, used: 8 },
+  offline:  { x: 640, y: 380, dom: "System",   d: "Makes sure the tool never talks to another machine", fns: 8, used: 3 },
+  checks:   { x: 860, y: 90,  dom: "Map data", d: "Spots possible problems: unused classes, oversized classes, loops", fns: 37, used: 6 },
+  model:    { x: 860, y: 290, dom: "Map data", d: "What the map is made of: classes, their connections and functions", fns: 12, used: 35, hub: true },
+};
+// [from, to, kind, hint, calls] kinds: dep (uses), via (through hidden classes), comm (network), comp (owns)
+const EDGES = [
+  ["app.js", "server", "comm", "The viewer asks the local helper for everything it shows", "/api/meta, /api/notes, /api/view +12"],
+  ["cli", "apps", "dep", "Commands find and manage projects through the registry", "find_app, changed_since_shown +21"],
+  ["cli", "views", "dep", "Commands ask the view engine what to print", "compute_view, resolve_class +28"],
+  ["cli", "server", "dep", "The serve command starts the local helper", "serve, control +15"],
+  ["cli", "offline", "dep", "Every command switches on the offline guard first", "install_offline_guard, privacy_report"],
+  ["cli", "notes", "dep", "The set command writes notes", "clean_value, edge_key +3"],
+  ["cli", "scan", "dep", "", "default_output, diagnose_text +3"],
+  ["cli", "cards", "dep", "", "link_index, open_cards +1"],
+  ["cli", "tours", "dep", "", "open_tours"],
+  ["cli", "checks", "dep", "", "files_to_retest, is_test +2"],
+  ["server", "apps", "dep", "The helper lists and manages registered projects", "app_details, clean_name +10"],
+  ["server", "views", "dep", "The helper asks the view engine what the viewer should draw", "compute_view"],
+  ["server", "notes", "dep", "Notes edited in the viewer are saved here", ""],
+  ["server", "cards", "dep", "The viewer's sidebar reads and saves specs and memos", ""],
+  ["server", "tours", "dep", "The viewer's Tours tab reads and saves tours", ""],
+  ["server", "offline", "dep", "The helper only ever listens on this PC", "is_loopback"],
+  ["server", "scan", "via", "", "assign_files, load_builtin_modules"],
+  ["apps", "scan", "dep", "Rescanning a project runs the scanner", "scan_repo"],
+  ["apps", "notes", "dep", "Loads and saves each project's notes", "load_notes, save_notes"],
+  ["apps", "checks", "dep", "", "apply_note_warnings, is_test +3"],
+  ["scan", "checks", "dep", "After each scan, the warnings are worked out", "check_graph, mark_tests +4"],
+  ["scan", "model", "via", "", "merge_locations, child_id"],
+  ["scan", "notes", "via", "", "edge_key, node_key +1"],
+  ["scan", "offline", "dep", "", ""],
+  ["checks", "model", "dep", "", "called_function, calling_function"],
+  ["views", "model", "dep", "Views are built from the saved map", "function_names, called_function +1"],
+  ["views", "notes", "dep", "Views use notes for levels, domains and hints", "edge_key, node_key +2"],
+  ["views", "checks", "dep", "", "covering_tests, is_test +10"],
+  ["views", "apps", "dep", "", "parse_target, mentions +1"],
+  ["tours", "views", "dep", "Tour steps show the map focused on their targets", "effective_level"],
+  ["tours", "notes", "dep", "", "edge_key, function_key"],
+  ["tours", "cards", "via", "", "check_id, focus_ids +9"],
+  ["cards", "notes", "dep", "", ""],
+  ["cards", "tours", "dep", "", "open_tours"],
+  ["notes", "model", "dep", "", "function_names"],
+  ["notes", "checks", "dep", "", "glob_regex"],
+];
+// One table of plain words per line kind (in the product: field_help.js).
+const KINDS = {
+  dep:  { word: "uses", uml: "dependency", tip: "calls its functions but doesn't keep it", sw: "dep", head: "accent" },
+  via:  { word: "uses, through hidden classes", uml: "derived", tip: "the link passes through classes hidden at this level; go deeper to see them", sw: "via", head: "derived" },
+  comm: { word: "talks to (over HTTP)", uml: "communication", tip: "sends requests over the network, here only on this PC", sw: "comm", head: "signal" },
+};
+
+/* ---------- Shared helpers ---------- */
+const $ = (s, r = document) => r.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const SVGNS = "http://www.w3.org/2000/svg";
+const mk = (tag, attrs = {}, parent) => { const e = document.createElementNS(SVGNS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+const center = id => ({ x: NODES[id].x + W / 2, y: NODES[id].y + H / 2 });
+function clip(from, to) { // point where the line centre(from)->centre(to) leaves from's box
+  const a = center(from), b = center(to), dx = b.x - a.x, dy = b.y - a.y;
+  const t = Math.min(Math.abs((W / 2 + 3) / (dx || 1e-9)), Math.abs((H / 2 + 3) / (dy || 1e-9)));
+  return { x: a.x + dx * t, y: a.y + dy * t };
+}
+const edgeId = e => e[0] + ">" + e[1];
+const neighbours = id => new Set(EDGES.filter(e => e[0] === id || e[1] === id).flatMap(e => [e[0], e[1]]));
+function sentence(e) { return `<b>${esc(e[0])}</b> ${KINDS[e[2]].word} <b>${esc(e[1])}</b>` + (e[3] ? `: ${esc(e[3])}` : ""); }
+
+const tip = $("#tip");
+function showTip(html, ev) {
+  tip.innerHTML = html; tip.hidden = false;
+  const x = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8), y = Math.min(ev.clientY + 14, innerHeight - tip.offsetHeight - 8);
+  tip.style.left = Math.max(8, x) + "px"; tip.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => { tip.hidden = true; };
+addEventListener("scroll", hideTip, { passive: true });
+
+/** Draws the sample map into an svg; returns {nodes, edges} element maps for each demo to style. */
+function drawGraph(svg, { onNode, onEdgeTip = true, subline = false } = {}) {
+  svg.textContent = "";
+  const defs = mk("defs", {}, svg);
+  for (const c of ["accent", "derived", "signal", "hl"]) {
+    const m = mk("marker", { id: svg.id + "-ah-" + c, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 7, markerHeight: 7, orient: "auto-start-reverse" }, defs);
+    mk("path", { d: "M0,0 L10,5 L0,10 z", class: "ah-" + c }, m);
+  }
+  const gE = mk("g", {}, svg), gN = mk("g", {}, svg), gTop = mk("g", { class: "top" }, svg);
+  const edges = {}, nodes = {};
+  for (const e of EDGES) {
+    const p = clip(e[0], e[1]), q = clip(e[1], e[0]);
+    const d = `M${p.x},${p.y} L${q.x},${q.y}`;
+    const g = mk("g", { class: `edge k-${e[2]}` }, gE);
+    if (e[2] === "via") { mk("path", { d, class: "w o" }, g); mk("path", { d, class: "w i" }, g); }
+    else mk("path", { d, class: "w" }, g);
+    const head = mk("path", { d, class: "w", style: "stroke:transparent", "marker-end": `url(#${svg.id}-ah-${KINDS[e[2]].head})` }, g);
+    const hit = mk("path", { d, class: "hit" }, g);
+    g._head = head; g._kind = KINDS[e[2]].head;
+    if (onEdgeTip) {
+      const show = ev => showTip(`${sentence(e)}${e[3] ? "" : ` <span class="muted">(no note yet)</span>`}<span class="k">${esc(KINDS[e[2]].word)} = ${esc(KINDS[e[2]].tip)}</span>` + (e[4] ? `<span class="k">calls: ${esc(e[4])}</span>` : ""), ev);
+      hit.addEventListener("pointermove", show); hit.addEventListener("pointerleave", hideTip);
+      hit.addEventListener("click", ev => { show(ev); ev.stopPropagation(); });
+    }
+    edges[edgeId(e)] = g;
+  }
+  for (const id in NODES) {
+    const n = NODES[id], dom = DOMAINS[n.dom];
+    const g = mk("g", { class: "node", transform: `translate(${n.x},${n.y})`, tabindex: 0, role: "button", "aria-label": `${id}: ${n.d}` }, gN);
+    mk("rect", { class: "nbox", width: W, height: H, rx: 5 }, g);
+    mk("rect", { class: "nstrip", width: 5, height: H, rx: 2, fill: `hsl(${dom.h} 55% 50%)` }, g);
+    mk("text", { class: "nname", x: 13, y: subline ? 19 : 27 }, g).textContent = id;
+    if (subline) mk("text", { class: "nsub", x: 13, y: 34 }, g).textContent = n.dom;
+    if (onNode) { g.addEventListener("click", ev => { onNode(id); ev.stopPropagation(); }); g.addEventListener("keydown", ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); onNode(id); } }); }
+    nodes[id] = g;
+  }
+  return { edges, nodes, gTop };
+}
+function setHead(g, colour) { g._head.setAttribute("marker-end", g._head.getAttribute("marker-end").replace(/ah-\w+\)/, `ah-${colour || g._kind})`)); }
+function segToggle(seg, attr, fn) {
+  seg.addEventListener("click", ev => {
+    const b = ev.target.closest("button"); if (!b) return;
+    for (const x of seg.querySelectorAll("button")) x.setAttribute("aria-pressed", String(x === b));
+    fn(b.dataset[attr]);
+  });
+}
+
+/* ---------- 1 Box faces ---------- */
+function renderFaces(mode) {
+  const sample = [["scan", ".py"], ["notes", ".py"], ["app.js", ".js"], ["offline", ".py"]];
+  $("#faceNew").innerHTML = sample.map(([id, ext], i) => {
+    const n = NODES[id];
+    const desc = i === 3 && mode !== "name" ? null : n.d; // show one "no description" case
+    const imp = n.hub ? 3 : n.used >= 6 ? 3 : n.used >= 3 ? 2 : 1;
+    const badge = n.hot ? `<span class="badge warn" title="Big and changed often, no tests">hotspot</span>` : n.used >= 6 ? `<span class="badge" title="Many classes use it">used by ${n.used}</span>` : "";
+    let body = "";
+    if (mode !== "name") body = desc
+      ? `<div class="ds"${mode === "short" ? ` style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden"` : ""}>${esc(desc)}</div>`
+      : `<div class="ds none">No description yet <button class="btn ask" type="button" style="font-size:11px;padding:0 7px">Ask AI</button></div>`;
+    const ft = mode === "full" ? `${n.fns} functions · ${n.dom}` : `${n.fns} functions`;
+    return `<div class="face"><div class="hd"><span class="tri">▶</span><span class="nm">${esc(id)}</span><span class="tc" style="${ext === ".js" ? "background:#f7e98a" : ""}">${ext}</span>${badge}</div>${body}
+      <div class="ft"><span class="imp" title="How much it matters: used by ${n.used}">${[1, 2, 3].map(k => `<i class="${k <= imp ? "on" : ""}"></i>`).join("")}</span><span>${esc(ft)}</span></div></div>`;
+  }).join("");
+}
+segToggle($("#faceMode"), "m", renderFaces); renderFaces("short");
+
+/* ---------- 2 Explained lines first ---------- */
+(() => {
+  let quiet = true, hover = null;
+  const svg = $("#g2"), G = drawGraph(svg, { onNode: id => { hover = hover === id ? null : id; apply(); } });
+  for (const id in G.nodes) {
+    G.nodes[id].addEventListener("pointerenter", () => { hover = id; apply(); });
+    G.nodes[id].addEventListener("pointerleave", () => { hover = null; apply(); });
+  }
+  svg.addEventListener("click", () => { hover = null; apply(); });
+  function apply() {
+    for (const e of EDGES) {
+      const near = hover && (e[0] === hover || e[1] === hover);
+      G.edges[edgeId(e)].classList.toggle("faint", quiet && !e[3] && !near);
+      G.edges[edgeId(e)].classList.toggle("on", !!near);
+    }
+    const n = EDGES.filter(e => e[3]).length;
+    $("#quietCount").textContent = quiet ? `${n} explained · ${EDGES.length - n} faint (hover a box to bring its lines back)` : `${EDGES.length} lines, all at the same weight`;
+  }
+  segToggle($("#quietMode"), "q", v => { quiet = v === "1"; apply(); });
+  apply();
+})();
+
+/* ---------- 3 Legend ---------- */
+(() => {
+  const G = drawGraph($("#g3"));
+  const present = [...new Set(EDGES.map(e => e[2]))];
+  let lit = null;
+  const lg = $("#legend3");
+  lg.innerHTML = present.map(k => `<button type="button" data-k="${k}" aria-pressed="false" title="${esc(KINDS[k].tip)}"><span class="sw ${KINDS[k].sw}"></span>${esc(KINDS[k].word)} <span class="uml">${KINDS[k].uml}</span></button>`).join("")
+    + `<span class="muted" style="align-self:center;font-size:12px">Boxes: colour strip = domain</span>`;
+  lg.addEventListener("click", ev => {
+    const b = ev.target.closest("button"); if (!b) return;
+    lit = lit === b.dataset.k ? null : b.dataset.k;
+    for (const x of lg.querySelectorAll("button")) x.setAttribute("aria-pressed", String(x.dataset.k === lit));
+    for (const e of EDGES) {
+      const g = G.edges[edgeId(e)];
+      g.classList.toggle("lit", lit === e[2]); g.classList.toggle("dim", !!lit && lit !== e[2]);
+      setHead(g, lit === e[2] ? "hl" : null);
+    }
+  });
+})();
+
+/* ---------- 4 Focus + plain words ---------- */
+(() => {
+  let sel = "scan";
+  const G = drawGraph($("#g4"), { onNode: id => { sel = id; apply(); } });
+  $("#g4").addEventListener("click", () => { sel = null; apply(); });
+  function item(other, e) {
+    return `<li><b>${esc(other)}</b> ${e[3] ? `— ${esc(e[3])}` : `<span class="nonote">— ${KINDS[e[2]].word}${e[4] ? " " + esc(e[4].split(",")[0]) : ""} (no note yet)</span><button class="btn ask" type="button">Ask AI</button>`}</li>`;
+  }
+  function apply() {
+    const nb = sel ? neighbours(sel) : null;
+    for (const id in G.nodes) { G.nodes[id].classList.toggle("dim", !!nb && !nb.has(id)); G.nodes[id].classList.toggle("sel", id === sel); }
+    for (const e of EDGES) {
+      const g = G.edges[edgeId(e)], on = sel && (e[0] === sel || e[1] === sel);
+      g.classList.toggle("dim", !!sel && !on); g.classList.toggle("on", !!on);
+    }
+    const p = $("#panel4");
+    if (!sel) { p.innerHTML = `<p class="muted">Click a box to see it in plain words.</p>`; return; }
+    const n = NODES[sel], inn = EDGES.filter(e => e[1] === sel), out = EDGES.filter(e => e[0] === sel);
+    const sort = a => a.sort((x, y) => !!y[3] - !!x[3]);
+    p.innerHTML = `<h4>${esc(sel)}</h4><div class="where">${esc(n.dom)} · level 1 Systems · ${n.fns} functions${n.warn ? ` · <span style="color:var(--warn)">${esc(n.warn)}</span>` : ""}</div>
+      <p class="lead">${esc(n.d)}.</p>
+      <div class="grp">Used by (${inn.length})</div><ul>${sort(inn).map(e => item(e[0], e)).join("") || `<li class="nonote">Nothing at this level: it starts things.</li>`}</ul>
+      <div class="grp">Uses (${out.length})</div><ul>${sort(out).map(e => item(e[1], e)).join("") || `<li class="nonote">Nothing at this level.</li>`}</ul>
+      <details><summary>Details (today's panel: file, kind, level, lists of calls…)</summary>scanner/coderstanding/${esc(sel)}.py · module · Open in editor · Zoom</details>`;
+  }
+  apply();
+})();
+
+/* ---------- 5 Overview ---------- */
+(() => {
+  const flow = ["You run a ", "Commands", "; it finds the ", "Projects", ". ", "Scanning", " reads the code (with ", "Languages", ") into ", "Map data", ". ", "Views", " decide what to show, the ", "Helper", " serves it and the ", "Viewer", " draws it, with your ", "Notes", " on top. All of it stays on this PC (", "System", ")."];
+  $("#story").innerHTML = flow.map((t, i) => i % 2 ? `<span class="dchip" style="--h:${DOMAINS[t].h}" data-d="${esc(t)}" tabindex="0">${esc(t)}</span>` : esc(t)).join("");
+  const talks = { Commands: "asks Views what to print; starts the Helper", Helper: "asks Views what to draw; saves Notes", Projects: "runs Scanning; loads Notes", Scanning: "fills Map data; asks Languages to read files", Languages: "hand what they read to Scanning", "Map data": "used by nearly everything (hub)", Views: "read Map data and Notes", Notes: "linked to classes in Map data", Viewer: "talks to the Helper over HTTP", System: "used by Commands and the Helper" };
+  $("#dcards").innerHTML = Object.entries(DOMAINS).map(([name, d]) => `<div class="dcard" style="--h:${d.h}" data-d="${esc(name)}"><div class="dh">${esc(name)}<span>${d.n} classes</span></div>
+    <div class="db">${esc(d.d)}<div class="muted" style="font-size:12px;margin-top:4px">→ ${esc(talks[name])}</div><div class="keys">${d.keys.map(k => `<code>${esc(k)}</code>`).join("")}</div></div></div>`).join("");
+  let on = null;
+  const pick = d => {
+    on = on === d ? null : d;
+    for (const c of document.querySelectorAll("#story .dchip")) c.classList.toggle("on", c.dataset.d === on);
+    for (const c of document.querySelectorAll("#dcards .dcard")) c.classList.toggle("dim", !!on && c.dataset.d !== on);
+  };
+  $("#story").addEventListener("click", ev => { const c = ev.target.closest(".dchip"); if (c) pick(c.dataset.d); });
+  $("#story").addEventListener("keydown", ev => { const c = ev.target.closest(".dchip"); if (c && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); pick(c.dataset.d); } });
+})();
+
+/* ---------- 6 Start here ---------- */
+(() => {
+  const ROUTES = {
+    scan: { steps: ["cli", "apps", "scan", "checks", "model"], first: "Start badge: script-main. You type a command here." },
+    viewer: { steps: ["app.js", "server", "views", "model"], first: "Start: the page you open in the browser." },
+  };
+  let route = "scan", cur = 0;
+  const svg = $("#g6"), G = drawGraph(svg, { onNode: id => { const i = ROUTES[route].steps.indexOf(id); if (i >= 0) { cur = i; apply(); } } });
+  const findEdge = (a, b) => EDGES.find(e => e[0] === a && e[1] === b);
+  function apply() {
+    const st = ROUTES[route].steps;
+    G.gTop.textContent = "";
+    for (const id in G.nodes) { G.nodes[id].classList.toggle("dim", !st.includes(id)); G.nodes[id].classList.toggle("sel", id === st[cur]); }
+    const onPath = new Set(st.slice(1).map((s, i) => st[i] + ">" + s));
+    for (const e of EDGES) {
+      const g = G.edges[edgeId(e)], k = edgeId(e), idx = st.indexOf(e[1]);
+      g.classList.toggle("dim", !onPath.has(k)); g.classList.toggle("lit", onPath.has(k) && idx <= cur);
+      setHead(g, onPath.has(k) && idx <= cur ? "hl" : null);
+    }
+    st.forEach((id, i) => {
+      const n = NODES[id], b = mk("g", { class: "stepbadge", transform: `translate(${n.x + W - 4},${n.y + 2})` }, G.gTop);
+      mk("circle", { r: 11, opacity: i <= cur ? 1 : .45 }, b); mk("text", { y: 4 }, b).textContent = i + 1;
+    });
+    $("#routeSteps").innerHTML = st.map((id, i) => {
+      const e = i ? findEdge(st[i - 1], id) : null;
+      const why = i ? (e[3] || `${st[i - 1]} ${KINDS[e[2]].word} it`) : ROUTES[route].first;
+      return `<li class="${i === cur ? "cur" : ""}" data-i="${i}"><span class="n">${i + 1}</span><span class="t"><b>${esc(id)}</b> — ${esc(NODES[id].d)}<span>${i ? "↳ " : ""}${esc(why)}</span></span></li>`;
+    }).join("");
+    $("#routeBack").disabled = cur === 0; $("#routeNext").disabled = cur === st.length - 1;
+  }
+  $("#routeSteps").addEventListener("click", ev => { const li = ev.target.closest("li"); if (li) { cur = +li.dataset.i; apply(); } });
+  $("#routeBack").onclick = () => { cur = Math.max(0, cur - 1); apply(); };
+  $("#routeNext").onclick = () => { cur = Math.min(ROUTES[route].steps.length - 1, cur + 1); apply(); };
+  segToggle($("#routePick"), "r", r => { route = r; cur = 0; apply(); });
+  apply();
+})();
+
+/* ---------- 7 Calm toolbar ---------- */
+(() => {
+  const SW = ["Outside code", "Communications", "Tests", "Specs & notes", "Self calls", "Domains", "Concrete only", "Explained lines first", "Box text: what it does", "Edit layout"];
+  const PRESETS = {
+    read: { on: ["Domains", "Explained lines first", "Box text: what it does"], note: "Read: domains, what each box does, explained lines first; outside code, tests and self calls hidden." },
+    explore: { on: ["Outside code", "Communications", "Specs & notes", "Self calls", "Box text: what it does"], note: "Explore: everything the map knows, all lines at the same weight (today's default)." },
+    edit: { on: ["Specs & notes", "Box text: what it does", "Edit layout"], note: "Edit: layout editing on (yellow stripes), notes shown, so you can fix spots and write hints." },
+  };
+  let preset = "read";
+  const more = $("#more");
+  function apply() {
+    const p = PRESETS[preset];
+    more.innerHTML = SW.map(s => `<label><input type="checkbox" ${p && p.on.includes(s) ? "checked" : ""}> ${esc(s)} ${p && p.on.includes(s) ? `<span class="set">${preset}</span>` : ""}</label>`).join("")
+      + `<label>Layout: Layered ▾</label><label>Copy for AI</label><label>Levels…</label>`;
+    $("#presetNote").textContent = p ? p.note : "Custom: you changed a switch; pick a preset to go back.";
+  }
+  more.addEventListener("change", () => { preset = null; for (const b of $("#preset").querySelectorAll("button")) b.setAttribute("aria-pressed", "false"); $("#presetNote").textContent = "Custom: you changed a switch; pick a preset to go back."; });
+  segToggle($("#preset"), "p", p => { preset = p; apply(); });
+  $("#moreBtn").onclick = () => { more.hidden = !more.hidden; $("#moreBtn").setAttribute("aria-expanded", String(!more.hidden)); $("#moreBtn").textContent = more.hidden ? "More options ▾" : "Fewer options ▴"; };
+  apply();
+})();
+
+/* ---------- 8 Words explained ---------- */
+(() => {
+  const GL = {
+    "level": "How deep in the detail you are. Level 1 shows the big systems; higher levels add the smaller classes inside them.",
+    "domain": "A broad area of the app, like Scanning or Notes. A label you or the AI give; not a folder.",
+    "via 2": "The link passes through 2 classes hidden at this level. Go one level deeper to see them.",
+    "hub": "A class so many others use (here 24 or more) that its lines are drawn quietly, or they'd cover the map.",
+    "outside code": "Packages and libraries the app uses but didn't write, like tree-sitter.",
+    "hint": "A one-line note on a box or line, saying what it is for. You or the AI write it.",
+    "zoom": "Show only two classes and what sits between them.",
+    "god class": "A class that does too many things; a warning, not an error.",
+  };
+  const ui = `1 · Systems · 22/189 classes · <T>hub</T>s ≥ 24: model [<T>hub</T> 35]<br>scan ~&gt; model (<T>via 2</T>): [dependency] {merge_locations, child_id}<br>cli: <span style="color:var(--warn)">⚠ <T>god class</T></span> · <T>domain</T> Commands · <T>level</T> 1 · 3 <T>hint</T>s · Hide <T>outside code</T> · Double-click to <T>zoom</T>`;
+  const key = t => t.toLowerCase().replace(/s$/, "");
+  $("#uitext").innerHTML = ui.replace(/<T>(.*?)<\/T>/g, (_, t) => `<span class="term" tabindex="0" data-t="${esc(key(t) in GL ? key(t) : t.toLowerCase())}">${t}</span>`);
+  $("#gloss").innerHTML = Object.entries(GL).map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join("");
+  const show = ev => { const t = ev.target.closest(".term"); if (t) showTip(`<b>${esc(t.textContent)}</b><br>${esc(GL[t.dataset.t] || "")}`, ev.clientX ? ev : { clientX: t.getBoundingClientRect().left, clientY: t.getBoundingClientRect().bottom }); };
+  $("#uitext").addEventListener("pointermove", show);
+  $("#uitext").addEventListener("click", show);
+  $("#uitext").addEventListener("focusin", show);
+  $("#uitext").addEventListener("pointerleave", hideTip);
+  $("#uitext").addEventListener("focusout", hideTip);
+})();
+
+/* ---------- Theme ---------- */
+(() => {
+  const order = ["auto", "light", "dark"], btn = $("#theme");
+  let i = 0;
+  const q = new URLSearchParams(location.search).get("theme");
+  if (q && order.includes(q)) i = order.indexOf(q);
+  const set = () => { const t = order[i]; if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", t); btn.textContent = "Theme: " + t; };
+  btn.onclick = () => { i = (i + 1) % order.length; set(); };
+  set();
+  document.addEventListener("click", ev => { if (!ev.target.closest(".hit, .term")) hideTip(); });
+})();
+</script>
+</body>
+</html>

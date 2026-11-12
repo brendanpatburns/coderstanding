@@ -11,7 +11,7 @@ import json
 import re
 import sys
 import xml.etree.ElementTree as ElementTree
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from fnmatch import fnmatch
 from pathlib import Path
@@ -31,16 +31,40 @@ ENGINE_LANGS = ("gdscript", "godot")
 UNRESOLVED_TOP = 20
 REQUIREMENT_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9_.\-]*)(\[[^\]]*\])?\s*(.*)$")
 JVM_LANGS = ("java", "kotlin")
-JVM_STANDARD_PREFIXES = ("java.", "javax.", "kotlin.")
+JVM_STANDARD_PREFIXES = ("java.", "javax.", "kotlin.", "android.")  # android.* = the Android SDK platform
 # Names Kotlin imports by default (kotlin.*, kotlin.collections.*, java.lang.*), written without a package
 KOTLIN_DEFAULT_NAMES = {
     "List", "MutableList", "Map", "MutableMap", "Set", "MutableSet", "Collection", "Iterable",
     "Sequence", "Pair", "Triple", "Result", "Lazy", "Comparable", "Throwable", "Exception",
     "RuntimeException", "IllegalStateException", "IllegalArgumentException", "Thread",
     "Runnable", "StringBuilder", "Regex", "Number", "Enum", "Annotation", "Object", "Class",
+    "String", "Any", "System", "Math", "Charsets", "ArrayDeque",
+    "BooleanArray", "ByteArray", "CharArray", "ShortArray", "IntArray", "LongArray", "FloatArray",
+    "DoubleArray",  # primitive arrays
+    "Synchronized", "Volatile", "Suppress", "Deprecated", "JvmStatic", "JvmField", "JvmOverloads",
+    "JvmName", "Throws",  # kotlin.* annotations
+}
+NODE_BUILTIN_PREFIX = "node:"  # Node's built-in modules: `node:path`, `node:fs/promises`
+# Globals the JS / TS runtime provides, written without an import
+JS_GLOBAL_NAMES = {
+    "Float32Array", "Float64Array", "Int8Array", "Int16Array", "Int32Array", "Uint8Array",
+    "Uint8ClampedArray", "Uint16Array", "Uint32Array", "ArrayBuffer", "DataView", "Promise", "Map",
+    "Set", "WeakMap", "WeakSet", "Date", "RegExp", "Error", "URL", "TextEncoder", "TextDecoder",
 }
 GRADLE_DEP_RE = re.compile(
     r"""^\s*(\w+)\s*\(?\s*(?:platform\(\s*)?["']([^"':\s$]+):([^"':\s]+)(?::([^"'\s]+))?["']""", re.M)
+# Packages a Maven group or "group:artifact" owns when they differ from its names: they are matched
+# next to the group, the artifact read as a package, and the last group segment (`com.squareup.okhttp3`
+# -> `okhttp3`). okhttp's own dependency okio is listed with it, since a build file never names it.
+KNOWN_JVM_PACKAGES = {
+    "com.squareup.okhttp3:okhttp": ("okhttp3", "okio"),
+    "junit:junit": ("org.junit", "junit.framework"),
+    "org.jetbrains.kotlinx:kotlinx-coroutines-core": ("kotlinx.coroutines",),
+    "org.jetbrains.kotlinx:kotlinx-serialization-json": ("kotlinx.serialization",),
+    "com.google.code.gson:gson": ("com.google.gson",),
+    "org.jetbrains.kotlin:kotlin-stdlib": ("kotlin",),
+}
+COMMON_GROUP_WORDS = {"com", "org", "net", "io", "dev", "core", "lib", "libs", "api", "app", "tools"}  # too vague to claim imports
 GRADLE_PLUGIN_RES = (
     re.compile(r"""\bid\s*\(?\s*["']([^"']+)["']"""),
     re.compile(r"""\bapply\s+plugin\s*:\s*["']([^"']+)["']"""),
@@ -251,6 +275,30 @@ def read_gradle(stack, root, rel):
         stack.add_dep(Dep("maven", package["name"], package["version"], rel, {"scope": package["scope"]}))
 
 
+def catalog_version(entry, versions):
+    """The version of one `[libraries]` entry: a literal, or `version.ref` looked up in `[versions]`."""
+    version = entry.get("version", "")
+    if isinstance(version, dict):
+        version = versions.get(version.get("ref", ""), version.get("strictly") or version.get("require") or "")
+    return str(version)
+
+
+def read_version_catalog(stack, root, rel):
+    """gradle/libs.versions.toml: every `[libraries]` entry (`"g:a:v"`, `{module = "g:a", version.ref = ..}`
+    or `{group =, name =, version =}`) is a `maven` dependency, like the ones a build file names."""
+    data = tomllib.loads(read_text(root, rel))
+    versions = {key: str(value) for key, value in data.get("versions", {}).items() if isinstance(value, str)}
+    for alias, entry in data.get("libraries", {}).items():
+        if isinstance(entry, str):
+            entry = {"module": entry}
+        module = entry.get("module") or f"{entry.get('group', '')}:{entry.get('name', '')}"
+        group, artifact, *inline_version = module.split(":")
+        if not group or not artifact:
+            continue
+        version = catalog_version(entry, versions) or "".join(inline_version)
+        stack.add_dep(Dep("maven", f"{group}:{artifact}", version, rel, {"scope": "compile", "alias": alias}))
+
+
 def read_package_props(stack, root, rel):
     elements, _ = xml_elements(root, rel)
     for tag, el in elements:
@@ -342,6 +390,7 @@ READERS = (
     ("pom.xml", read_pom),
     ("build.gradle", read_gradle), ("build.gradle.kts", read_gradle),
     ("settings.gradle", read_gradle), ("settings.gradle.kts", read_gradle),
+    ("libs.versions.toml", read_version_catalog),
     ("Directory.Packages.props", read_package_props),
     ("package.json", read_package_json),
     ("requirements*.txt", read_requirements),
@@ -380,6 +429,20 @@ def pip_key(name):
     return re.sub(r"[-.]", "_", name.lower())
 
 
+def jvm_prefixes(coordinate):
+    """The package prefixes a `group:artifact` dependency is imported as: the known table, its
+    group, its artifact read as a package (`kotlinx-coroutines-core` also owns `kotlinx.coroutines`)
+    and the last group segment (`com.squareup.okhttp3` -> `okhttp3`) when it is one plain word."""
+    group, _, artifact = coordinate.partition(":")
+    parts = artifact.replace("-", ".").split(".")
+    prefixes = [group, *KNOWN_JVM_PACKAGES.get(coordinate, ())]
+    prefixes += [".".join(parts[:count]) for count in range(len(parts), 1, -1)]
+    last_segment = group.rpartition(".")[2]
+    if "." in group and last_segment not in COMMON_GROUP_WORDS:
+        prefixes.append(last_segment)
+    return prefixes
+
+
 class DepIndex:
     """Finds the dependency an outside ref (as its label) belongs to."""
 
@@ -413,15 +476,11 @@ class DepIndex:
         return addon or self.npm.get(npm_package(label))
 
     def maven_for(self, qualified):
-        """The Maven / Gradle dependency owning a package or class name: its groupId, or its
-        artifactId read as a package (`kotlinx-coroutines-core` also owns `kotlinx.coroutines`)
-        is a prefix of the name; the longest prefix wins."""
+        """The Maven / Gradle dependency owning a package or class name: one of its import
+        prefixes (`jvm_prefixes`) is a prefix of the name; the longest prefix wins."""
         best = (0, None)
         for dep in self.maven:
-            group, _, artifact = dep.name.partition(":")
-            parts = artifact.replace("-", ".").split(".")
-            prefixes = [group] + [".".join(parts[:n]) for n in range(len(parts), 1, -1)]
-            for prefix in prefixes:
+            for prefix in jvm_prefixes(dep.name):
                 if (qualified == prefix or qualified.startswith(prefix + ".")) and len(prefix) > best[0]:
                     best = (len(prefix), dep)
         return best[1]
@@ -444,16 +503,46 @@ STANDARD_PYTHON = set(sys.stdlib_module_names) | set(dir(builtins))
 
 
 def is_standard_name(node, label):
-    """The language's own library (Python stdlib and builtins): neither a package nor unknown."""
+    """The language's own library and platform (Python stdlib and builtins, JVM/Android, Node): neither a package nor unknown."""
+    if node.lang == "shell":  # every command a script runs is an outside program (git, docker)
+        return True
     if node.lang in JVM_LANGS:
         return label.startswith(JVM_STANDARD_PREFIXES) or (
             node.lang == "kotlin" and label in KOTLIN_DEFAULT_NAMES)
+    if node.lang in ("javascript", "typescript"):
+        return label.startswith(NODE_BUILTIN_PREFIX) or label in JS_GLOBAL_NAMES
     return node.lang == "python" and label.split(".", 1)[0] in STANDARD_PYTHON
 
 
+# Modules that only exist inside a host program (a 3D tool's embedded Python), never in the repo.
+TOOL_HOST_MODULES = {"bpy", "bmesh", "bpy_extras", "mathutils", "bgl", "gpu", "aud", "idprop"}
+# Assets a scene refers to by file name: models, textures, sounds, fonts, shaders.
+ASSET_SUFFIXES = (".gdshader", ".glb", ".gltf", ".fbx", ".obj", ".blend", ".png", ".jpg", ".jpeg", ".svg",
+                  ".webp", ".tga", ".exr", ".hdr", ".wav", ".ogg", ".mp3", ".ttf", ".otf")
+
+
+def is_outside_name(node, label):
+    """A name that lives outside the repo on purpose: host-program modules and asset files."""
+    if node.lang == "python" and label.split(".", 1)[0] in TOOL_HOST_MODULES:
+        return True
+    return label.lower().endswith(ASSET_SUFFIXES)
+
+
+def unresolved_names(node):
+    """label -> number of references, for the node's unresolved outside names. One entry per
+    name: the same name seen as several line kinds (field, call, ...) is added up."""
+    names = Counter()
+    for edge in node.external_refs.values():
+        if is_unresolved(node, edge.to):
+            names[edge.to] += len(edge.at)
+    return names
+
+
 def is_unresolved(node, label):
-    """An outside name that is no dependency, engine API or standard library (warnings too)."""
-    return not (is_engine_name(node, label) or is_standard_name(node, label))
+    """The one decider for warnings and the stack: a name that should be in the repo or a
+    dependency but is not. Engine APIs, the standard library and `outside` names are not."""
+    return not (is_engine_name(node, label) or is_standard_name(node, label)
+                or is_outside_name(node, label))
 
 
 # --- communications nodes: sockets and network endpoints (DESIGN 8) ---
@@ -594,23 +683,60 @@ def comm_id(owner_id, comm_type, field_name=""):
     return f"comm:{owner_id}" + (f"#{field_name}" if field_name else f"@{comm_type}")
 
 
-def add_comm_node(graph, owner, comm_type, field_member, use, label=""):
-    """One node for a socket the owner holds (id `comm:<owner>#<field>`) or only makes and
-    calls (`comm:<owner>@<type>`), and the owner's edge to it. `label` names a node that is held
-    by no field (an outside HTTP host): it takes the field's place in the id and name."""
+def comm_node(owner, comm_type, field_member, use, label=""):
+    """A new (not yet added) node for a socket the owner holds (id `comm:<owner>#<field>`) or
+    only makes and calls (`comm:<owner>@<type>`). `label` names a node that is held by no field
+    (an outside HTTP host): it takes the field's place in the id and name."""
     field_name = field_member.name if field_member else label
-    node_id = comm_id(owner.id, comm_type, field_name)
     role = use.role(comm_type)
     line = field_member.line if field_member else (use.at[0].line if use.at else owner.line)
     at = Location(owner.file, line)
     info = {"type": comm_type, "role": role, "owner": owner.id, "field": field_name,
             "messages": sorted(use.messages), "at": at.to_json()}
-    graph.add_node(Node(id=node_id, name=comm_name(field_name, comm_type, role), kind="external",
-                        lang="", file="", line=at.line, namespace=COMM_NAMESPACE, comm=info))
+    return Node(id=comm_id(owner.id, comm_type, field_name), name=comm_name(field_name, comm_type, role),
+                kind="external", lang="", file="", line=at.line, namespace=COMM_NAMESPACE, comm=info)
+
+
+def add_comm_node(graph, owner, comm_type, field_member, use, label=""):
+    """The communications node (`comm_node`) and the owner's edge to it."""
+    node = comm_node(owner, comm_type, field_member, use, label)
+    graph.add_node(node)
+    at = Location(owner.file, node.line)
     detail = (["field"] if field_member else []) + sorted(use.details)
-    graph.add_edge(Edge(owner.id, node_id, "composition" if field_member else "dependency",
+    graph.add_edge(Edge(owner.id, node.id, "composition" if field_member else "dependency",
                         detail=detail, at=merge_locations([at], use.at),
                         calls=[Call(c.member, c.count, c.at, c.from_member) for c in use.calls]))
+
+
+class OwnerIndex:
+    """Which node holds a line of a file: the smallest type whose span has it, else the file's
+    first node (its module)."""
+
+    def __init__(self, graph):
+        self.by_file = defaultdict(list)
+        for node in graph.nodes.values():
+            if node.file and node.kind != "external" and not node.comm:
+                self.by_file[node.file].append(node)
+
+    def owner(self, rel, line):
+        nodes = self.by_file.get(rel)
+        if not nodes:
+            return None
+        inside = [n for n in nodes if n.span and n.line <= line < n.line + n.lines]
+        if inside:
+            return min(inside, key=lambda n: n.lines)
+        return min(nodes, key=lambda n: (n.span, n.line))
+
+
+def link_caller(graph, caller_id, node_id, per_call, detail):
+    """The caller's edge to a communications node; per_call: (calling function or None, called
+    route or message) -> [Location], each one call on the edge."""
+    at = []
+    calls = []
+    for (from_member, member), locs in sorted(per_call.items(), key=lambda kv: (kv[0][0] or "", kv[0][1])):
+        calls.append(Call(member, len(locs), sorted(locs), from_member))
+        at = merge_locations(at, sorted(locs))
+    graph.add_edge(Edge(caller_id, node_id, "dependency", detail=[detail], at=at, calls=calls))
 
 
 def add_comm_nodes(graph, owner):
@@ -636,6 +762,7 @@ class Usage:
     engine_refs: int = 0
     engine_users: set = field(default_factory=set)
     unresolved: Counter = field(default_factory=Counter)
+    outside: Counter = field(default_factory=Counter)
 
 
 def map_outside_refs(graph, index):
@@ -653,6 +780,8 @@ def map_outside_refs(graph, index):
                 usage.engine_users.add(node.id)
             elif is_unresolved(node, edge.to):
                 usage.unresolved[edge.to] += len(edge.at)
+            elif is_outside_name(node, edge.to):
+                usage.outside[edge.to] += len(edge.at)
         add_import_edges(graph, index, node)
     graph.fold_held_edges()
     return usage
@@ -691,6 +820,8 @@ def stack_json(graph, stack, usage):
         "deps": deps,
         "unresolved": {"refs": sum(usage.unresolved.values()),
                        "top": usage.unresolved.most_common(UNRESOLVED_TOP)},
+        "outside": {"refs": sum(usage.outside.values()),
+                    "top": usage.outside.most_common(UNRESOLVED_TOP)},
     }
 
 

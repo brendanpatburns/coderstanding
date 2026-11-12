@@ -24,7 +24,7 @@ from collections import Counter
 from statistics import median
 
 from .model import ANY_SIGNAL, EDGE_KINDS, EMIT_DETAIL, SIGNAL_ARROW, STRUCT_KINDS
-from .stack import is_unresolved
+from .stack import unresolved_names
 from .testcode import is_test
 
 GOD_MIN = 20  # never call a class with fewer neighbours than this a god class
@@ -35,7 +35,9 @@ WARNING_HELP = {  # one line each, shown by the viewer
     "god": "Far more connections than the repo's norm",
     "cycle": "Part of a dependency cycle (number = classes in it)",
     "unsure": "Lines whose target name matched several classes",
-    "unresolved": "Outside references that are no known package, engine API or standard library",
+    "unresolved": "References that should be in the repo or a dependency but are not found (host-program modules and asset files are outside, not listed)",
+    "parse-error": "The grammar could not parse part of this file (names = file:first error line); "
+                   "what could be read is in the map, the rest may be missing",
     "layer": "A line that breaks an architecture rule (`rules` command)",
     "signal-unconnected": "Signal emitted but never connected. A hint: dynamic connects, "
                           "string-named signals and connects from untyped nodes are not seen",
@@ -133,7 +135,15 @@ def strongly_connected(out):
 
 
 def count_unresolved(node):
-    return sum(len(e.at) for e in node.external_refs.values() if is_unresolved(node, e.to))
+    return sum(unresolved_names(node).values())
+
+
+def unresolved_by_node(graph, only_id=None):
+    """node id -> Counter of its unresolved names (biggest count first when printed); the checked
+    nodes that have any, or just `only_id`."""
+    ids = [only_id] if only_id else sorted(checked_ids(graph))
+    found = {node_id: unresolved_names(graph.nodes[node_id]) for node_id in ids}
+    return {node_id: names for node_id, names in found.items() if names}
 
 
 # --- Godot loose ends: signals nobody connects / emits, handlers that do not exist, autoloads ---
@@ -270,6 +280,17 @@ def add_godot_warnings(graph, ids):
                                                   "count": len(names)})
 
 
+def add_parse_error_warnings(graph, ids):
+    """`parse-error` on the first node of each file the grammar could not fully parse."""
+    first_node = {}
+    for node_id in sorted(ids):
+        first_node.setdefault(graph.nodes[node_id].file, node_id)
+    for file, error_line in graph.diagnostics.get("parse_errors", {}).items():
+        if file in first_node:
+            graph.nodes[first_node[file]].warnings.append(
+                {"kind": "parse-error", "names": [f"{file}:{error_line}"], "count": 1})
+
+
 def check_graph(graph, layers=(), notes=None):
     """Set `warnings` on every node (tests and outside nodes get none). `layers` (architecture
     rules) need the notes' domains and tags; the settings are not part of a scan, so the
@@ -291,6 +312,7 @@ def check_graph(graph, layers=(), notes=None):
             graph.nodes[node_id].warnings.append(
                 {"kind": "cycle", "group": min(group), "size": len(group)})
     add_godot_warnings(graph, ids)
+    add_parse_error_warnings(graph, ids)
     unsure = Counter(e.from_id for e in graph.edges.values() if e.unsure)
     for node_id in ids:
         node = graph.nodes[node_id]
@@ -350,6 +372,12 @@ def glob_regex(glob):
             out += "[^/]*" if glob[i] == "*" else "[^/]" if glob[i] == "?" else re.escape(glob[i])
             i += 1
     return re.compile(out + "$")
+
+
+def first_rule_match(rules, file):
+    """The first folder rule ({files: glob, ...}) whose glob matches the file path, else None
+    (the one matcher for the app's folder rules, e.g. default domains)."""
+    return next((rule for rule in rules if rule.get("files") and glob_regex(rule["files"]).match(file or "")), None)
 
 
 def parse_loaded_rule(loaded_by, files, how=""):
@@ -442,7 +470,7 @@ def side_matcher(spec, notes):
     """node -> bool for a rule side: `domain:<name>`, `tag:<tag>` or a folder glob."""
     if spec.startswith(DOMAIN_PREFIX):
         name = spec[len(DOMAIN_PREFIX):]
-        return lambda node: notes is not None and notes.domain_of(node.id) == name
+        return lambda node: notes is not None and notes.domain_of(node) == name
     if spec.startswith(TAG_PREFIX):
         tag = spec[len(TAG_PREFIX):]
         return lambda node: notes is not None and tag in notes.tags_of(node.id)

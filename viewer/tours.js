@@ -122,6 +122,50 @@ function wordsBefore(text, charIndex) {
   return words(String(text).slice(0, charIndex)).length;
 }
 
+// ---------- line notes: popups on the code lines, in time with the step ----------
+
+/** The spoken word each line note pops up at: its `cue` (words of the step text, first match,
+ *  any case), else spread in order over the step's text (the first at the text's start). */
+function lineNoteCues(step, notes) {
+  const { body, total } = stepSpans(step);
+  const textStart = body.length ? body[0].start : total;
+  const text = String(step.text || "");
+  const plain = (notes || []).filter((n) => !cueAt(text, n.cue));
+  return (notes || []).map((n) => {
+    const at = cueAt(text, n.cue);
+    if (at) return textStart + words(speakable(text.slice(0, at - 1))).length;
+    return textStart + Math.floor(((total - textStart) * plain.indexOf(n)) / Math.max(1, plain.length));
+  });
+}
+
+/** 1 + where `cue` starts in `text` (case-insensitive), 0 when there is no cue or no match. */
+function cueAt(text, cue) {
+  const wanted = String(cue || "").trim().toLowerCase();
+  return wanted ? text.toLowerCase().indexOf(wanted) + 1 : 0;
+}
+
+/** Which notes show at spoken word `word`: all of them before playing starts (-1), else the
+ *  ones whose cue word was reached. */
+function lineNotesShown(cues, word) {
+  return cues.map((at) => word < 0 || word >= at);
+}
+
+/** The editor's notes box: one note per line, `50-51: text` or `50: text @ cue words`. */
+function lineNotesText(notes) {
+  return (notes || []).map((n) => `${n.from === n.to ? n.from : `${n.from}-${n.to}`}: ${n.text}${n.cue ? ` @ ${n.cue}` : ""}`).join("\n");
+}
+
+/** The editor's notes box read back: {notes: [{from, to, text, cue}], error} (error = the first bad line). */
+function parseLineNotes(text) {
+  const notes = [];
+  for (const line of String(text || "").split("\n").map((l) => l.trim()).filter(Boolean)) {
+    const m = line.match(/^(\d+)(?:\s*-\s*(\d+))?\s*:\s*(.+?)(?:\s+@\s+(.+))?$/);
+    if (!m || (m[2] && Number(m[2]) < Number(m[1]))) return { notes, error: `Notes: write each as "50-51: text" or "50: text @ cue words", not "${line}"` };
+    notes.push({ from: Number(m[1]), to: Number(m[2] || m[1]), text: m[3].trim(), cue: m[4] ? m[4].trim() : null });
+  }
+  return { notes, error: "" };
+}
+
 // ---------- learned speaking pace, per voice ----------
 
 /** Seconds per character at rate 1 for each voice, a moving average of the chunks it spoke,
@@ -164,34 +208,77 @@ function source(step) {
 
 const langKey = (lang) => String(lang || "").toLowerCase().replace(/_/g, "-");
 
-/** On-device voices only (DESIGN 18): an online voice (Chrome's "Google …", Edge's "Microsoft …
- *  Online (Natural)") sends the spoken text to its vendor, so `localService` must be true. */
+/** Looks like a network voice: "Online" in the name (Edge's "Microsoft … Online (Natural)"),
+ *  Chrome's "Google …", WaveNet. Only these are labelled "online" and never auto-picked, and
+ *  only when the browser does not say `localService`. espeak-ng voices through speech-dispatcher
+ *  are reported with localService false by Chromium but run on the device: not online. */
+const NETWORK_VOICE = /\bonline\b|^google\b|wavenet/i;
+const isOnline = (voice) => voice.localService !== true && NETWORK_VOICE.test(`${voice.name} ${voice.voiceURI || ""}`);
+
+/** On-device voices only (DESIGN 18): everything that does not look like a network voice. */
 function localVoices(voices) {
-  return voices.filter((v) => v.localService === true);
+  return voices.filter((v) => !isOnline(v));
 }
 
-/** The voices worth offering for `lang` (e.g. "en-GB"): on-device only, same language
- *  first-part, plain voices before variants ("+Adam"); all local ones if none match.
- *  Chromium + espeak-ng lists ~15000. */
-function voiceChoices(voices, lang) {
-  voices = localVoices(voices);
-  const prefix = langKey(lang).split("-")[0];
+/** What the picker lists: the on-device voices; only if there are none, all of them, so the
+ *  picker is not empty. An online voice is never picked for you: you choose it by name. */
+function offeredVoices(voices) {
+  const local = localVoices(voices);
+  return local.length ? local : voices;
+}
+
+const SHORT_LIST = 8;
+const NATURAL_VOICE = /natural|neural|piper|wavenet|siri|enhanced|premium|^google\b|^[a-z]{2,3}_[A-Z]{2}-[\w]+-(x_low|low|medium|high)$/i;
+const ROBOT_VOICE = /klatt|robosoft|whisper|croak/i;
+const ESPEAK_BASE = /espeak|^[A-Za-z ]+ \([^)]*\)$/;
+const SHORT_TIERS = 3;  // tiers below this make the short list; espeak variants and robots only under "More voices"
+
+/** How good a voice probably sounds, 0 best: 0 natural/neural/Piper/Siri/Google, 1 other plain
+ *  voices, 2 espeak-ng base voices, 3 espeak variants ("+Adam"), 4 robot variants (klatt, Robosoft, whisper, croak). */
+function voiceTier(voice) {
+  const name = voice.name;
+  if (ROBOT_VOICE.test(name)) return 4;
+  if (name.includes("+")) return 3;
+  if (NATURAL_VOICE.test(name)) return 0;
+  return ESPEAK_BASE.test(name) ? 2 : 1;
+}
+
+/** `voices` for `lang` (e.g. "en-GB"), best first: the page language (else all languages), then
+ *  by tier, then the exact language ("en-GB") before its dialects ("en-GB-X-GBCWMD", "en-029"),
+ *  then the browser's order. */
+function rankedVoices(voices, lang) {
+  const want = langKey(lang);
+  const prefix = want.split("-")[0];
   const same = voices.filter((v) => langKey(v.lang).split("-")[0] === prefix);
-  const list = same.length ? same : [...voices];
-  const variant = (v) => (v.name.includes("+") ? 1 : 0);
-  return list.map((v, i) => [v, i]).sort((a, b) => variant(a[0]) - variant(b[0]) || a[1] - b[1]).map(([v]) => v);
+  const exact = (v) => (langKey(v.lang) === want ? 0 : 1);
+  return (same.length ? same : [...voices]).map((v, i) => [v, i])
+    .sort((a, b) => voiceTier(a[0]) - voiceTier(b[0]) || exact(a[0]) - exact(b[0]) || a[1] - b[1]).map(([v]) => v);
 }
 
-/** The voice to use: the chosen one by name, else the best match for `lang` (not the browser's
- *  "default", which Chromium + espeak-ng sets to the first voice: Afrikaans), else null. */
+/** The voices worth offering for `lang`: on-device ones (see offeredVoices), at most 8 of the
+ *  best, or with `all` every one, ranked. If only variants and robots exist, the best 8 of them. */
+function voiceChoices(voices, lang, all = false) {
+  const ranked = rankedVoices(offeredVoices(voices), lang);
+  if (all) return ranked;
+  const good = ranked.filter((v) => voiceTier(v) < SHORT_TIERS);
+  return (good.length ? good : ranked).slice(0, SHORT_LIST);
+}
+
+/** Does the full list hold voices the short one does not ("More voices...")? */
+const hasMoreVoices = (voices, lang) => voiceChoices(voices, lang, true).length > voiceChoices(voices, lang).length;
+
+/** True when the best voice for `lang` is only an espeak voice: the picker then hints at better ones. */
+function onlyRobotVoices(voices, lang) {
+  const best = voiceChoices(localVoices(voices), lang)[0];
+  return Boolean(best) && voiceTier(best) >= 2;
+}
+
+/** The voice to use: the one chosen by name if still there, else the top-ranked on-device voice
+ *  for `lang` (never the browser's "default", which Chromium + espeak-ng sets to the first voice:
+ *  Afrikaans), else null (only online voices: none is picked for you). */
 function pickVoice(voices, name, lang) {
-  voices = localVoices(voices);
-  if (name) {
-    const chosen = voices.find((v) => v.name === name);
-    if (chosen) return chosen;
-  }
-  const choices = voiceChoices(voices, lang);
-  return choices.find((v) => langKey(v.lang) === langKey(lang)) || choices[0] || null;
+  const chosen = name && offeredVoices(voices).find((v) => v.name === name);
+  return chosen || voiceChoices(localVoices(voices), lang)[0] || null;
 }
 
 /** The recording format: Opus in WebM, else in Ogg, else plain WebM ("" = browser default). */
@@ -207,6 +294,9 @@ function recorderType(isTypeSupported) {
  *   now() ms, frame(fn)/cancelFrame(id) (animation frames), later(fn, ms)/cancelLater(id),
  *   storage (localStorage-like, for the learned pace), onChange() after every move,
  *   onEnd() when a step played to its end, onNote(text) for notes.
+ * With `readNotes` on (and the notes given by setNotes), the voice reads each line note when the
+ * narration reaches its cue word: narration (or the recording) waits, the clock is held, the
+ * note is spoken, then the step goes on from the same word. `readingNote` is its index, else -1.
  * The voice reads the step as chunks (chunksOf), all queued at once: each chunk's start and end
  * put the highlight on its first and last word, and in between it moves by characters at the
  * voice's learned pace. Word boundary events, where an engine sends them, place it exactly.
@@ -224,20 +314,32 @@ class StepPlayer {
     this.token = 0;      // bumps on every stop: stale clocks and timers do nothing
     this.utt = 0;        // bumps on every new queue or stop: stale speech events do nothing
     this.queue = [];     // the queued utterances, kept referenced (Chromium drops events of collected ones)
+    this.readNotes = false;  // read line notes aloud when they pop up
   }
+
+  /** The step's line notes as [{at, text}]: `at` is the spoken word each pops up at (lineNoteCues). */
+  setNotes(list) {
+    if (this.track) this.track.notes = list.map((n, i) => ({ i, at: n.at, text: speakable(n.text) }))
+      .sort((a, b) => a.at - b.at || a.i - b.i);
+  }
+
+  /** Index of the line note being read, -1 when none. */
+  get readingNote() { return this.track?.reading?.i ?? -1; }
 
   get pace() { return this.paces.get(this.voice?.name); }
 
   /** Load a step (stops whatever plays); the timeline starts at 0. */
   load(step) {
     this.stop();
+    this.playing = false;  // a new step starts stopped; the caller plays it (else play() would return early)
     const text = spokenText(step);
     const list = words(text);
     const { starts, total } = charStarts(list);
     const rec = step.audio?.rec || null;
     const t = { mode: rec ? "rec" : "words", rec, words: list, starts, total, chunks: chunksOf(list),
       at: 0, pos: 0, dur: rec?.dur || 0, speaking: false, started: false, exact: false, current: null,
-      voiceFailed: false, audio: null, audioFailed: false };
+      voiceFailed: false, audio: null, audioFailed: false,
+      notes: [], noteDone: new Set(), reading: null };
     if (rec && this.env.makeAudio) {
       t.audio = this.env.makeAudio(rec.url);
       t.audio.onloadedmetadata = () => {  // WebM from MediaRecorder may say Infinity: keep the measured length
@@ -261,14 +363,14 @@ class StepPlayer {
   }
 
   voiceReady() {
-    return Boolean(this.env.synth && localVoices(this.env.synth.getVoices()).length);
+    return Boolean(this.env.synth && (this.voice || localVoices(this.env.synth.getVoices()).length));
   }
 
   play() {
     const t = this.track;
     if (!t || this.playing) return;
     this.playing = true;
-    if (t.at >= t.total - 0.5) { t.at = 0; if (t.mode === "rec") t.pos = 0; }
+    if (t.at >= t.total - 0.5) { t.at = 0; t.noteDone.clear(); if (t.mode === "rec") t.pos = 0; }
     this.note("");
     this.start();
   }
@@ -289,7 +391,10 @@ class StepPlayer {
       if (t.audio && !t.audioFailed) t.audio.currentTime = t.pos;
     }
     t.at = fraction * t.total;
+    const wasReading = Boolean(t.reading);
+    this.seekNotes();
     if (this.usesVoice) this.speakFrom(t.at);
+    else if (wasReading && this.playing && t.mode === "rec" && t.audio && !t.audioFailed) this.playAudio(this.token);
     this.changed();
   }
 
@@ -310,7 +415,7 @@ class StepPlayer {
   /** Voices arrived (Chromium loads them late): a step playing on the clock starts speaking. */
   voicesChanged() {
     const t = this.track;
-    if (this.usesVoice && !t.speaking && t.at < t.total - 0.5) { this.note(""); this.speakFrom(t.at); }
+    if (this.usesVoice && !t.reading && !t.speaking && t.at < t.total - 0.5) { this.note(""); this.speakFrom(t.at); }
   }
 
   // ---------- inside ----------
@@ -318,12 +423,105 @@ class StepPlayer {
   start() {
     const t = this.track;
     const token = ++this.token;
+    if (t.reading) this.speakNote(token);  // paused in the middle of a note: its rest, then the step
+    else this.narrate(token);
+    this.startClock(token);
+    this.changed();
+  }
+
+  /** Start the step's sound from where it is: the recording, or the voice (else the silent clock). */
+  narrate(token) {
+    const t = this.track;
     if (t.mode === "rec" && t.audio && !t.audioFailed) this.playAudio(token);
     else if (t.mode === "words") {
       if (this.usesVoice) this.speakFrom(t.at);
       else this.noteLater(token);
     }
-    this.startClock(token);
+  }
+
+  // ---------- reading line notes ----------
+
+  /** Can the voice read a note now? Narration by voice must be running; a recording needs any voice. */
+  canReadNotes() {
+    const t = this.track;
+    if (!this.readNotes || !this.playing || t.voiceFailed || !this.env.synth || !this.voiceReady()) return false;
+    return t.mode === "words" ? t.speaking || Boolean(t.reading) : !t.audioFailed;
+  }
+
+  /** The next unread note whose cue word was reached, -1 if none. Reached notes the voice cannot
+   *  read now (option off, no voice) count as read: they are not read late. */
+  dueNote() {
+    const t = this.track, word = wordAtChar(t.starts, t.at);
+    const due = t.notes.filter((n) => n.at <= word && !t.noteDone.has(n.i));
+    if (!due.length) return -1;
+    if (this.canReadNotes()) return due[0].i;
+    due.forEach((n) => t.noteDone.add(n.i));
+    return -1;
+  }
+
+  /** After a seek: notes before the new word count as read, later ones can be read again. */
+  seekNotes() {
+    const t = this.track, word = wordAtChar(t.starts, t.at);
+    t.notes.forEach((n) => (n.at <= word && t.at > 0 ? t.noteDone.add(n.i) : t.noteDone.delete(n.i)));
+    this.dropNote();
+  }
+
+  /** Give up a note being read (seek, load): its speech is cancelled; the caller restarts the step. */
+  dropNote() {
+    const t = this.track;
+    if (!t?.reading) return;
+    t.reading = null;
+    this.utt++;
+    this.env.synth?.cancel();
+  }
+
+  /** Pause the narration where it is and read note `i`. */
+  beginNote(i, token) {
+    const t = this.track;
+    this.utt++;  // the narration's speech events are stale now
+    t.speaking = false;
+    t.current = null;
+    if (t.mode === "words") this.env.synth.cancel();
+    else t.audio?.pause();
+    t.reading = { i, text: t.notes.find((n) => n.i === i).text, spoken: 0 };
+    this.speakNote(token);
+    this.changed();
+  }
+
+  /** Speak the unread rest of the note being read (all of it, or from the last word event). */
+  speakNote(token) {
+    const t = this.track, env = this.env, r = t.reading;
+    const id = ++this.utt;
+    const live = () => id === this.utt;
+    const offset = r.spoken;
+    const u = new env.Utterance(r.text.slice(offset));
+    u.rate = this.rate;
+    if (this.voice) u.voice = this.voice;
+    if (this.lang) u.lang = this.lang;
+    u.onboundary = (event) => {
+      if (live() && (!event.name || event.name === "word")) r.spoken = offset + event.charIndex;
+    };
+    u.onend = () => { if (live()) this.noteEnded(token); };
+    u.onerror = (event) => {
+      if (!live() || event.error === "interrupted" || event.error === "canceled") return;
+      t.voiceFailed = true;
+      this.note(event.error === "not-allowed" ? NOTES.blocked : NOTES.failed(event.error));
+      this.noteEnded(token);
+    };
+    this.queue = [u];
+    if (t.mode !== "words") env.synth.cancel();
+    env.synth.speak(u);
+  }
+
+  /** A note was read: the next note at this word, else the step goes on from where it waited. */
+  noteEnded(token) {
+    const t = this.track;
+    t.noteDone.add(t.reading.i);
+    const next = this.dueNote();  // (still "reading", so a waiting voice counts as running)
+    t.reading = null;
+    if (next >= 0) { this.beginNote(next, token); return; }
+    this.queue = [];
+    if (t.mode === "words" ? this.usesVoice : t.audio && !t.audioFailed) this.narrate(token);
     this.changed();
   }
 
@@ -422,7 +620,9 @@ class StepPlayer {
     const tick = () => {
       if (token !== this.token) return;
       const now = env.now();
-      if (t.mode === "rec" && t.audio && !t.audioFailed) {
+      if (t.reading) {
+        t.lastEventAt = now;  // a note is being read: the clock holds
+      } else if (t.mode === "rec" && t.audio && !t.audioFailed) {
         t.pos = Math.min(t.audio.currentTime || 0, t.dur);
         t.at = t.dur > 0 ? (t.pos / t.dur) * t.total : 0;
       } else if (t.mode === "rec") {
@@ -432,9 +632,13 @@ class StepPlayer {
         this.tickVoice(now, last);
       }
       last = now;
+      if (!t.reading) {
+        const due = this.dueNote();
+        if (due >= 0) this.beginNote(due, token);
+      }
       this.changed();
       const clockEnds = t.mode === "rec" ? t.audioFailed || !t.audio : !t.speaking;
-      if (clockEnds && t.at >= t.total) {
+      if (!t.reading && clockEnds && t.at >= t.total) {
         this.finish(token);
         return;
       }
@@ -470,7 +674,7 @@ class StepPlayer {
     const env = this.env;
     this.token++;
     this.utt++;
-    if (env.synth && this.track?.mode === "words") env.synth.cancel();
+    if (env.synth && (this.track?.mode === "words" || this.track?.reading)) env.synth.cancel();
     env.cancelFrame?.(this.frameId);
     env.cancelLater?.(this.startTimer);
     env.cancelLater?.(this.noteTimer);
@@ -494,7 +698,8 @@ class StepPlayer {
 
 const api = { DEFAULT_PACE, START_TIMEOUT_MS, MIN_SENTENCE, MIN_CLAUSE, NOTES, linkWords, speakable, words,
   spokenText, spansOf, stepSpans, spanState, charStarts, wordAtChar, chunksOf, wordsBefore, fmtTime, source,
-  localVoices, voiceChoices, pickVoice, recorderType, PaceBook, StepPlayer };
+  lineNoteCues, lineNotesShown, lineNotesText, parseLineNotes,
+  localVoices, isOnline, offeredVoices, voiceChoices, hasMoreVoices, onlyRobotVoices, voiceTier, pickVoice, recorderType, PaceBook, StepPlayer };
 if (typeof module !== "undefined") module.exports = api;
 else window.CoderTours = api;
 })();

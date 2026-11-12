@@ -168,7 +168,7 @@ def test_view_command_zoom_and_flags():
 def test_node_detail_tests_capped_at_eight():
     a = node("A")
     a["tested_by"] = [f"t{i}.gd" for i in range(10)]
-    assert textout.node_detail(a)[-1] == "tests: " + ", ".join(f"t{i}.gd" for i in range(8)) + " +2 more"
+    assert textout.node_detail(a)[-1] == "tests: " + ", ".join(f"t{i}.gd" for i in range(8)) + " +2 more (`tests <app> <Name>` lists all)"
     a["tested_by"] = a["tested_by"][:8]
     assert not textout.node_detail(a)[-1].endswith("more")
 
@@ -189,3 +189,11 @@ def test_view_command_prints_via_per_hidden_class():
                                    {"from": "A", "to": "B", "level": 1, "via": ["M", "N O"]})
     assert command == "$ coderstanding view w --level 1 --zoom A B --via M --via 'N O'"
     assert "--via" not in textout.view_command("w", 1, zoom={"from": "A", "to": "B", "via": []})
+
+
+def test_outside_lines_summary_and_all():
+    from coderstanding.textout import outside_lines
+    stack = {"outside": {"refs": 10, "top": [["bpy", 4], ["a.glb", 3], ["b.glb", 2], ["mathutils", 1]]}}
+    assert outside_lines(stack) == ["outside (not in the repo on purpose): 10 refs (bpy 4, a.glb 3, b.glb 2, +1 more (--all))"]
+    assert "mathutils 1)" in outside_lines(stack, True)[0]
+    assert outside_lines({}) == [] and outside_lines({"outside": {"refs": 0, "top": []}}) == []

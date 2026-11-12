@@ -11,9 +11,12 @@ import tree_sitter_java
 
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult, LanguageModule, Ref,
                                   Target, register)
-from coderstanding.model import Member, add_unique, child_id, entry_flags
+from coderstanding.model import Member, add_unique, child_id, entry_flags, is_public
 
-from .ts_util import children_of_type, descendants, end_line, first_child_of_type, line, make_parser, text
+from .ts_util import (children_of_type, descendants, end_line, first_child_of_type, first_error_line,
+                      lifted_children, line, make_parser, text)
+
+from .stubs import is_stub
 
 PARSER = make_parser(tree_sitter_java.language())
 
@@ -342,7 +345,8 @@ class TypeReader:
             self.fields[name] = names
             self.sink.in_member(FIELD_MEMBER).add("association", names, parameter, "field")
             self.decl.members.append(Member(name, "property", text(
-                parameter.child_by_field_name("type")), line(parameter)))
+                parameter.child_by_field_name("type")), line(parameter),
+                public=self.decl.kind == "record"))  # record components are public
 
     def _index_fields(self, members):
         """Record each field name with its type, so calls through it are found."""
@@ -373,7 +377,9 @@ class TypeReader:
         for declarator in children_of_type(node, "variable_declarator"):
             name = text(declarator.child_by_field_name("name"))
             initializer = declarator.child_by_field_name("value")
-            self.decl.members.append(Member(name, "field", text(type_node), line(node)))
+            words = modifier_words(node) | ({"public"} if self.decl.kind == "interface" else set())
+            self.decl.members.append(Member(name, "field", text(type_node), line(node),
+                                            public=is_public(name, "java", words)))
             self.sink.in_member(FIELD_MEMBER).add(self._holding_kind(name, initializer),
                                                   type_names(type_node), node, "field")
             if initializer is not None:
@@ -399,7 +405,9 @@ class TypeReader:
     def _read_method(self, node):
         name = text(node.child_by_field_name("name")) or self.decl.name
         returns = node.child_by_field_name("type")
-        self.decl.members.append(Member(name, "method", text(returns), line(node), end_line(node)))
+        self.decl.members.append(Member(name, "method", text(returns), line(node), end_line(node),
+                                        stub=name != self.decl.name
+                                        and is_stub(node.child_by_field_name("body"))))
         if name == "main" and {"static"} <= modifier_words(node):
             add_unique(self.decl.flags, entry_flags("program-main"))
         reader = self._body_reader(name)
@@ -415,10 +423,10 @@ class JavaModule(LanguageModule):
 
     def parse(self, ctx):
         tree = PARSER.parse(ctx.read_bytes())
-        result = FileResult()
+        result = FileResult(parse_error_line=first_error_line(tree.root_node))
         package = ""
         static_calls = {}
-        for node in tree.root_node.children:
+        for node in lifted_children(tree.root_node):
             if node.type == "package_declaration":
                 package = dotted_name(first_child_of_type(node, "scoped_identifier", "identifier"))
             elif node.type == "import_declaration":

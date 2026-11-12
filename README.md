@@ -13,6 +13,7 @@ so they read structure instead of grepping files.
 | Java | classes, interfaces, enums, records, nested types, `extends`/`implements`, fields, constructor/method types, calls, imports, `main` |
 | GDScript + Godot | scripts, inner classes, `preload` names, signals and emits, `project.godot` autoloads, `.tscn` scenes |
 | Kotlin | classes, interfaces, objects, companions, data/sealed/enum classes, supertypes, constructor-injected and delegated properties, calls, imports with aliases, extension functions, top-level functions; Gradle dependencies |
+| Shell | `*.sh` / `*.bash` scripts as modules, functions (stubs), calls between them, `source` and running other repo scripts; outside commands (`git`, `docker`) counted as platform |
 | Python | modules, classes, bases, imports, calls, type hints |
 | JavaScript / TypeScript | modules, classes, extends/implements, imports/require, calls, events |
 | C / C++ | header/source pairs, namespaced types, includes, free functions |
@@ -38,7 +39,7 @@ On Windows, install pipx first, then the wheel:
 py -m pip install --user pipx
 py -m pipx ensurepath          # then open a NEW terminal, or `pipx` is not found
 pipx install coderstanding-0.2.3-py3-none-any.whl
-coderstanding helper install   # starts the helper now and checks it answers
+coderstanding helper install   # sets up the on-demand helper, starts it once and checks it answers
 ```
 
 If `pipx` is still not found, `py -m pipx install coderstanding-0.2.3-py3-none-any.whl` works without
@@ -56,23 +57,33 @@ pip install --no-index --find-links wheels/ coderstanding-0.2.3-py3-none-any.whl
 
 (`pipx install --pip-args="--no-index --find-links wheels/" coderstanding-0.2.3-py3-none-any.whl` for pipx.)
 
-### Helper at login and tray icon
+### The helper and tray icon
 
-The viewer is served by a small local helper. To start it at every login:
+The viewer is served by a small local helper. Nothing runs at login: the helper starts when a
+page needs it and quits about 10 seconds after the last page closes (never during a scan or an upload).
 
 ```bash
-coderstanding helper install     # Linux: systemd user units. Windows: Startup entries (no admin needed)
-coderstanding helper start       # start again later; also: stop, restart, status, log, uninstall
+coderstanding helper install     # once; Linux: systemd user socket + link handler. Windows: link handler (no admin needed)
+coderstanding helper start       # start by hand; also: stop, restart, status, log, uninstall
 coderstanding add <name> <folder>   # register a project (or use Projects... -> Add project... in the viewer)
 ```
 
-`helper install` also starts the helper (`--no-start` to skip) and `helper install`/`helper start` check
+- Linux: `helper install` enables `coderstanding-helper.socket` (listens on 127.0.0.1:8517; not a
+  running program). The first page request starts `coderstanding-helper.service`. `helper stop`
+  closes the socket too, so nothing listens until `helper start`, the page's Start helper button, or
+  the next login.
+- Linux and Windows: `helper install` registers a `coderstanding://` link. When no helper answers,
+  the page shows a **Start helper** button that opens it (allow the browser's prompt). The link only
+  ever starts the helper; whatever else is in the URL is ignored.
+- Older installs that started the helper or tray at login are migrated: those entries are removed.
+
+`helper install` also starts the helper once (`--no-start` to skip) and `helper install`/`helper start` check
 that it answers on http://127.0.0.1:8517/, printing the last log lines and the log path if not. The
 helper starts fine with no project registered; the page then shows how to add one.
-Add `--dry-run` to see what it would write. The optional tray icon (green = up, amber = scanning,
-grey = down; start/stop/log menu) needs Qt: `pipx install "coderstanding-0.2.3-py3-none-any.whl[tray]"` or
-`pipx inject coderstanding PySide6` (pipx) or `python -m pip install "coderstanding[tray]"`, then
-`coderstanding helper install` again. On Windows the log is
+Add `--dry-run` to see what it would write. While it runs, the helper shows a tray icon (green = up,
+amber = scanning; restart/stop/log menu) that quits with it. The tray needs Qt:
+`pipx install "coderstanding-0.2.3-py3-none-any.whl[tray]"` or `pipx inject coderstanding PySide6`
+(pipx) or `python -m pip install "coderstanding[tray]"`. On Windows the log is
 `%LOCALAPPDATA%\coderstanding\helper.log`; on Linux use `journalctl --user -u coderstanding-helper`.
 
 ### From source (development)
@@ -88,7 +99,7 @@ scripts/build-release.sh             # wheel + sdist into dist/, then a fresh-ve
 
 ```bash
 coderstanding add myapp "/path/to/repo" --data ~/.local/share/coderstanding/myapp
-coderstanding graph myapp 1          # top level as slim text (scans on first use)
+coderstanding graph myapp 1          # top level as slim text (needs a scan first)
 coderstanding node myapp Simulation  # one class: neighbours, file, tests, rules
 coderstanding zoom myapp A B         # what runs between A and B
 coderstanding serve [myapp]          # viewer at http://127.0.0.1:8517/ for every registered app (opens on myapp)
@@ -99,8 +110,8 @@ The viewer's app picker (toolbar, or `[` / `]`) switches between registered proj
 "Projects… → Add project…" registers and scans a new repo (data in `~/.local/share/coderstanding/<name>`).
 
 `--data` keeps graph, notes and layout out of the repo; leave it out to use `<repo>/.coderstanding/`.
-Registered apps live in `~/.config/coderstanding/apps.json`. The scan reruns by itself when files
-change. `coderstanding <command> --help` lists every option.
+Registered apps live in `~/.config/coderstanding/apps.json`. Scans never run by themselves: press
+Refresh or run `coderstanding rescan`. `coderstanding <command> --help` lists every option.
 
 | Command | What it gives |
 |---|---|
@@ -151,9 +162,9 @@ Privacy: Coderstanding makes no outside network calls and sends no code anywhere
 The viewer can also be served as static files from your own server, behind your own login proxy
 (for example oauth2-proxy in front of a small web server holding `viewer/` plus a `hosted.json`
 copied from `deploy/hosted.json`). It holds no maps and runs no Coderstanding code: on each PC the
-page talks to the local helper (`coderstanding serve`, started at login by
-`coderstanding helper install`), so every map stays on that PC. Without the helper it shows how to
-start it. Tell the helper which page may use it, per run or once in your config:
+page talks to the local helper (`coderstanding serve`, set up by `coderstanding helper install`
+and started on demand), so every map stays on that PC. Without the helper it offers a Start helper
+button and says how to install it. Tell the helper which page may use it, per run or once in your config:
 
 ```bash
 coderstanding serve --allow-origin https://code.your-server.example

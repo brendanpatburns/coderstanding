@@ -55,6 +55,15 @@
       "max": 0,
       "code_check": false
     },
+    "nickname": {
+      "what": "A readable name for a class or function whose real name says nothing (decompiled F_243e0, minified a.b); shown as the main name, the real one beside it. One word, no spaces.",
+      "who": "Anyone reading code with useless names, such as a decompilation, minified or old code.",
+      "not": "A rename of a name that is already clear, or a sentence (that is the hint); it never changes the code.",
+      "good": "update_world",
+      "bad": "the function that updates the world every frame",
+      "max": 40,
+      "code_check": false
+    },
     "level": {
       "what": "How high up it shows: 1 is the top picture, higher numbers are more detail.",
       "who": "Anyone reading the map from the top down.",
@@ -90,6 +99,71 @@
       "bad": "Loaded somehow at startup",
       "max": 120,
       "code_check": false
+    }
+  },
+  "words": {
+    "kinds": {
+      "generalization": {
+        "word": "is a kind of",
+        "uml": "generalization",
+        "tip": "builds on the other class and gets everything it has (inheritance)"
+      },
+      "realization": {
+        "word": "follows the rules of",
+        "uml": "realization",
+        "tip": "promises to do what the other one (an interface, a list of required functions) asks for"
+      },
+      "composition": {
+        "word": "owns",
+        "uml": "composition",
+        "tip": "holds the other as a part of itself; they live and go together"
+      },
+      "association": {
+        "word": "keeps a link to",
+        "uml": "association",
+        "tip": "holds on to the other and calls it when needed"
+      },
+      "dependency": {
+        "word": "uses",
+        "uml": "dependency",
+        "tip": "calls its functions but does not keep it"
+      },
+      "signal": {
+        "word": "signals",
+        "uml": "signal",
+        "tip": "sends it an event; it does not know who is listening"
+      },
+      "loaded-by": {
+        "word": "loads (by name)",
+        "uml": "loaded by",
+        "tip": "starts or finds the other by its name, not by a direct reference in the code"
+      },
+      "planned": {
+        "word": "will use (planned)",
+        "uml": "planned",
+        "tip": "a planned link: it is not in the code yet"
+      },
+      "manual": {
+        "word": "uses (added manually)",
+        "uml": "manual",
+        "tip": "a real link the scanner cannot see, added by hand"
+      },
+      "derived": {
+        "word": "uses, through hidden classes",
+        "uml": "derived",
+        "tip": "the link passes through classes hidden at this level; go deeper to see them"
+      }
+    },
+    "terms": {
+      "level": "How deep in the detail you are. Level 1 shows the big systems; higher levels add the smaller classes inside them.",
+      "domain": "A broad area of the app, like Scanning or Notes. A label you or the AI give; not a folder.",
+      "via": "The link passes through classes hidden at this level (via 2 = two of them). Go one level deeper to see them.",
+      "hub": "A class so many others use that its lines are drawn quietly, or they would cover the map.",
+      "outside code": "Packages and libraries the app uses but did not write.",
+      "hint": "A one-line note on a box or line, saying what it is for. You or the AI write it.",
+      "nickname": "A readable name you or the AI give a badly named class or function; the real name stays next to it.",
+      "zoom": "Show only two classes and what sits between them.",
+      "god class": "A class that does too many things; a warning, not an error."
     }
   }
 }

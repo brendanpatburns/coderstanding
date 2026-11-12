@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Planned Boxes Mock-up</title>
+<style>
+/* Tokens from viewer/style.css (same names as readability.html); --plan is the one new token. System fonts only, no fetches. */
+:root {
+  --bg: #f3f5f8; --surface: #ffffff; --ink: #141b24; --muted: #5a6574; --line: #d4dae3;
+  --accent: #2f58cc; --accent-ink: #ffffff; --derived: #b5620c; --hl: #d63f7a; --faded: #8d97a4;
+  --row: #eef2f8; --dim: #b9c1cc; --signal: #7a4fc4; --error: #b3261e; --warn: #b45309; --ok: #1e7a46;
+  --plan: #0b7a83; --plan-soft: rgb(11 122 131 / .10); --manual: #6b5a2e; --manual-soft: rgb(150 120 40 / .10);
+  --f-display: "Segoe UI", system-ui, -apple-system, "Noto Sans", sans-serif;
+  --f-body: system-ui, -apple-system, "Segoe UI", "Noto Sans", sans-serif;
+  --f-mono: ui-monospace, "Cascadia Mono", "DejaVu Sans Mono", Menlo, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --row: #1c2530; --dim: #3a4552; --signal: #b892ff; --error: #ff8a80; --warn: #f5b041; --ok: #6fd39b;
+  --plan: #4fd1d9; --plan-soft: rgb(79 209 217 / .12); --manual: #d9c27a; --manual-soft: rgb(217 194 122 / .12);
+  color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1318; --surface: #161d25; --ink: #e5eaf0; --muted: #94a0ae; --line: #2a3440;
+  --accent: #7f9dff; --accent-ink: #0e1318; --derived: #f0a24f; --hl: #ff6fa6; --faded: #8692a1;
+  --row: #1c2530; --dim: #3a4552; --signal: #b892ff; --error: #ff8a80; --warn: #f5b041; --ok: #6fd39b;
+  --plan: #4fd1d9; --plan-soft: rgb(79 209 217 / .12); --manual: #d9c27a; --manual-soft: rgb(217 194 122 / .12);
+  color-scheme: dark }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--f-body); }
+h1, h2, h3 { font-family: var(--f-display); line-height: 1.25; }
+h2 { font-size: 1.2rem; margin: 0 0 4px; }
+h3 { font-size: 1rem; margin: 16px 0 6px; }
+code { font-family: var(--f-mono); font-size: .88em; background: var(--row); border-radius: 4px; padding: 0 4px; }
+a { color: var(--accent); }
+[hidden] { display: none !important; }
+button, input, select, textarea { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.muted { color: var(--muted); }
+.wrap { max-width: 1160px; margin: 0 auto; padding: 0 16px 60px; }
+.ico { width: 1em; height: 1em; fill: currentColor; vertical-align: -.14em; flex: none; }
+
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: center; gap: 8px 16px; padding-block: 10px; flex-wrap: wrap; }
+.top b { font: 700 1.05rem var(--f-display); }
+.appname { font: 12px var(--f-mono); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; }
+.toc { display: flex; gap: 4px 12px; flex-wrap: wrap; font-size: 13px; }
+.toc a { text-decoration: none; color: var(--muted); }
+.toc a:hover { color: var(--accent); }
+.grow { flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 7px; padding: 4px 11px; font-size: 13px; cursor: pointer; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--error); }
+.btn.sm { font-size: 12px; padding: 1px 8px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; flex-wrap: wrap; }
+.seg button { border: none; background: var(--surface); padding: 4px 11px; font-size: 13px; cursor: pointer; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); }
+
+.mocknote { background: var(--row); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin: 18px 0; font-size: 14px; }
+.mocknote .tag { font: 600 11px var(--f-mono); color: var(--hl); border: 1px solid var(--hl); border-radius: 4px; padding: 0 5px; margin-right: 6px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin: 18px 0; scroll-margin-top: 70px; }
+.num { font: 700 13px var(--f-mono); color: var(--accent-ink); background: var(--accent); border-radius: 999px; padding: 1px 9px; margin-right: 8px; }
+.lead { margin: 4px 0 12px; color: var(--muted); font-size: 14px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 14px; }
+@media (max-width: 880px) { .split { grid-template-columns: 1fr; } }
+.two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+
+/* Chips (same shapes as the viewer's stage / work / imp / tag chips) */
+.chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--line); border-radius: 999px; padding: 0 7px; font: 11px var(--f-mono); color: var(--muted); white-space: nowrap; background: var(--surface); }
+.chip.planned { border-color: var(--plan); color: var(--plan); font-weight: 700; background: var(--plan-soft); }
+.chip.manual { border-color: var(--manual); color: var(--manual); font-weight: 700; background: var(--manual-soft); }
+.chip.stage { color: var(--ink); }
+.chip.ai { border-color: var(--hl); color: var(--hl); }
+.chip.spec { color: var(--accent); border-color: var(--accent); cursor: pointer; }
+.chip.tag::before { content: "#"; opacity: .7; }
+
+/* Toolbar */
+.tb { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; font-size: 13px; margin-bottom: 10px; }
+.tb .lab { color: var(--muted); }
+.count { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--plan); color: var(--plan); border-radius: 999px; padding: 2px 10px; font: 600 12px var(--f-mono); background: var(--plan-soft); cursor: pointer; }
+.count .m { color: var(--manual); }
+
+/* Map */
+.mapscroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.map { position: relative; width: 760px; height: 600px; }
+.map svg.lines { position: absolute; inset: 0; width: 100%; height: 100%; }
+.e { fill: none; stroke-width: 1.5; transition: opacity .2s; }
+.e.real { stroke: var(--accent); }
+.e.derived { stroke: var(--derived); stroke-width: 3; }
+.e.manual { stroke: var(--manual); stroke-width: 1.8; }
+.e.planned { stroke: var(--plan); stroke-width: 2.2; stroke-dasharray: 1 6; stroke-linecap: round; }
+.mid { transition: opacity .2s; }
+.mid circle { fill: var(--surface); stroke-width: 1.4; }
+.mid.p circle { stroke: var(--plan); } .mid.p use { color: var(--plan); }
+.mid.m circle { stroke: var(--manual); } .mid.m use { color: var(--manual); }
+.ah-a { fill: var(--accent); } .ah-d { fill: var(--derived); } .ah-p { fill: var(--plan); } .ah-m { fill: var(--manual); }
+
+.face { position: absolute; width: 200px; background: var(--surface); border: 1.3px solid var(--ink); border-radius: 6px; cursor: pointer; transition: opacity .2s, box-shadow .2s; }
+.face .tab { position: absolute; top: -10px; left: 8px; font: 600 10.5px var(--f-body); border-radius: 4px; padding: 0 6px; display: inline-flex; gap: 4px; align-items: center; background: var(--accent); color: var(--accent-ink); }
+.face .hd { padding: 7px 10px 3px; display: flex; gap: 7px; align-items: center; border-radius: 5px 5px 0 0; }
+.face .tri { color: var(--accent); font-size: 10px; }
+.face .nm { font: 600 13.5px var(--f-mono); overflow-wrap: anywhere; }
+.face .tc { font: 700 10px var(--f-mono); background: #f2d64b; color: #1b1b1b; border-radius: 3px; padding: 0 4px; }
+.face .ds { padding: 2px 10px 3px; font-size: 12.5px; line-height: 1.35; }
+.face .chips { padding: 0 10px 3px; }
+.face .ft { padding: 1px 10px 7px; font: 11px var(--f-mono); color: var(--muted); }
+.face.sel { box-shadow: 0 0 0 2.5px var(--hl); }
+.face.isreal .hd { border-top: 3px solid #3d7fd9; }
+/* Planned: dashed outline in the plan colour, hatched header, hammer tab, no ▶ (no functions to open) */
+.face.planned { border: 2px dashed var(--plan); background: var(--surface); }
+.face.planned .hd { background: repeating-linear-gradient(135deg, var(--plan-soft) 0 6px, transparent 6px 12px); }
+.face.planned .tab { background: var(--plan); color: var(--surface); }
+.face.planned .nm { color: var(--plan); }
+.face.planned.draft { border-color: var(--hl); }
+.face.planned.draft .tab { background: var(--hl); }
+/* Added manually: solid but double outline in the manual colour, eye-off tab, "where it lives" footer */
+.face.manual { border: 3px double var(--manual); }
+.face.manual .tab { background: var(--manual); color: var(--surface); }
+.face.manual .hd { background: var(--manual-soft); }
+
+.map.plan-hide .x-planned { display: none; }
+.map.plan-only .face.isreal, .map.plan-only .face.manual { opacity: .22; }
+.map.plan-only .face.isreal.near { opacity: .7; }
+.map.plan-only .e.real, .map.plan-only .e.derived, .map.plan-only .e.manual, .map.plan-only .mid.m { opacity: .1; }
+.map.plan-only .e.planned { stroke-width: 3.2; }
+.map.plan-only .face.planned { box-shadow: 0 0 0 4px var(--plan-soft); }
+
+.legend { display: flex; gap: 6px 16px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.legend span { display: inline-flex; gap: 6px; align-items: center; }
+.sw { display: inline-block; width: 26px; border-top: 2px solid var(--accent); }
+.sw.p { border-top: 2.5px dotted var(--plan); }
+.sw.m { border-top: 2px solid var(--manual); }
+
+/* Details panel ("In plain words" style) */
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; font-size: 13.5px; align-self: start; }
+.panel h4 { margin: 0 0 2px; font: 600 15px var(--f-mono); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.panel .where { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.panel .pl { font-size: 14.5px; margin: 0 0 10px; }
+.panel .grp { font: 600 11px var(--f-mono); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 12px 0 4px; }
+.panel ul { margin: 0; padding-left: 18px; }
+.panel li { margin: 3px 0; }
+.panel .row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 3px 0; }
+.panel .row .k { color: var(--muted); font-size: 12px; min-width: 76px; }
+.panel select { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 0 6px; }
+.panel .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.panel .warnbox { border-left: 3px solid var(--plan); background: var(--plan-soft); padding: 6px 9px; border-radius: 0 6px 6px 0; font-size: 12.5px; margin: 0 0 10px; }
+.panel .warnbox.m { border-color: var(--manual); background: var(--manual-soft); }
+.panel .by { font-size: 12px; color: var(--muted); }
+
+/* Add box form */
+.form { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 12px; align-items: center; font-size: 13.5px; }
+.form label { color: var(--muted); font-size: 12.5px; }
+.form input, .form select, .form textarea { border: 1px solid var(--line); border-radius: 6px; background: var(--bg); padding: 4px 8px; width: 100%; min-width: 0; }
+.form textarea { min-height: 52px; resize: vertical; }
+.form .inl { display: flex; gap: 6px; flex-wrap: wrap; }
+.form .inl select { width: auto; }
+.form .help { grid-column: 2; font-size: 12px; color: var(--muted); margin-top: -4px; }
+@media (max-width: 520px) { .form { grid-template-columns: 1fr; } .form .help { grid-column: 1; } }
+.linkrow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; margin: 3px 0; }
+.linkrow select, .linkrow input { width: auto !important; }
+.linkrow input { flex: 1 1 140px; }
+.prevbox { position: relative; min-height: 150px; padding-top: 14px; }
+.prevbox .face { position: relative; }
+.editbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; font-size: 13px; margin-bottom: 12px; padding: 6px 10px; background: var(--row); border-radius: 8px; }
+.drafts { border: 1px solid var(--hl); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 12px; }
+.drafts .row { display: flex; gap: 6px 10px; align-items: center; flex-wrap: wrap; }
+
+pre.cli { background: var(--row); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12.5px/1.6 var(--f-mono); overflow-x: auto; margin: 8px 0; white-space: pre; }
+pre.cli .c { color: var(--muted); }
+pre.cli .p { color: var(--plan); font-weight: 600; }
+pre.cli .m { color: var(--manual); font-weight: 600; }
+
+/* Built now (section 5) */
+.banner { display: flex; gap: 8px 14px; align-items: center; flex-wrap: wrap; border: 1px solid var(--plan); background: var(--plan-soft); border-radius: 8px; padding: 8px 12px; font-size: 14px; margin-bottom: 12px; }
+.banner .ico { color: var(--plan); width: 1.3em; height: 1.3em; }
+.banner .t { flex: 1 1 260px; }
+.stage-area { display: flex; gap: 26px; flex-wrap: wrap; align-items: flex-start; padding: 16px 6px 6px; }
+.stage-area .face { position: relative; }
+.stage-area .col { display: flex; flex-direction: column; gap: 22px; }
+.arrowtxt { font: 12px var(--f-mono); color: var(--muted); align-self: center; }
+.changes { font-size: 13px; margin: 10px 0 0; padding-left: 18px; }
+.changes li { margin: 2px 0; }
+
+.qs li { margin: 6px 0; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-hammer" viewBox="0 0 16 16"><path d="M8.6.8l6.6 6.6-2.5 2.5-1.6-1.6-6.6 6.6a1.5 1.5 0 0 1-2.1-2.1l6.6-6.6L7.4 4.6l-1-.2 1.3-1.3-.3-.9z"/></symbol>
+  <symbol id="i-hand" viewBox="0 0 16 16"><path d="M5 8V3.2a1 1 0 0 1 2 0V7h.5V2.2a1 1 0 0 1 2 0V7h.5V3a1 1 0 0 1 2 0v5.5V6a1 1 0 0 1 2 0v4.2C14 13 12.2 15 9.6 15H8.8c-1.6 0-2.7-.6-3.6-1.8L2.4 9.6a1 1 0 0 1 1.5-1.3z"/></symbol>
+  <symbol id="i-merge" viewBox="0 0 16 16"><path d="M4 1.5a2 2 0 0 1 .9 3.8v1.1c0 1.4 1.2 2.4 3.1 2.6 2.1.2 3.6 1.4 4 3.1a2 2 0 1 1-1.6.1c-.3-.9-1.3-1.5-2.6-1.6-1.2-.1-2.2-.5-2.9-1v1.2a2 2 0 1 1-1.6 0V5.3A2 2 0 0 1 4 1.5z"/></symbol>
+</svg>
+
+<header class="top"><div class="wrap">
+  <b>Coderstanding</b><span class="appname">planned boxes mock-up</span>
+  <nav class="toc" aria-label="Sections">
+    <a href="#s1">1 On the map</a><a href="#s2">2 Adding one</a><a href="#s3">3 Details</a><a href="#s4">4 Plan filter</a><a href="#s5">5 Built now</a><a href="#s6">6 Slim text</a><a href="#s7">7 Storage</a><a href="#qs">Questions</a>
+  </nav>
+  <span class="grow"></span>
+  <button class="btn" id="theme" type="button">Theme: auto</button>
+</div></header>
+
+<main class="wrap">
+  <div class="mocknote"><span class="tag">MOCK-UP</span>
+    Boxes you or an AI add to the map by hand. Two kinds:
+    <b style="color:var(--plan)">Planned</b> (a class we intend to build, mostly for planning) and
+    <b style="color:var(--manual)">Added manually</b> (real, but the scanner can't see it: loaded by name, generated code, an outside service).
+    Sample data is the real Coderstanding map at level 1 <code>Systems</code> (7 of its 22 classes, hints as saved, some lines left out);
+    the planned boxes are believable next features (<code>node_store</code> would keep these very boxes; <code>issue_log</code> is an AI draft). Nothing here is built.
+    It reuses notes.jsonl, the card stages and priorities (7a), status/tags (12a), AI drafts + Accept, and the loaded-by line style (9b).
+  </div>
+
+  <!-- ===================== 1 + 3 + 4: the map, details, plan filter ===================== -->
+  <section class="card" id="s1">
+    <h2><span class="num">1</span>On the map, next to real classes</h2>
+    <p class="lead">Click any box. The Plan control and the count are section <a href="#s4">4</a>; the details panel is section <a href="#s3">3</a>.</p>
+    <div class="tb" id="s4">
+      <span class="lab">Show planned work</span>
+      <div class="seg" id="planSeg" role="group" aria-label="Show planned work">
+        <button type="button" data-v="hide" aria-pressed="false">Hide</button>
+        <button type="button" data-v="show" aria-pressed="true">Show</button>
+        <button type="button" data-v="only" aria-pressed="false">Only planned work</button>
+      </div>
+      <span class="count" id="planCount" title="Click: only planned work"><svg class="ico"><use href="#i-hammer"/></svg>2 planned · <span class="m"><svg class="ico"><use href="#i-hand"/></svg>1 manual</span></span>
+      <span class="grow"></span>
+      <span class="lab">Mode</span>
+      <div class="seg"><button type="button" aria-pressed="true">View</button><button type="button" aria-pressed="false" onclick="location.hash='s2'">Edit layout</button></div>
+    </div>
+    <div class="split">
+      <div>
+        <div class="mapscroll"><div class="map plan-show" id="map">
+          <svg class="lines" id="lines" viewBox="0 0 760 600" aria-hidden="true"></svg>
+        </div></div>
+        <div class="legend">
+          <span><i class="sw"></i>in the code (scanned)</span>
+          <span><i class="sw p"></i><svg class="ico" style="color:var(--plan)"><use href="#i-hammer"/></svg>planned line: not in the code yet</span>
+          <span><i class="sw m"></i><svg class="ico" style="color:var(--manual)"><use href="#i-hand"/></svg>added manually: real, the scanner can't see it</span>
+        </div>
+      </div>
+      <aside class="panel" id="panel" aria-live="polite"></aside>
+    </div>
+    <h3>How each look reads</h3>
+    <ul style="font-size:14px;margin:0;padding-left:20px">
+      <li><b>Planned</b>: dashed outline and hatched header in the plan colour, hammer tab "Planned", name in the plan colour, no ▶ (there are no functions to open yet). Chips: stage, <code>work:</code>/<code>imp:</code>, tags, linked spec <code>§</code>. Footer says "not in the code yet" instead of a size.</li>
+      <li><b>AI draft</b> of a planned box: same look, outline and tab in the AI-draft pink, "AI draft" chip, Accept in the panel (as AI notes today).</li>
+      <li><b>Planned lines</b>: dotted, plan colour, a hammer disc in the middle. A planned line may touch a real class (server will save to node_store).</li>
+      <li><b>Added manually</b>: double outline and hand tab "Added manually", footer = where it lives (file or service) or "where: unknown". Its lines are solid (the code really does it) with a hand disc in the middle, the same idea as the dashed loaded-by line (9b).</li>
+    </ul>
+  </section>
+
+  <!-- ===================== 2: adding one ===================== -->
+  <section class="card" id="s2">
+    <h2><span class="num">2</span>Adding one</h2>
+    <p class="lead">In Edit mode: <b>Add box</b> in the toolbar, or right-click empty map → "Add box here" (the box lands at that spot and is pinned). AI sessions use the CLI; what an AI adds is a draft until a person accepts it.</p>
+    <div class="editbar">
+      <span class="muted">Edit layout</span>
+      <button class="btn primary sm" type="button"><svg class="ico"><use href="#i-hammer"/></svg> Add box</button>
+      <span class="muted">Drag boxes · right-click empty map: Add box here</span>
+    </div>
+    <div class="two">
+      <form class="form" id="addForm" autocomplete="off">
+        <label>Kind</label>
+        <div class="seg" id="kindSeg" role="group" aria-label="Kind">
+          <button type="button" data-v="planned" aria-pressed="true"><svg class="ico"><use href="#i-hammer"/></svg> Planned</button>
+          <button type="button" data-v="manual" aria-pressed="false"><svg class="ico"><use href="#i-hand"/></svg> Added manually</button>
+        </div>
+        <span class="help" id="kindHelp">Something we intend to build. It is not in the code yet.</span>
+        <label for="fName">Name</label><input id="fName" value="node_store">
+        <span class="help">Use the name the code will have: when a scan finds it, you'll be asked to merge (section 5).</span>
+        <label for="fFor">What it's for</label><textarea id="fFor">Keeps the boxes people and AI add by hand (planned and manual), so they survive every rescan.</textarea>
+        <span class="help">Plain words for a newcomer (the hint / description rules).</span>
+        <label for="fWhere" class="mOnly" hidden>Where it lives</label><input id="fWhere" class="mOnly" hidden placeholder="file, folder or service; empty = unknown" value="deploy/hosted.json">
+        <label for="fTags">Tags</label><input id="fTags" value="planning, map">
+        <label class="pOnly">Plan</label>
+        <div class="inl pOnly">
+          <select id="fStage" aria-label="Stage"><option>idea</option><option selected>todo</option><option>in-progress</option><option>review</option><option>dropped</option></select>
+          <select id="fWork" aria-label="Work priority"><option value="">work: —</option><option>work: high</option><option selected>work: medium</option><option>work: low</option></select>
+          <select id="fImp" aria-label="Importance"><option value="">imp: —</option><option selected>imp: high</option><option>imp: medium</option><option>imp: low</option></select>
+        </div>
+        <label for="fSpec">Spec</label>
+        <select id="fSpec"><option value="">none</option><option selected>Hand-added boxes</option><option>Issue log</option><option>Tours</option></select>
+        <label>Lines</label>
+        <div id="fLines">
+          <div class="linkrow"><select><option>server</option><option>views</option><option>cli</option></select><span>→ this</span><input value="the Add box form saves here"><button class="btn sm" type="button">×</button></div>
+          <div class="linkrow"><span>this →</span><select><option>notes</option><option>cards</option></select><input value="stored as notes lines, so rescans never touch them"><button class="btn sm" type="button">×</button></div>
+          <button class="btn sm" type="button">+ Line from a class</button> <button class="btn sm" type="button">+ Line to a class</button>
+        </div>
+        <span></span>
+        <div class="inl"><button class="btn primary" type="button">Add box</button><button class="btn" type="button">Cancel</button></div>
+      </form>
+      <div>
+        <div class="muted" style="font-size:12px">Preview (updates as you type)</div>
+        <div class="prevbox"><div id="preview"></div></div>
+        <div class="drafts">
+          <b>AI added 1 box</b> <span class="muted">(draft, shown pink until accepted)</span>
+          <div class="row" style="margin-top:4px"><code>issue_log</code><span class="chip planned"><svg class="ico"><use href="#i-hammer"/></svg>Planned</span><span class="chip ai">AI draft</span><span class="grow"></span>
+            <button class="btn sm primary" type="button">Accept</button><button class="btn sm" type="button">Edit</button><button class="btn sm danger" type="button">Delete</button></div>
+        </div>
+      </div>
+    </div>
+    <h3>CLI form for AI sessions</h3>
+<pre class="cli"><span class="c"># a planned class (AI writes are drafts; --by names the author as on every note write)</span>
+$ coderstanding node coderstanding --add "issue_log" --kind planned \
+    --hint "A list of bugs and to-dos found while reading the code, each tied to a class or line" \
+    --tags issues,cli --stage idea --priority low --importance medium \
+    --spec issue-log --links "cli>issue_log,issue_log>views"
+<span class="p">added [planned] issue_log</span> (AI draft: accept in the viewer or with --accept)
+planned lines: cli ..> issue_log, issue_log ..> views
+
+<span class="c"># real, but the scanner can't see it</span>
+$ coderstanding node coderstanding --add "hosted page" --kind manual --where deploy/hosted.json \
+    --hint "The page on your own server; it asks the helper on this PC for everything" \
+    --links "hosted page>server"
+<span class="m">added [manual] hosted page</span> (AI draft)
+
+<span class="c"># later edits use the existing verbs</span>
+$ coderstanding node coderstanding issue_log --accept
+$ coderstanding set coderstanding issue_log stage=todo tags+=review links+=issue_log>notes
+$ coderstanding node coderstanding issue_log --delete
+</pre>
+    <p class="muted" style="font-size:13px;margin:4px 0 0">Refused: a name that is already a real class (use <code>set</code> on it), a line to a class that doesn't exist (planned boxes may link to each other). <code>--kind manual</code> without <code>--where</code> stores "where: unknown".</p>
+  </section>
+
+  <!-- ===================== 3: details panel (described; live one is in section 1) ===================== -->
+  <section class="card" id="s3">
+    <h2><span class="num">3</span>Details panel for a planned box</h2>
+    <p class="lead">Live in section 1: click <b>node_store</b> (accepted), <b>issue_log</b> (AI draft) or <b>hosted page</b> (added manually). Same "In plain words" layout as real classes, with these changes:</p>
+    <ul style="font-size:14px;margin:0;padding-left:20px">
+      <li>A banner on top says it's not in the code, so nobody goes looking for its file.</li>
+      <li>"Used by / Uses" become <b>Planned users</b> / <b>Will use</b>; each line keeps its hint and Ask AI.</li>
+      <li><b>Plan</b> group: the stage picker, <code>work:</code> and <code>imp:</code> pickers (the card ones from 7a), tags, the linked spec (click opens it in the Specs tab).</li>
+      <li>Who added it and when; AI fields carry the AI chip and Accept, as notes do.</li>
+      <li>Actions: <b>Accept</b> (AI draft only), <b>Edit</b>, <b>Delete</b>, and <b>It's built: pick the class…</b> for a rename the scan can't match by name.</li>
+    </ul>
+  </section>
+
+  <!-- ===================== 5: built now ===================== -->
+  <section class="card" id="s5">
+    <h2><span class="num">5</span>When the code catches up</h2>
+    <p class="lead">A rescan finds a real class with the planned box's name. The map shows a banner (and <code>warnings</code> prints a <code>built now:</code> line). Nothing moves until you choose.</p>
+    <div class="tb">
+      <div class="seg" id="bnSeg" role="group" aria-label="Before or after"><button type="button" data-v="before" aria-pressed="true">Before</button><button type="button" data-v="after" aria-pressed="false">After Merge</button><button type="button" data-v="both" aria-pressed="false">After Keep both</button></div>
+    </div>
+    <div class="banner" id="bnBanner">
+      <svg class="ico"><use href="#i-hammer"/></svg>
+      <span class="t"><b>node_store is built now</b>: the scan found <code>scanner/coderstanding/node_store.py</code>. Move its notes and lines to the real class?</span>
+      <button class="btn primary sm" type="button" data-go="after"><svg class="ico"><use href="#i-merge"/></svg> Merge</button>
+      <button class="btn sm" type="button" data-go="both">Keep both</button>
+      <button class="btn sm" type="button">Later</button>
+    </div>
+    <div class="stage-area" id="bnArea"></div>
+    <ul class="changes" id="bnChanges"></ul>
+  </section>
+
+  <!-- ===================== 6: slim text ===================== -->
+  <section class="card" id="s6">
+    <h2><span class="num">6</span>Slim text: an AI can never mistake them for code</h2>
+    <p class="lead">Every planned name is printed <code>[planned]</code>, every planned line uses <code>..></code>, and they sit in their own <code>plan:</code> block after the real lines. Manually added items are real, so they stay among the lines with <code>[manual]</code>. <code>--no-plan</code> leaves the plan block out.</p>
+<pre class="cli">$ coderstanding graph coderstanding 1
+coderstanding L1 Systems all 22/200 (hubs ≥ 20: …) <span class="p">plan: 2 planned, 5 planned lines</span> <span class="m">manual: 1</span>
+cli > server: The serve command starts the local helper {control, serve, docs_dir +15}
+cli > views: Commands ask the view engine what to print {compute_view, resolve_class +29}
+server > cards: The viewer's sidebar reads and saves specs and memos
+tours > views: Tour steps show the map focused on their targets {effective_level, start_paths}
+cards ~> views (via 1): [dependency] {checked_target}
+<span class="m">[manual] hosted page > server: Asks the helper on this PC for everything it shows (where: deploy/hosted.json)</span>
+…
+<span class="p">plan: (not in the code yet; never search for these files)
+[planned] node_store [todo] work:high imp:high #planning #map §hand-added-boxes: Keeps the boxes people and AI add by hand
+[planned] issue_log [idea] (AI draft) #issues #cli §issue-log: A list of bugs and to-dos found while reading the code
+server ..> [planned] node_store: the Add box form saves here
+views ..> [planned] node_store: adds hand-made boxes to every view
+[planned] node_store ..> notes: stored as notes lines, so rescans never touch them
+cli ..> [planned] issue_log: the issues command lists and files issues
+[planned] issue_log ..> views: open issues show as marks on their classes</span>
+
+$ coderstanding node coderstanding node_store
+<span class="p">[planned] node_store  NOT IN CODE (planned box)  L1 [todo] work:high imp:high #planning #map</span>
+: Keeps the boxes people and AI add by hand (planned and manual), so they survive every rescan.
+rules: Never write to graph.json; hand-made boxes live in notes only.
+spec: hand-added-boxes Hand-added boxes [todo]
+planned users: server, views
+will use: notes
+added by: you 2026-11-11
+
+$ coderstanding brief coderstanding node_store
+<span class="p">node_store  [planned] NOT IN CODE: build it, don't look for it</span>  §hand-added-boxes: Keeps the boxes people and AI add by hand
+rules: Never write to graph.json; hand-made boxes live in notes only.
+will connect: server ..> node_store, views ..> node_store, node_store ..> notes
+near real code: notes  scanner/coderstanding/notes.py:1-353, views  scanner/coderstanding/views.py:1-1548
+</pre>
+    <p class="muted" style="font-size:13px;margin:4px 0 0"><code>find</code> and <code>impact</code> list planned boxes only with <code>--plan</code>; <code>tests</code> never lists them. Copy for AI follows the map's Plan setting.</p>
+  </section>
+
+  <!-- ===================== 7: storage ===================== -->
+  <section class="card" id="s7">
+    <h2><span class="num">7</span>Storage (design only)</h2>
+    <p style="font-size:14px;margin:0">They live in <b>notes.jsonl</b>, like every other hand-written fact: a <code>node:&lt;name&gt;</code> line with a new field <code>made: "planned" | "manual"</code>, plus the fields notes already have (<code>hint</code>, <code>description</code>, <code>tags</code>, <code>status</code>, <code>rules</code>, <code>level</code>, <code>domain</code>, <code>by</code>, <code>ai</code>) and the card fields <code>stage</code>, <code>priority</code>, <code>importance</code> (same words and stage list as specs), <code>spec</code> (a spec id), <code>where</code> (manual only). Lines are <code>edge:A→B</code> lines with <code>made</code> too (planned: drawn dotted; manual: solid, like <code>loaded_by</code>). Example: <code>{"key":"node:node_store","made":"planned","hint":"Keeps the boxes people and AI add by hand…","stage":"todo","priority":"high","tags":["planning","map"],"spec":"hand-added-boxes","by":"you"}</code>. Because notes are never part of a scan, they survive every rescan untouched; the view engine adds them as nodes after the scan (one step in <code>compute_view</code>, the way <code>Notes.loaders</code> adds loaded-by lines), so the viewer, slim text and Copy for AI all get them from one place. A rescan only compares names: a <code>made: planned</code> node whose name is now a real class id gets <code>built_now</code> (the section 5 banner); Merge just deletes the <code>made</code> field (and drops stage/priority/spec into the linked spec's history), so the existing notes attach to the real class with no copying; Keep both renames the key to <code>node:node_store (planned)</code>. Ids never collide with scanned ids, because a write is refused while a real class has that name. Lost-notes logic (section 10) ignores <code>made</code> nodes, since they're not supposed to be in the scan.</p>
+  </section>
+
+  <section class="card" id="qs">
+    <h2>Open questions</h2>
+    <ol class="qs" style="font-size:14px;padding-left:20px;margin:0">
+      <li><b>Stage on the box or on its spec?</b> The mock lets a planned box carry its own stage/priority (handy for small things with no spec). The other option: a planned box always links a spec and shows the spec's stage, so there's one stage per piece of work.</li>
+      <li><b>Merge on an exact name match: always ask, or merge silently</b> and just say so in the scan note? And should a close name (word matching, e.g. <code>NodeStore</code> for <code>node_store</code>) also offer the banner, or only "It's built: pick the class…"?</li>
+      <li><b>One system with loaded-by?</b> A manual line and a loaded-by line (9b) are both "a real link the scanner can't see". Fold loaded-by into manual lines (one style, one store), or keep loaded-by as its own thing?</li>
+      <li><b>Default for "Show planned work"</b>: Show (as mocked) or Hide until you switch it on? And remembered per project?</li>
+      <li><b>Can a planned box have planned functions</b> (rows you open with ▶, e.g. <code>node_store#add</code>) that tours and specs can link, or is that too much for now?</li>
+    </ol>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ico = id => `<svg class="ico"><use href="#${id}"/></svg>`;
+
+/* ---------- Sample data: real Coderstanding hints; planned boxes from DESIGN 7b ---------- */
+const W = 200, H = 112; // H = fallback; real sizes are read from the drawn boxes
+const N = {
+  issue_log: { x: 10, y: 30, made: "planned", draft: true, ds: "A list of bugs and to-dos found while reading the code, each tied to a class or line.",
+             stage: "idea", work: "low", imp: "medium", tags: ["issues", "cli"], spec: "Issue log", specStage: "idea", by: "AI · 2026-11-11" },
+  cli:     { x: 280, y: 30,  tc: ".py", ds: "Every command you type: scan, graph, node, specs…", ft: "●●● 113 functions" },
+  cards:   { x: 550, y: 30,  tc: ".py", ds: "Specs and notes cards: stages, priorities, links.", ft: "●●○ 42 functions" },
+  views:   { x: 10,  y: 250, tc: ".py", ds: "Works out what the map shows at each level and zoom.", ft: "●●● 123 functions" },
+  node_store: { x: 280, y: 250, made: "planned", ds: "Keeps the boxes people and AI add by hand (planned and manual), so they survive every rescan.",
+             stage: "todo", work: "high", imp: "high", tags: ["planning", "map"], spec: "Hand-added boxes", specStage: "todo", by: "you · 2026-11-11",
+             rules: "Never write to graph.json; hand-made boxes live in notes only." },
+  server:  { x: 550, y: 250, tc: ".py", ds: "The local helper: answers every question the viewer asks.", ft: "●●● 93 functions", tab: "start" },
+  notes:   { x: 10,  y: 460, tc: ".py", ds: "Your notes on classes and lines, by author, with AI drafts.", ft: "●●○ 37 functions" },
+  tours:   { x: 280, y: 460, tc: ".py", ds: "Guided walks through the code, step by step.", ft: "●●○ 66 functions" },
+  hosted:  { x: 550, y: 460, name: "hosted page", made: "manual", ds: "The page on your own server; it asks the helper on this PC for everything.", where: "deploy/hosted.json", by: "you · 2026-11-11" },
+};
+const E = [
+  ["cli", "server", "real", "The serve command starts the local helper"],
+  ["cli", "views", "real", "Commands ask the view engine what to print"],
+  ["cli", "cards", "real", "Commands for reading and writing specs and memos"],
+  ["server", "cards", "real", "The viewer's sidebar reads and saves specs and memos"],
+  ["server", "tours", "real", "The viewer's Tours tab reads and saves tours"],
+  ["tours", "views", "real", "Tour steps show the map focused on their targets"],
+  ["tours", "notes", "real", "Tour steps point at classes, functions and lines the same way notes do"],
+  ["views", "notes", "real", "Views use notes for levels, domains and hints"],
+  ["hosted", "server", "manual", "Asks the helper on this PC for everything it shows (added manually)"],
+  ["server", "node_store", "planned", "the Add box form saves here"],
+  ["views", "node_store", "planned", "adds hand-made boxes to every view"],
+  ["node_store", "notes", "planned", "stored as notes lines, so rescans never touch them"],
+  ["cli", "issue_log", "planned", "the issues command lists and files issues"],
+  ["issue_log", "views", "planned", "open issues show as marks on their classes"],
+];
+const nameOf = id => N[id].name || id;
+
+/* ---------- One box face for all kinds (the mock's version of fanout.js face) ---------- */
+function face(id, n, extra = "") {
+  const k = n.made;
+  const cls = ["face", k ? k + " x-" + k : "isreal", n.draft ? "draft" : "", extra].join(" ");
+  let tab = "";
+  if (k === "planned") tab = `<span class="tab">${ico("i-hammer")}${n.draft ? "Planned · AI draft" : "Planned"}</span>`;
+  else if (k === "manual") tab = `<span class="tab">${ico("i-hand")}Added manually</span>`;
+  else if (n.tab === "start") tab = `<span class="tab">Program start</span>`;
+  const hd = `<div class="hd">${k ? "" : '<span class="tri">▶</span>'}<span class="nm">${esc(n.name || id)}</span>${n.tc ? `<span class="tc">${n.tc}</span>` : ""}</div>`;
+  let chips = "";
+  if (k === "planned") chips = `<div class="chips"><span class="chip stage">${esc(n.stage)}</span>${n.work ? `<span class="chip">work: ${n.work}</span>` : ""}${n.imp ? `<span class="chip">imp: ${n.imp}</span>` : ""}${(n.tags || []).map(t => `<span class="chip tag">${esc(t)}</span>`).join("")}${n.spec ? `<span class="chip spec" title="${esc(n.spec)}">§ spec</span>` : ""}${n.draft ? '<span class="chip ai">AI draft</span>' : ""}</div>`;
+  const ft = k === "planned" ? "not in the code yet" : k === "manual" ? "where: " + esc(n.where || "unknown") : n.ft;
+  return `<div class="${cls}" data-id="${id}" tabindex="0" style="left:${n.x || 0}px;top:${n.y || 0}px">${tab}${hd}<div class="ds">${esc(n.ds)}</div>${chips}<div class="ft">${ft}</div></div>`;
+}
+
+/* ---------- Map ---------- */
+const map = $("#map"), svg = $("#lines");
+const ctr = n => [n.x + (n.w || W) / 2, n.y + (n.h || H) / 2];
+const clip = (a, b) => { // point on a's border toward b
+  const [ax, ay] = ctr(a), [bx, by] = ctr(b), dx = bx - ax, dy = by - ay;
+  const t = Math.min(((a.w || W) / 2 + 5) / Math.abs(dx || 1e-9), ((a.h || H) / 2 + 9) / Math.abs(dy || 1e-9));
+  return [ax + dx * t, ay + dy * t];
+};
+function drawMap() {
+  map.querySelectorAll(".face").forEach(f => f.remove());
+  map.insertAdjacentHTML("beforeend", Object.entries(N).map(([id, n]) => face(id, n)).join(""));
+  map.querySelectorAll(".face").forEach(f => { const n = N[f.dataset.id]; n.w = f.offsetWidth; n.h = f.offsetHeight; });
+  const marks = { real: "a", derived: "d", planned: "p", manual: "m" };
+  let s = `<defs>${Object.values(marks).map(m => `<marker id="ah-${m}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah-${m}" d="M0 0L10 5L0 10z"/></marker>`).join("")}</defs>`;
+  for (const [a, b, k, hint] of E) {
+    const [x1, y1] = clip(N[a], N[b]), [x2, y2] = clip(N[b], N[a]);
+    const touchesPlan = k === "planned";
+    s += `<g class="${touchesPlan ? "x-planned" : ""}" data-a="${a}" data-b="${b}"><path class="e ${k}" d="M${x1} ${y1}L${x2} ${y2}" marker-end="url(#ah-${marks[k]})"><title>${esc(nameOf(a))} → ${esc(nameOf(b))}: ${esc(hint)}</title></path>`;
+    if (k === "planned" || k === "manual") {
+      const mx = (x1 + x2) / 2, my = (y1 + y2) / 2, c = k === "planned" ? "p" : "m";
+      s += `<g class="mid ${c}"><circle cx="${mx}" cy="${my}" r="10"/><use href="#${k === "planned" ? "i-hammer" : "i-hand"}" x="${mx - 6.5}" y="${my - 6.5}" width="13" height="13" fill="currentColor"/><title>${esc(hint)}</title></g>`;
+    }
+    s += "</g>";
+  }
+  svg.innerHTML = s;
+  // "near": real classes with a planned line, kept half-visible in Only planned work
+  const near = new Set(E.filter(e => e[2] === "planned").flatMap(e => [e[0], e[1]]));
+  map.querySelectorAll(".face.isreal").forEach(f => f.classList.toggle("near", near.has(f.dataset.id)));
+}
+
+/* ---------- Details panel ---------- */
+const lines = (id, dir) => E.filter(e => (dir === "in" ? e[1] : e[0]) === id).map(e => ({ other: dir === "in" ? e[0] : e[1], k: e[2], hint: e[3] }));
+const li = l => `<li><b>${esc(nameOf(l.other))}</b>${N[l.other].made === "planned" ? ` <span class="chip planned">${ico("i-hammer")}</span>` : ""} — ${esc(l.hint)}${l.k === "planned" ? ' <span class="chip planned">planned</span>' : l.k === "manual" ? ' <span class="chip manual">manual</span>' : ""}</li>`;
+const sel = (opts, cur, pre = "") => `<select>${opts.map(o => `<option${o === cur ? " selected" : ""}>${pre}${o}</option>`).join("")}</select>`;
+function panel(id) {
+  const n = N[id], k = n.made, ins = lines(id, "in"), outs = lines(id, "out");
+  let h = "";
+  if (k === "planned") {
+    h += `<h4>${ico("i-hammer")}${esc(nameOf(id))} <span class="chip planned">Planned</span>${n.draft ? '<span class="chip ai">AI draft</span>' : ""}</h4>`;
+    h += `<div class="where">level 1 · not in the code yet</div>`;
+    h += `<div class="warnbox">${ico("i-hammer")} <b>Not built yet.</b> There is no file to open; this box is a plan.</div>`;
+    h += `<p class="pl">${esc(n.ds)}</p>`;
+    h += `<div class="grp">Planned users (${ins.length})</div><ul>${ins.map(li).join("") || '<li class="muted">none yet</li>'}</ul>`;
+    h += `<div class="grp">Will use (${outs.length})</div><ul>${outs.map(li).join("") || '<li class="muted">none yet</li>'}</ul>`;
+    h += `<div class="grp">Plan</div>`;
+    h += `<div class="row"><span class="k">Stage</span>${sel(["idea", "todo", "in-progress", "review", "dropped"], n.stage)}</div>`;
+    h += `<div class="row"><span class="k">Work</span>${sel(["—", "high", "medium", "low"], n.work)}</div><div class="row"><span class="k">Importance</span>${sel(["—", "high", "medium", "low"], n.imp)}</div>`;
+    h += `<div class="row"><span class="k">Tags</span>${n.tags.map(t => `<span class="chip tag">${esc(t)}</span>`).join("")}<button class="btn sm" type="button">+</button></div>`;
+    h += `<div class="row"><span class="k">Spec</span><a href="#s3">§ ${esc(n.spec)}</a> <span class="chip stage">${esc(n.specStage)}</span></div>`;
+    if (n.rules) h += `<div class="row"><span class="k">Rules</span><span>${esc(n.rules)}</span></div>`;
+    h += `<div class="by" style="margin-top:8px">Added by ${esc(n.by)}${n.draft ? " — an AI draft until someone accepts it" : ""}</div>`;
+    h += `<div class="acts">${n.draft ? '<button class="btn primary sm" type="button">Accept</button>' : ""}<button class="btn sm" type="button">Edit</button><button class="btn sm danger" type="button">Delete</button><button class="btn sm" type="button">${ico("i-merge")} It's built: pick the class…</button></div>`;
+  } else if (k === "manual") {
+    h += `<h4>${ico("i-hand")}${esc(nameOf(id))} <span class="chip manual">Added manually</span></h4>`;
+    h += `<div class="where">level 1 · real, but the scanner can't see it</div>`;
+    h += `<div class="warnbox m">${ico("i-hand")} <b>Added by hand.</b> It exists, but outside the scanned code: <code>${esc(n.where)}</code> (deployed on its own server).</div>`;
+    h += `<p class="pl">${esc(n.ds)}</p>`;
+    h += `<div class="grp">Uses (${outs.length})</div><ul>${outs.map(li).join("")}</ul>`;
+    h += `<div class="row" style="margin-top:8px"><span class="k">Where</span><code>${esc(n.where)}</code> <a href="#s1">Open in editor</a></div>`;
+    h += `<div class="by" style="margin-top:8px">Added by ${esc(n.by)}</div>`;
+    h += `<div class="acts"><button class="btn sm" type="button">Edit</button><button class="btn sm danger" type="button">Delete</button></div>`;
+  } else {
+    h += `<h4>${esc(id)}</h4><div class="where">level 1 · ${esc(n.ft.replace(/^[●○]+ /, ""))}</div><p class="pl">${esc(n.ds)}</p>`;
+    h += `<div class="grp">Used by (${ins.length})</div><ul>${ins.map(li).join("") || '<li class="muted">nothing</li>'}</ul>`;
+    h += `<div class="grp">Uses (${outs.length})</div><ul>${outs.map(li).join("") || '<li class="muted">nothing</li>'}</ul>`;
+    const planned = [...ins, ...outs].filter(l => l.k === "planned").length;
+    if (planned) h += `<p class="by" style="margin-top:8px">${ico("i-hammer")} ${planned} planned line${planned > 1 ? "s" : ""} touch this class.</p>`;
+  }
+  $("#panel").innerHTML = h;
+  map.querySelectorAll(".face").forEach(f => f.classList.toggle("sel", f.dataset.id === id));
+}
+map.addEventListener("click", ev => { const f = ev.target.closest(".face"); if (f) panel(f.dataset.id); });
+map.addEventListener("keydown", ev => { const f = ev.target.closest(".face"); if (f && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); panel(f.dataset.id); } });
+
+/* ---------- Plan filter (section 4) ---------- */
+function setPlan(v) {
+  map.classList.remove("plan-hide", "plan-show", "plan-only");
+  map.classList.add("plan-" + v);
+  $("#planSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+}
+$("#planSeg").addEventListener("click", ev => { const b = ev.target.closest("button"); if (b) setPlan(b.dataset.v); });
+$("#planCount").addEventListener("click", () => setPlan(map.classList.contains("plan-only") ? "show" : "only"));
+
+/* ---------- Add box form + live preview (section 2) ---------- */
+let kind = "planned";
+function preview() {
+  const tags = $("#fTags").value.split(",").map(t => t.trim()).filter(Boolean);
+  const n = kind === "planned"
+    ? { made: "planned", name: $("#fName").value || "Name", ds: $("#fFor").value, stage: $("#fStage").value, work: $("#fWork").value.replace("work: ", ""), imp: $("#fImp").value.replace("imp: ", ""), tags, spec: $("#fSpec").value }
+    : { made: "manual", name: $("#fName").value || "Name", ds: $("#fFor").value, where: $("#fWhere").value };
+  $("#preview").innerHTML = face("prev", n);
+}
+$("#kindSeg").addEventListener("click", ev => {
+  const b = ev.target.closest("button"); if (!b) return;
+  kind = b.dataset.v;
+  $("#kindSeg").querySelectorAll("button").forEach(x => x.setAttribute("aria-pressed", String(x === b)));
+  document.querySelectorAll(".mOnly").forEach(e => e.hidden = kind !== "manual");
+  document.querySelectorAll(".pOnly").forEach(e => e.hidden = kind !== "planned");
+  $("#kindHelp").textContent = kind === "planned" ? "Something we intend to build. It is not in the code yet." : "Real, but the scanner can't see it: loaded by name, generated code, an outside service.";
+  if (kind === "manual" && $("#fName").value === "node_store") { $("#fName").value = "hosted page"; $("#fFor").value = "The page on your own server; it asks the helper on this PC for everything."; }
+  preview();
+});
+$("#addForm").addEventListener("input", preview);
+
+/* ---------- Built now (section 5) ---------- */
+const realD = { tc: ".py", ds: "No description yet", ft: "●○○ 6 functions" };
+function builtNow(v) {
+  $("#bnSeg").querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.v === v)));
+  $("#bnBanner").hidden = v !== "before";
+  const P = N.node_store;
+  let html = "", ch = [];
+  if (v === "before") {
+    html = `<div class="col">${face("node_store", { ...P, x: 0, y: 0 })}<span class="arrowtxt">planned box (notes, tags, spec, 3 planned lines)</span></div>
+            <div class="col">${face("node_store", { ...realD, x: 0, y: 0 })}<span class="arrowtxt">new real class from the scan (no notes)</span></div>`;
+    ch = ["Both show until you choose; the planned one keeps its hammer.", "The scan found <code>server → node_store</code> and <code>node_store → notes</code> in the code; <code>views → node_store</code> is not there yet."];
+  } else if (v === "after") {
+    const merged = { tc: ".py", ds: P.ds, ft: "●○○ 6 functions · #planning #map · §1" };
+    html = `<div class="col">${face("node_store", { ...merged, x: 0, y: 0 })}<span class="arrowtxt">one real class, your notes on it</span></div>`;
+    ch = ["Hint, description, tags, rules and the spec link move to the real class (the notes key is the same name, so nothing is copied).",
+          "<code>server → node_store</code> and <code>node_store → notes</code> are in the code now: those planned lines are dropped, their hints move to the real lines.",
+          "<code>views ..> node_store</code> is not in the code yet: it stays a dotted planned line on the real class (still counted in the toolbar).",
+          "Stage and priorities leave the box (a built class has a status, not a stage); the linked spec asks: <i>set stage to review?</i> [Yes] [No]."];
+  } else {
+    html = `<div class="col">${face("node_store (planned)", { ...P, x: 0, y: 0 })}<span class="arrowtxt">renamed, still a plan</span></div>
+            <div class="col">${face("node_store", { ...realD, x: 0, y: 0 })}<span class="arrowtxt">real class, untouched</span></div>`;
+    ch = ["The planned box is renamed <code>node_store (planned)</code> so the names no longer match; the banner won't come back.", "Use this when the real class is something else with the same name."];
+  }
+  $("#bnArea").innerHTML = html;
+  $("#bnChanges").innerHTML = ch.map(c => `<li>${c}</li>`).join("");
+}
+$("#bnSeg").addEventListener("click", ev => { const b = ev.target.closest("button"); if (b) builtNow(b.dataset.v); });
+$("#bnBanner").addEventListener("click", ev => { const b = ev.target.closest("[data-go]"); if (b) builtNow(b.dataset.go); });
+
+/* ---------- Theme ---------- */
+(() => {
+  const order = ["auto", "light", "dark"], btn = $("#theme");
+  let i = 0;
+  const q = new URLSearchParams(location.search);
+  if (order.includes(q.get("theme"))) i = order.indexOf(q.get("theme"));
+  const set = () => { const t = order[i]; if (t === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", t); btn.textContent = "Theme: " + t; };
+  btn.onclick = () => { i = (i + 1) % order.length; set(); };
+  set();
+  drawMap(); panel(q.get("select") || "node_store"); preview(); builtNow(q.get("built") || "before");
+  if (q.get("plan")) setPlan(q.get("plan"));
+})();
+</script>
+</body>
+</html>

@@ -4,17 +4,26 @@
 // The hosted page is only a shell: its hosted.json names the local helper
 // (`coderstanding serve` on this PC) and every API call goes there; without a helper it shows how
 // to start one. apiBase() is the one place that picks where a request goes.
+// The helper runs only while a page uses it (serve --idle-exit): the page sends a heartbeat, and
+// when the helper is gone (a hidden tab's throttled timers let it quit) it probes again, which
+// wakes a Linux socket-activated helper, or shows the Start helper link (coderstanding://start).
 (function () {
 const LAST_KEY = "coderstanding-last-app";
 const STATE_KEY = "coderstanding-app-state:";
 const POLL_MS = 700;
-const PROBE_MS = 1500;      // the local helper answers fast or not at all
+const PROBE_MS = 1500;      // a running helper answers fast
+const COLD_PROBE_MS = 8000; // one retry: a helper the probe itself starts (systemd socket) needs longer
+const HEARTBEAT_MS = 3000;  // the helper quits 10 s after the last call from a page
+const START_POLL_MS = 1000, START_WAIT_MS = 15000;  // after "Start helper"
+const START_URL = "coderstanding://start";
 const HOSTED_LABEL = "Running on this PC";
+const NOT_INSTALLED_HTML = "Not installed yet? Run <code>coderstanding helper install</code> once "
+  + "(in a Coderstanding checkout: <code>scripts/install-helper.sh</code>).";
 const NO_HELPER_HTML = "<strong>Open this page on your PC with Coderstanding running.</strong><br>"
-  + "Your maps stay on your PC; this page talks to it. Start the helper with "
-  + "<code>systemctl --user start coderstanding-helper</code> (or the tray icon), then reload. "
-  + "If the browser asks to reach local devices, allow it.<br>"
-  + "Not installed yet? Run <code>scripts/install-helper.sh</code> once in the Coderstanding repo.";
+  + "Your maps stay on your PC; this page talks to the helper there, which runs only while a page uses it.<br>"
+  + `<a class="btn" href="${START_URL}" data-act="start-helper">Start helper</a> `
+  + "<span data-start-status></span><br>"
+  + "If the browser asks to open the link or to reach local devices, allow it.<br>" + NOT_INSTALLED_HTML;
 const NO_APPS_HTML = "No projects registered. Use “Projects… → Add project…” above, or "
   + "<code>coderstanding add &lt;name&gt; &lt;folder&gt;</code>.";
 
@@ -57,10 +66,23 @@ function apiBase(hosted, helper) {
   return hosted ? helper : "";
 }
 
-const CoderApps = { ago, optionText, chooseApp, stepApp, apiBase, HOSTED_LABEL, bytesText, factsText,
+/** VS Code link to a line of a file (`root` = the repo's absolute folder on the helper's PC). */
+function editorUrl(root, path, line) {
+  return `vscode://file${encodeURI(`${root}/${path}`)}:${line || 1}`;
+}
+
+/** Web link to a line of a file at the scanned commit; `webBase` = meta.source.web (null: no remote). */
+function webUrl(webBase, path, line) {
+  return webBase ? `${webBase}/${encodeURI(path)}${line ? `#L${line}` : ""}` : null;
+}
+
+const CoderApps = { ago, optionText, chooseApp, stepApp, apiBase, editorUrl, webUrl, HOSTED_LABEL, bytesText, factsText,
   current: null, list: [],
   hosted: false,    // this page came from the hosted shell (hosted.json), not from a local serve
   helper: null,     // the local helper's URL once it answered (hosted page only)
+  target: null,     // the helper hosted.json names, answering or not (hosted page only)
+  lost: false,      // the helper stopped answering; the start UI is showing
+  onLost: null,     // app.js sets this: shows the start UI (HTML)
   /** app.js sets this: returns the state to keep when leaving an app (level, crumbs, camera). */
   getState: () => null };
 
@@ -75,11 +97,18 @@ CoderApps.url = (path) => {
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
-/** fetch an /api/ path as JSON (throws the server's error). */
+/** fetch an /api/ path as JSON (throws the server's error). A network failure (helper gone)
+ * re-probes and retries once when it is back, else shows the start UI and throws. */
 CoderApps.request = async (path, options = {}) => {
-  const response = await fetch(CoderApps.url(path), options);
+  let response;
+  try {
+    response = await fetch(CoderApps.url(path), options);
+  } catch (error) {
+    if (!await CoderApps.recover()) throw error;
+    response = await fetch(CoderApps.url(path), options);
+  }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error || response.statusText);
+  if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { data });
   return data;
 };
 
@@ -91,11 +120,71 @@ async function hostedHelper() {
   } catch { return null; }
 }
 
-/** True when the local helper at `url` answers (its app listing). */
-async function probeHelper(url) {
+/** True when the local helper at `url` answers (its app listing; "" = this server). */
+async function probeHelper(url, ms = PROBE_MS) {
   try {
-    return (await fetch(`${url}/api/apps`, { signal: AbortSignal.timeout(PROBE_MS) })).ok;
+    return (await fetch(`${url}/api/apps`, { cache: "no-store", signal: AbortSignal.timeout(ms) })).ok;
   } catch { return false; }
+}
+
+/** Probe, then once more with a long timeout (a cold start through the systemd socket). */
+async function findHelper(url) {
+  return await probeHelper(url) || await probeHelper(url, COLD_PROBE_MS);
+}
+
+/** Where the helper is: the hosted page's configured helper, else this server (""). */
+const helperUrl = () => (CoderApps.hosted ? CoderApps.target : "");
+
+let recovering = null;
+/** The helper did not answer (a failed call, or the tab came back): probe again; when nothing
+ * answers, stop the heartbeat and show the start UI (CoderApps.onLost). Resolves true when up. */
+CoderApps.recover = () => {
+  recovering ||= findHelper(helperUrl()).then((up) => {
+    recovering = null;
+    if (!up && !CoderApps.lost) {
+      CoderApps.lost = true;
+      clearInterval(heartbeatTimer);
+      CoderApps.onLost?.(NO_HELPER_HTML);
+    }
+    return up;
+  });
+  return recovering;
+};
+
+let heartbeatTimer = null;
+/** Tell the helper a page is open (it exits 10 s after the last page call). */
+function startHeartbeat() {
+  const beat = () => fetch(`${helperUrl()}/api/alive`, { cache: "no-store" })
+    .then((response) => { if (!response.ok) throw new Error(response.statusText); })
+    .catch(() => CoderApps.recover());
+  heartbeatTimer = setInterval(beat, HEARTBEAT_MS);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && !CoderApps.lost) beat();  // timers were throttled
+  });
+}
+
+/** "Start helper" (the coderstanding:// link opens it): poll until the helper answers, then load. */
+async function waitForStart(status, sleepMs = sleep, probe = probeHelper) {
+  status.textContent = "Starting the helper…";
+  for (let waited = 0; waited < START_WAIT_MS; waited += START_POLL_MS) {
+    if (await probe(helperUrl())) { location.reload(); return true; }
+    await sleepMs(START_POLL_MS);
+  }
+  status.textContent = "Nothing answered yet. Not installed? See below.";
+  return false;
+}
+CoderApps.waitForStart = waitForStart;
+
+if (typeof document !== "undefined") {
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest?.("[data-act=start-helper]");
+    if (!link) return;  // the browser opens the link itself; we only wait for the helper
+    const status = link.parentElement.querySelector("[data-start-status]");
+    if (status && !status.dataset.waiting) {
+      status.dataset.waiting = "1";
+      waitForStart(status).finally(() => { delete status.dataset.waiting; });
+    }
+  });
 }
 
 /** The state saved when this app was left; handed out once. */
@@ -376,17 +465,19 @@ function showHosted() {
 }
 
 /** What the page shows when start() found nothing to open (HTML). */
-CoderApps.emptyHtml = () => (CoderApps.hosted && !CoderApps.helper ? NO_HELPER_HTML : NO_APPS_HTML);
+CoderApps.emptyHtml = () => ((CoderApps.hosted && !CoderApps.helper) || CoderApps.lost ? NO_HELPER_HTML : NO_APPS_HTML);
 
 /** Pick the app (before anything else loads), build the toolbar. False: no apps at all. */
 CoderApps.start = async () => {
   const helper = await hostedHelper();
   CoderApps.hosted = Boolean(helper);
+  CoderApps.target = helper;
   if (helper) {
-    CoderApps.helper = await probeHelper(helper) ? helper : null;
+    CoderApps.helper = await findHelper(helper) ? helper : null;
     if (!CoderApps.helper) return false;  // nothing to show: emptyHtml() says how to start one
   }
   const listing = await fetchApps();
+  startHeartbeat();
   CoderApps.list = listing.apps;
   const names = listing.apps.map((app) => app.name);
   CoderApps.current = chooseApp(names, { hash: decodeURIComponent(location.hash.slice(1)),

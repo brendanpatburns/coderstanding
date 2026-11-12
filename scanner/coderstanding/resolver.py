@@ -45,6 +45,10 @@ class Resolution:
     id: str = ""  # node id, "" when the target is outside the repo
     label: str = ""  # outside name, used when id is ""
     unsure: bool = False
+    basic: bool = False  # a basic type of the language: no edge, nothing unresolved
+
+
+BASIC = Resolution(basic=True)
 
 
 @dataclass
@@ -62,6 +66,8 @@ class Resolver:
     _exported_cache: dict = field(default_factory=dict)  # (node id, member) -> id or None
 
     def resolve(self, target, parsed, scope="", use_aliases=True):
+        if target.basic:
+            return BASIC
         resolution = self._resolve_base(target, parsed, scope or target.scope, use_aliases)
         if target.member and resolution.id:
             return self._with_member(resolution, target.member)
@@ -263,21 +269,36 @@ def count_lines(path):
     return data.count(b"\n") + (1 if data and not data.endswith(b"\n") else 0)
 
 
+def lines_outside(file_lines, spans):
+    """Lines of a file not inside any (first, last) span; nested spans count once."""
+    covered, last_end = 0, 0
+    for first, last in sorted(spans):
+        first = max(first, last_end + 1)
+        if last >= first:
+            covered += last - first + 1
+            last_end = last
+    return max(file_lines - covered, 0)
+
+
 def add_declarations(graph, resolver, parsed):
-    file_lines = None  # read once, only if a declaration has no span of its own
+    """Sizes: a type with an end line gets its own span; one without (a module, a scene) gets
+    its file's lines that lie outside the spans of the file's other types, so nothing is
+    counted twice."""
+    file_lines = 0  # read once, only if a declaration has no span of its own
+    spans = [(d.line, d.end_line) for d in parsed.result.declarations if d.end_line]
     for decl in parsed.result.declarations:
         if decl.end_line:
             lines, span = decl.end_line - decl.line + 1, True
         else:
-            if file_lines is None:
-                file_lines = count_lines(Path(resolver.root) / parsed.rel_path)
-            lines, span = file_lines, False
+            file_lines = file_lines or count_lines(Path(resolver.root) / parsed.rel_path)
+            lines, span = lines_outside(file_lines, spans), False
         graph.add_node(Node(
             id=decl.id, name=decl.name, kind=decl.kind,
             lang=decl.lang or parsed.module.name, file=parsed.rel_path, line=decl.line,
             flags=list(decl.flags), base=decl.base, namespace=decl.namespace,
             members=list(decl.members), imports=list(parsed.result.imports),
-            lines=lines, span=span, doc=decl.doc,
+            lines=lines, span=span, file_lines=0 if span else file_lines, doc=decl.doc,
+            lookups=[vars(l).copy() for l in parsed.result.lookups] if decl.file_node else [],
         ))
         if decl.file_node:
             resolver.file_nodes.setdefault(parsed.rel_path, decl.id)
@@ -290,6 +311,8 @@ def apply_marks(graph, resolver, parsed):
         if found.id:
             node = graph.nodes[found.id]
             node.flags = node.flags + [f for f in mark.flags if f not in node.flags]
+            if mark.global_name and (not node.global_name or mark.global_kind == "autoload"):
+                node.global_name, node.global_kind = mark.global_name, mark.global_kind
 
 
 def add_ref(graph, resolver, parsed, ref):
@@ -302,6 +325,8 @@ def add_ref(graph, resolver, parsed, ref):
             return
     else:
         found = resolver.resolve(ref.to, parsed, ref.scope)
+    if found.basic:
+        return
     if found.id == ref.from_id and ref.kind in STRUCT_KINDS:
         return  # a class cannot extend itself; other self references are internal calls
     location = Location(parsed.rel_path, ref.line)

@@ -74,7 +74,7 @@ print("serve ok:", base)
 PY
 kill "$server_pid"; server_pid=""
 
-"$cs" helper install --dry-run --no-tray
+"$cs" helper install --dry-run
 "$cs" hook >/dev/null
 "$cs" guide | grep -q "guide for AI coding agents"
 "$cs" skill install --dest "$work/skill" --yes

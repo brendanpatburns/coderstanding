@@ -16,7 +16,7 @@ def test_size_span_and_file_lines(tmp_path):
         "a.fk": "type a module\ntype a.Big class\nend 9\n\n\n\n\n\n\n\n",
         "b.fk": "type B class\n\n\n"})
     assert (graph.nodes["a.Big"].lines, graph.nodes["a.Big"].span) == (8, True)
-    assert (graph.nodes["a"].lines, graph.nodes["a"].span) == (10, False)
+    assert (graph.nodes["a"].lines, graph.nodes["a"].span) == (2, False)
     assert (graph.nodes["B"].lines, graph.nodes["B"].span) == (3, False)
 
 
@@ -71,7 +71,7 @@ def test_unsure_and_unresolved_counts():
         graph.add_node(Node(node_id, node_id, "class", "python", "a.py", flags=["entry"]))
     graph.add_edge(Edge("A", "B", "dependency", unsure=True))
     node = graph.nodes["A"]
-    for label in ("mystery.thing", "json", "pathlib.Path"):  # stdlib names do not count
+    for label in ("mystery.thing", "json", "pathlib.Path", "bpy", "a/b.glb"):  # stdlib / outside do not count
         node.add_external(Edge("A", label, "dependency", at=[Location("a.py", 1), Location("a.py", 2)]))
     check_graph(graph)
     assert graph.nodes["A"].warnings == [{"kind": "unsure", "count": 1},
@@ -173,3 +173,15 @@ def test_cycle_members_dropped_and_line_gone_below_two():
     notes.rules = [parse_rule("src/ui/**", ["cycle"])]
     assert warnings_by_kind(graph, notes)["cycle"] == []  # only C left: no cycle
     assert len(warnings_by_kind(graph, notes, show_ignored=True)["cycle"]) == 3
+
+
+def test_parse_error_warning_lists_the_file_and_line(tmp_path):
+    from coderstanding.languages.python import PythonModule
+    from coderstanding.scan import scan_repo
+    (tmp_path / "broken.py").write_text("class A:\n    def f(self):\n        x = (\n")
+    (tmp_path / "fine.py").write_text("class B:\n    pass\n")
+    graph = scan_repo(tmp_path, modules=[PythonModule()])
+    assert graph.diagnostics["parse_errors"] == {"broken.py": 1}
+    assert [w for w in graph.nodes["broken"].warnings if w["kind"] == "parse-error"] == [
+        {"kind": "parse-error", "names": ["broken.py:1"], "count": 1}]
+    assert "parse-error" not in kinds(graph, "fine")

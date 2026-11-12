@@ -10,7 +10,7 @@ NODE_KINDS = ("class", "interface", "struct", "record", "enum", "script", "inner
 APP_START_FLAGS = ("godot-main", "godot-main-scene", "autoload", "program-main")
 TOOL_FLAGS = ("script-main",)
 ENTRY_MECHANISMS = APP_START_FLAGS + TOOL_FLAGS
-NODE_FLAGS = ("abstract", "static", "singleton", "partial", "entry", "test", "hub") + ENTRY_MECHANISMS
+NODE_FLAGS = ("abstract", "static", "singleton", "partial", "entry", "test", "hub", "library") + ENTRY_MECHANISMS
 EDGE_KINDS = ("generalization", "realization", "composition", "association",
               "dependency", "signal")
 HOLDING_KINDS = ("composition", "association")
@@ -23,6 +23,7 @@ SIGNAL_ARROW = " → "  # a signal call is written `signal → handler`
 EMIT_DETAIL = "emit"  # Ref.detail of `sig.emit()` / `EmitSignal(..)`; the call is the signal name
 LAMBDA_HANDLER = "lambda"  # a signal handler written inline
 VARIABLE_HANDLER = "<callable>"  # a handler held in a variable: its function is unknown
+GLOBAL_KINDS = ("autoload", "class_name", "global-class")  # how a global is reached by name
 ANY_SIGNAL = "*"  # signal name of an emit / connect whose name is not a literal
 
 
@@ -85,7 +86,27 @@ class Member:
     type: str = ""  # type name as written
     line: int = 0
     end: int = 0  # last line of a function (0 = unknown)
-    rpc: bool = False  # a GDScript `@rpc` function: other peers may call it (DESIGN 8)
+    rpc: str = ""  # remote-call mode words of an `@rpc` function ("any_peer call_local"), "" = none (DESIGN 8)
+    stub: bool = False  # a function with no real body yet (languages/stubs.py, DESIGN 7f)
+    made: str = ""  # "planned": a planned function row from notes (planned.py; never in graph.json)
+    public: bool = True  # visible outside the class; set by `is_public` (False hides it from Properties)
+
+
+def is_public(name, lang, modifiers=()):
+    """Whether a member is public (DESIGN 12c Properties): the one place for the rule.
+    C#/Java need `public`; Kotlin is public unless private/protected/internal; GDScript and
+    Python hide `_name`; JS/TS hide `#name`, `_name` and private/protected. C++ readers do not
+    track access sections, so nothing is hidden there (any other language: public)."""
+    words = set(modifiers)
+    if lang in ("csharp", "java"):
+        return "public" in words
+    if lang == "kotlin":
+        return not words & {"private", "protected", "internal"}
+    if lang in ("python", "gdscript"):
+        return not name.startswith("_")
+    if lang in ("javascript", "typescript"):
+        return not name.startswith(("#", "_")) and not words & {"private", "protected"}
+    return True
 
 
 @dataclass
@@ -163,23 +184,36 @@ class Node:
     namespace: str = ""
     level: int = 0
     members: list = field(default_factory=list)
-    lines: int = 0  # size: the type's own line span, else (span False) its file's lines
+    lines: int = 0  # size: the type's own line span, else (span False) the file's lines outside its types
     span: bool = False
+    file_lines: int = 0  # the whole file's lines, set only when span is False (node_span)
     doc: str = ""  # the code's own header comment (short), a default description
+    file_kind: str = ""  # filekinds.py: Code, Scene, Configuration, Data, ...; "" without a file
     hub_degree: int = 0  # levels.py: neighbour count, set with the `hub` flag on promoted classes
     warnings: list = field(default_factory=list)  # checks.py: [{"kind": ..., ...}]
     external_refs: dict = field(default_factory=dict)  # (name, kind) -> Edge without a target node
     # A communications node's facts (stack.py): {"type", "role", "owner", "field", "messages", "at"}.
     comm: dict = field(default_factory=dict)
+    # A global (Godot autoload, class_name script, C# [GlobalClass]): the name code uses and how
+    # it is reached (GLOBAL_KINDS). Set by a reader's Mark.
+    global_name: str = ""
+    global_kind: str = ""
+    # Scene-tree lookups of globals in this file's code: [{"name", "form", "line"}] (file node only).
+    lookups: list = field(default_factory=list)
     # The declaring files' imports (C# usings), so the stack reader can map outside names to
     # packages. Scan-time only: not written to graph.json.
     imports: list = field(default_factory=list, compare=False)
+    # "planned" | "manual": a hand-made node from notes (planned.py, DESIGN 7f); never in graph.json.
+    made: str = ""
 
     def absorb(self, other):
         """Merge another declaration of the same id (partial class) into this node."""
         if (other.file, other.line) < (self.file, self.line):
             self.file, self.line = other.file, other.line
         add_unique(self.flags, other.flags)
+        self.global_name = self.global_name or other.global_name
+        self.global_kind = self.global_kind or other.global_kind
+        self.lookups.extend(other.lookups)
         self.base = self.base or other.base
         self.doc = self.doc or other.doc
         self.namespace = self.namespace or other.namespace
@@ -187,6 +221,7 @@ class Node:
         self.comm = self.comm or other.comm
         self.lines += other.lines  # partial class: its parts add up
         self.span = self.span and other.span
+        self.file_lines = max(self.file_lines, other.file_lines)
         add_unique(self.imports, other.imports)
         for edge in other.external_refs.values():
             self.add_external(edge)
@@ -217,6 +252,8 @@ class Graph:
     fingerprints: dict = field(default_factory=dict)  # note key -> code hash (fingerprints.py)
     diagnostics: dict = field(default_factory=dict)  # why things are unconnected (diagnose.py)
     path_misses: list = field(default_factory=list)  # resolver.PathMiss, scan only (not saved)
+    names: dict = field(default_factory=dict)  # names index (textindex.py), saved beside graph.json
+    library_kinds: dict = field(default_factory=dict)  # library.py: marked node id -> its kind before (in memory only)
 
     def add_node(self, node):
         existing = self.nodes.get(node.id)

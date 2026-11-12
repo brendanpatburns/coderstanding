@@ -11,7 +11,7 @@ import tree_sitter_html
 
 from coderstanding.language import Declaration, FileResult, LanguageModule, Ref, Target, register
 
-from .ts_util import children_of_type, descendants, first_child_of_type, line, make_parser, text
+from .ts_util import children_of_type, descendants, first_child_of_type, first_error_line, line, make_parser, text
 
 PARSER = make_parser(tree_sitter_html.language())
 LINK_ATTRIBUTES = {"script": "src", "link": "href"}
@@ -62,6 +62,7 @@ class HtmlModule(LanguageModule):
             module_id, posixpath.basename(module_id), "module", 1,
             namespace=posixpath.dirname(module_id), file_node=True)])
         root = PARSER.parse(ctx.read_bytes()).root_node
+        result.parse_error_line = first_error_line(root)
         for tag in descendants(root):
             if tag.type in ("start_tag", "self_closing_tag"):
                 rel = repo_path(ctx, linked_path(tag))

@@ -71,7 +71,7 @@ def test_view_args_parse_zoom_and_toggles():
                       "zoom_from": ["A"], "zoom_to": ["B"], "zoom_level": ["2"],
                       "via": ["X", "Y"]})
     assert args["level"] == 2 and args["view"] == "concrete"
-    assert args["show"] == {"external": True, "comm": True, "test": False, "hide_types": [".gd", ".tscn"], "hide_kinds": []}
+    assert args["show"] == {"external": True, "comm": True, "test": False, "hide_types": [".gd", ".tscn"], "hide_file_kinds": [], "hide_kinds": [], "tags": [], "hide_tags": [], "planned": True}
     assert args["zoom"] == {"from": "A", "to": "B", "level": 2, "via": ["X", "Y"]}
     assert view_args({})["zoom"] is None
 
@@ -239,7 +239,7 @@ def test_put_status_tags_rules(server):
 def test_meta_lists_statuses_and_warning_help(server):
     meta = get(server[0], "/api/meta")
     assert meta["statuses"] == ["stable", "wip", "fragile", "deprecated"]
-    assert set(meta["warning_help"]) == {"unused", "god", "cycle", "unsure", "unresolved", "layer", "signal-unconnected", "signal-unemitted", "bad-handler", "autoload-unused"}
+    assert set(meta["warning_help"]) == {"unused", "god", "cycle", "unsure", "unresolved", "layer", "signal-unconnected", "signal-unemitted", "bad-handler", "autoload-unused", "parse-error"}
 
 
 def test_view_test_param(tmp_path):

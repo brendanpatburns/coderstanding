@@ -79,7 +79,7 @@ def test_godot_sockets_by_field_and_by_code(tmp_path):
     graph = scan(tmp_path, {"peer.gd": GD})
     nodes = comm_nodes(graph)
     assert set(nodes) == {"comm:Peer#_server", "comm:Peer#_ws", "comm:Peer#_peer",
-                          "comm:Peer@HTTPRequest"}  # is / as / bare locals / constants: none
+                          "comm:Peer@HTTPRequest", "comm:Peer#(not sent)"}  # is / as / bare locals / constants: none
     server = nodes["comm:Peer#_server"]
     assert (server.kind, server.namespace, server.file) == ("external", "comm", "")
     assert server.name == "_server · TCPServer (listens)"

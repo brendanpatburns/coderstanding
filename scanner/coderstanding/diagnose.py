@@ -8,6 +8,7 @@ adds short anonymised examples (every name replaced by a letter; only `.`/`..`, 
 """
 
 import posixpath
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -35,6 +36,16 @@ KEEP_SEGMENTS = {"", ".", "..", "index", "src", "*"}
 
 
 # --- at scan time --------------------------------------------------------------------------
+
+def parse_errors(parsed_files):
+    """{"parse_errors": {file: first error line}} for files the grammar could not fully parse
+    (what the `parse-error` warning lists); {} when every file parsed."""
+    found = {p.rel_path: p.result.parse_error_line for p in parsed_files if p.result.parse_error_line}
+    if found:
+        print(f"warning: {len(found)} files had parse errors (read as far as possible; "
+              "see `coderstanding warnings`)", file=sys.stderr)
+    return {"parse_errors": found} if found else {}
+
 
 def collect(root, graph, path_maps):
     """graph.diagnostics from the scan: unresolved import paths by reason, path map counts."""

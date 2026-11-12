@@ -37,12 +37,12 @@ def run(capsys, *argv):
 def test_outline_has_function_ranges(app, capsys):
     lines = run(capsys, "outline", "t", "Net")
     assert lines[:2] == ["t outline Net", "[class] net.py:4-9 6 lines"]
-    assert "  join  net.py:5-6" in lines and "  leave  net.py:8-9" in lines
+    assert "  Net#join  net.py:5-6" in lines and "  Net#leave  net.py:8-9" in lines
 
 
 def test_outline_of_one_function_and_a_file(app, capsys):
     assert run(capsys, "outline", "t", "Net#leave") == [
-        "t outline Net#leave", "[class] net.py:4-9 6 lines", "function:", "  leave  net.py:8-9"]
+        "t outline Net#leave", "[class] net.py:4-9 6 lines", "function:", "  Net#leave  net.py:8-9"]
     module = run(capsys, "outline", "t", "net")
     assert any(line.startswith("[module] net.py:1-") for line in module)
     assert "inside:" in module and "  Net [class]  net.py:4-9" in module
@@ -61,7 +61,8 @@ def test_find_ranks_name_before_function_and_limits(app, capsys):
 
 
 def test_find_needs_every_word_and_searches_code_docs(app, capsys):
-    assert run(capsys, "find", "t", "join", "nothing") == ["t find join nothing: 0/0"]
+    out = run(capsys, "find", "t", "join", "nothing")
+    assert out[0].startswith("t find join nothing: 0/0") and out[-1] == "for literal text: find t --text <pattern>"
     docs = run(capsys, "find", "t", "packets")
     assert any(line.startswith("net  module") and "Network layer" in line for line in docs)
 
@@ -74,7 +75,7 @@ def test_find_all_and_limit(app, capsys, monkeypatch):
 
 def test_find_hides_tests_unless_asked(app, capsys):
     assert not any("test_join" in line for line in run(capsys, "find", "t", "join"))
-    assert any("test_join" in line for line in run(capsys, "find", "t", "join", "--tests"))
+    assert any("test_join" in line for line in run(capsys, "find", "t", "join", "--include-tests"))
 
 
 def test_impact_class_by_depth(app, capsys):
@@ -88,12 +89,15 @@ def test_impact_class_by_depth(app, capsys):
 def test_impact_function_follows_callers(app, capsys):
     lines = run(capsys, "impact", "t", "Net#join")
     assert "1: Lobby#start" in lines and "2: Game#__init__" not in lines
-    assert lines[-1].startswith("tests: tests/test_net.py")
+    assert lines[-2].startswith("tests: tests/test_net.py") and lines[-1].endswith("more tests (--all)")
 
 
 def test_impact_lists_tests_of_dependents(app, capsys):
-    lines = run(capsys, "impact", "t", "Net")
+    lines = run(capsys, "impact", "t", "Net", "--all")
     assert "tests/test_game.py" in lines[-1] and "tests/test_net.py" in lines[-1]
+    near = run(capsys, "impact", "t", "Net")
+    assert near[-2].startswith("tests: tests/test_net.py") and "test_game" not in near[-2]
+    assert near[-1] == "+1 more tests (--all)"
     assert run(capsys, "impact", "t", "Net", "--depth", "1")[-1].count("tests/test_game") == 0
 
 
@@ -118,3 +122,4 @@ def test_readers_store_function_end_lines(app):
     graph = scan_repo(app, use_cache=False)
     assert {m.name: (m.line, m.end) for m in graph.nodes["net.Net"].members} == {
         "join": (5, 6), "leave": (8, 9)}
+

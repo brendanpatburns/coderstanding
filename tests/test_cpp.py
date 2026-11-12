@@ -168,3 +168,81 @@ void helper() { Item i; }
     assert found[("Item", "field", "")] == "<field>"
     assert {r.from_member for r in refs if r.to.name == "Tool"} == {"Box", "run"}
     assert {r.from_member for r in refs if r.to.name == "Item" and r.detail != "field"} == {"helper"}
+
+
+TYPEDEF_FILES = {
+    "types.h": "#include <stdint.h>\ntypedef uint32_t u32;\ntypedef unsigned char u8;\ntypedef u32 addr;\n"
+               "typedef struct Ship { int hp; } Ship;\ntypedef struct Ship ShipAlias;\n",
+    "game.c": '#include "types.h"\nstatic u32 count;\nu8 bytes[4];\n'
+              'void run(addr where, Ship *ship, Missing *gone) { u32 local = 0; }\n',
+}
+
+
+def test_typedefs_of_basic_types_are_known_but_struct_typedefs_stay_nodes(tmp_path):
+    write_files(tmp_path, TYPEDEF_FILES)
+    graph = scan_repo(tmp_path, modules=[CppModule()], use_cache=False)
+    assert externals(graph, "game") == {"Missing"}  # u32, u8, addr give no external reference
+    assert "types.Ship" in graph.nodes or "Ship" in graph.nodes
+    assert not any(node.name in ("u32", "u8", "addr") for node in graph.nodes.values())
+
+
+# ---- decompiler output and function-defining macros ---------------------------------------
+
+def scan_c(tmp_path, files, **settings):
+    write_files(tmp_path, files)
+    return scan_repo(tmp_path, modules=[CppModule()], use_cache=False, **settings)
+
+
+GHIDRA_FILES = {
+    "a.c": "ushort __watcall F_1(void)\n{\n  uint value;\n  value = CONCAT11(1, 2);\n  F_2();\n  return in(3);\n}\n",
+    "b.c": "void __cdecl16near F_2(undefined2 param, byte *flag, code *callback)\n{\n}\n",
+}
+
+
+def test_compiler_words_are_blanked_and_decompiler_names_are_built_in(tmp_path):
+    graph = scan_c(tmp_path, GHIDRA_FILES)
+    assert [m.name for m in graph.nodes["a"].members] == ["F_1"]
+    assert [m.name for m in graph.nodes["b"].members] == ["F_2"]
+    assert not graph.diagnostics.get("parse-error")
+    edge(graph, "a", "b", "dependency")
+    unresolved = {name for node in graph.nodes.values() for (_, name, _) in node.external_refs}
+    assert not unresolved & {"CONCAT11", "in", "uint", "undefined2", "byte", "code"}
+
+
+def test_blank_compiler_words_keeps_length():
+    from coderstanding.languages.cpp import blank_compiler_words
+    source = b"void __watcall f(void); int __far x; int my__far;"
+    blanked = blank_compiler_words(source)
+    assert len(blanked) == len(source)
+    assert b"__watcall" not in blanked and b"my__far" in blanked
+
+
+REWRITE_FILES = {
+    "game/x.c": "REWRITE_CHECKED(272b4, .scratch = 1,\n    .vary = 2)\n{\n  helper();\n}\n\n"
+                "REWRITE(5)\n{\n}\n\nint plain(void) { return 0; }\n",
+    "game/y.c": "void helper(void) {}\n",
+}
+
+
+def test_function_macros_define_functions(tmp_path):
+    graph = scan_c(tmp_path, REWRITE_FILES, function_macros={"REWRITE_CHECKED": "F_{1}", "REWRITE": "F_{1}"})
+    members = {m.name: m for m in graph.nodes["game/x"].members}
+    assert set(members) == {"F_272b4", "F_5", "plain"}
+    assert members["F_272b4"].line == 1 and members["plain"].line == 11  # line numbers kept
+    edge(graph, "game/x", "game/y", "dependency")  # the macro body's call is read
+
+
+def test_function_macros_off_by_default_and_setting_changes_cache(tmp_path):
+    write_files(tmp_path, REWRITE_FILES)
+    cache_dir = tmp_path / "cache"
+    plain = scan_repo(tmp_path, modules=[CppModule()], cache_dir=cache_dir)
+    assert "F_5" not in {m.name for m in plain.nodes["game/x"].members}
+    macros = scan_repo(tmp_path, modules=[CppModule()], cache_dir=cache_dir, function_macros={"REWRITE": "F_{1}"})
+    assert "F_5" in {m.name for m in macros.nodes["game/x"].members}
+
+
+def test_parse_function_macros_setting():
+    from coderstanding.apps import AppError, parse_setting
+    assert parse_setting("function_macros", '{"REWRITE": "F_{1}"}') == {"REWRITE": "F_{1}"}
+    with pytest.raises(AppError):
+        parse_setting("function_macros", "[1]")

@@ -7,12 +7,11 @@ client with a literal host gets an `http.client` node for the host; the rest is 
 
 import re
 from collections import defaultdict
-from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from .filewalk import list_files
-from .model import Call, Edge, Location, merge_locations
-from .stack import CommUse, add_comm_node, comm_id
+from .model import Call, Location
+from .stack import CommUse, OwnerIndex, add_comm_node, comm_id, link_caller
 
 SERVER_TYPE, CLIENT_TYPE = "http.server", "http.client"
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "0.0.0.0", "[::1]")
@@ -137,26 +136,6 @@ def read_hits(root, skip_dirs):
     return found
 
 
-class OwnerIndex:
-    """Which node holds a line of a file: the smallest type whose span has it, else the file's
-    first node (its module)."""
-
-    def __init__(self, graph):
-        self.by_file = defaultdict(list)
-        for node in graph.nodes.values():
-            if node.file and node.kind != "external" and not node.comm:
-                self.by_file[node.file].append(node)
-
-    def owner(self, rel, line):
-        nodes = self.by_file.get(rel)
-        if not nodes:
-            return None
-        inside = [n for n in nodes if n.span and n.line <= line < n.line + n.lines]
-        if inside:
-            return min(inside, key=lambda n: n.lines)
-        return min(nodes, key=lambda n: (n.span, n.line))
-
-
 def add_http_nodes(root, graph, skip_dirs):
     """Add the server and client comm nodes and the client -> server edges."""
     hits = read_hits(root, skip_dirs)
@@ -195,20 +174,11 @@ def add_http_nodes(root, graph, skip_dirs):
         add_comm_node(graph, graph.nodes[owner_id], SERVER_TYPE, None, use)
     for owner_id, servers in matched.items():
         for server_id, per_route in servers.items():
-            link_client(graph, owner_id, comm_id(server_id, SERVER_TYPE), per_route)
+            link_caller(graph, owner_id, comm_id(server_id, SERVER_TYPE),
+                        {(None, route): locs for route, locs in per_route.items()}, "http")
     for owner_id, hosts in outside.items():
         for host, calls in hosts.items():
             at = sorted({loc for _, locs in calls for loc in locs})
             use = CommUse(messages=sorted({p for p, _ in calls}), at=at)
             use.calls.append(Call("request", len(at), at))
             add_comm_node(graph, graph.nodes[owner_id], CLIENT_TYPE, None, use, label=host)
-
-
-def link_client(graph, owner_id, server_node_id, per_route):
-    """The client's edge to a server node; each matched route is a call on it."""
-    at = []
-    calls = []
-    for route, locs in sorted(per_route.items()):
-        calls.append(Call(route, len(locs), sorted(locs)))
-        at = merge_locations(at, sorted(locs))
-    graph.add_edge(Edge(owner_id, server_node_id, "dependency", detail=["http"], at=at, calls=calls))

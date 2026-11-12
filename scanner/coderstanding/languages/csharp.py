@@ -9,13 +9,16 @@ from dataclasses import dataclass, field, replace
 
 import tree_sitter_c_sharp
 
-from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult, LanguageModule, Ref,
-                                  Target, register)
+from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult, LanguageModule, Mark,
+                                  Ref, Target, register)
 from coderstanding.model import (ANY_SIGNAL, EMIT_DETAIL, SIGNAL_ARROW, Member, add_unique, child_id,
-                                 entry_flags)
+                                 entry_flags, is_public)
 
 from . import doc_text
-from .ts_util import children_of_type, descendants, first_child_of_type, end_line, line, make_parser, text
+from .ts_util import (children_of_type, descendants, first_child_of_type, end_line, first_error_line,
+                      lifted_children, line, make_parser, text)
+
+from .stubs import is_stub
 
 PARSER = make_parser(tree_sitter_c_sharp.language())
 
@@ -381,6 +384,7 @@ class TypeReader:
         attributes = children_of_type(self.node, "attribute_list")
         if any(re.search(r"\bGlobalClass\b", text(a)) for a in attributes):
             self.result.global_aliases[self.decl.name] = Target(id=self.id)
+            self.result.marks.append(Mark(Target(id=self.id), [], self.decl.name, "global-class"))
 
     def _read_bases(self):
         bases = first_child_of_type(self.node, "base_list")
@@ -398,7 +402,8 @@ class TypeReader:
             self.fields[name] = names
             self.sink.in_member(FIELD_MEMBER).add("association", names, parameter, "field")
             self.decl.members.append(Member(name, "property", text(
-                parameter.child_by_field_name("type")), line(parameter)))
+                parameter.child_by_field_name("type")), line(parameter),
+                public=self.decl.kind == "record"))  # record parameters are public properties
 
     def _index_fields(self):
         """Record each field/property name with its type, so calls through it are found."""
@@ -445,7 +450,8 @@ class TypeReader:
         type_node = declaration.child_by_field_name("type")
         for declarator in children_of_type(declaration, "variable_declarator"):
             name = text(declarator.children[0])
-            self.decl.members.append(Member(name, "event", text(type_node), line(node)))
+            self.decl.members.append(Member(name, "event", text(type_node), line(node),
+                                            public=self._is_public(node)))
             self.sink.in_member(FIELD_MEMBER).add("association", type_names(type_node), node, "field")
 
     def _read_property(self, node):
@@ -458,8 +464,14 @@ class TypeReader:
             if child.type in ("accessor_list", "arrow_expression_clause"):
                 self._body_reader(name).visit(child)
 
+    def _is_public(self, node):
+        """Interface members are public without saying so."""
+        words = modifiers(node) | ({"public"} if self.decl.kind == "interface" else set())
+        return is_public("", "csharp", words)
+
     def _hold(self, node, name, kind, type_node, initializer):
-        self.decl.members.append(Member(name, kind, text(type_node), line(node)))
+        self.decl.members.append(Member(name, kind, text(type_node), line(node),
+                                        public=self._is_public(node)))
         self.sink.in_member(FIELD_MEMBER).add(self._holding_kind(name, initializer),
                                        type_names(type_node), node, "field")
         if "static" in modifiers(node) and name in SINGLETON_NAMES and \
@@ -477,7 +489,9 @@ class TypeReader:
     def _read_method(self, node):
         returns = node.child_by_field_name("returns") or node.child_by_field_name("type")
         name = text(node.child_by_field_name("name")) or self.decl.name
-        self.decl.members.append(Member(name, "method", text(returns), line(node), end_line(node)))
+        body = node.child_by_field_name("body") or first_child_of_type(node, "arrow_expression_clause")
+        self.decl.members.append(Member(name, "method", text(returns), line(node), end_line(node),
+                                        stub=name != self.decl.name and is_stub(body)))
         if name == "Main" and "static" in modifiers(node):
             add_unique(self.decl.flags, entry_flags("program-main"))
         reader = self._body_reader(name)
@@ -501,10 +515,10 @@ class CSharpModule(LanguageModule):
 
     def parse(self, ctx):
         tree = PARSER.parse(ctx.read_bytes())
-        result = FileResult()
-        self._read_scope(result, tree.root_node.children, "")
+        result = FileResult(parse_error_line=first_error_line(tree.root_node))
+        self._read_scope(result, lifted_children(tree.root_node), "")
         self._mark_file_node(result)
-        if any(n.type == "global_statement" for n in tree.root_node.children):
+        if any(n.type == "global_statement" for n in lifted_children(tree.root_node)):
             result.declarations.append(self._top_level_program(ctx, not result.declarations))
         return result
 

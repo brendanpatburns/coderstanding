@@ -25,7 +25,7 @@ def test_declarations_and_kinds():
     assert kinds[f"{CHAT}.ChatService"] == "class"
     assert kinds[f"{CHAT}.Repo"] == "interface"
     assert kinds[f"{CHAT}.Message"] == "record"  # data class
-    assert kinds[f"{CHAT}.ChatService.Companion"] == "inner"
+    assert f"{CHAT}.ChatService.Companion" not in kinds  # folded into ChatService
     assert kinds[f"{CHAT}.ChatService.Session"] == "inner"
     assert graph.nodes[f"{CHAT}.Event"].flags == ["abstract"]  # sealed
     assert graph.nodes[f"{CHAT}.Event.Closed"].kind == "inner"
@@ -38,7 +38,7 @@ def test_members_have_end_lines():
     service = members(graph, f"{CHAT}.ChatService")
     assert (service["send"].kind, service["send"].line, service["send"].end) == ("method", 23, 28)
     assert service["repo"].kind == "property" and service["settings"].type == "Settings"
-    assert members(graph, f"{CHAT}.ChatService.Companion")["create"].end == 35
+    assert members(graph, f"{CHAT}.ChatService")["create"].end == 35  # companion function
 
 
 def test_module_node_for_top_level_code_and_entry():
@@ -72,12 +72,10 @@ def test_fields_injection_and_calls():
 def test_alias_import_and_plain_constructor_parameter():
     graph = scan()
     edge(graph, f"{CHAT}.ChatService", f"{UTIL}.Clock", "dependency")  # `clock: Time`, no val
-    edge(graph, f"{CHAT}.ChatService.Companion", f"{UTIL}.Clock", "dependency")  # Time()
 
 
 def test_companion_calls_and_static_use():
     graph = scan()
-    edge(graph, f"{CHAT}.ChatService.Companion", f"{CHAT}.ChatService", "dependency")
     util = f"{UTIL}.UtilKt"
     assert calls(edge(graph, util, f"{CHAT}.ChatService", "dependency")) == {"create": 1}
     edge(graph, util, f"{CHAT}.MemoryRepo", "dependency")  # fully qualified constructor call
@@ -112,6 +110,33 @@ def test_outside_name_maps_to_gradle_dependency(tmp_path):
     (tmp_path / "A.kt").write_text("package a\nimport okhttp3.OkHttpClient\nimport com.squareup.okhttp3.Call\n"
                                    "class A(val c: Call, val k: OkHttpClient)\n")
     graph = scan_repo(tmp_path, modules=[KotlinModule()])
+    assert ("a.A", "maven:com.squareup.okhttp3:okhttp", "association") in graph.edges
+
+
+def test_okhttp_group_imports_resolve_by_known_table_and_last_segment(tmp_path):
+    (tmp_path / "build.gradle").write_text(
+        "dependencies {\n  implementation 'com.squareup.okhttp3:okhttp:4.12.0'\n"
+        "  implementation 'com.example.fancy:thing:1.0'\n}\n")
+    (tmp_path / "A.kt").write_text("package a\nimport okhttp3.WebSocket\nimport okio.ByteString\nimport fancy.Widget\n"
+                                   "class A(val s: WebSocket, val b: ByteString, val w: Widget)\n")
+    graph = scan_repo(tmp_path, modules=[KotlinModule()])
+    assert ("a.A", "maven:com.squareup.okhttp3:okhttp", "association") in graph.edges  # okhttp3.*, okio.*: known table
+    assert ("a.A", "maven:com.example.fancy:thing", "association") in graph.edges  # fallback: last group segment
+    assert graph.stack["unresolved"]["refs"] == 0
+
+
+def test_version_catalog_libraries_are_gradle_dependencies(tmp_path):
+    (tmp_path / "gradle").mkdir()
+    (tmp_path / "gradle" / "libs.versions.toml").write_text(
+        '[versions]\nokhttp = "4.12.0"\n[libraries]\n'
+        'okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }\n'
+        'gson = "com.google.code.gson:gson:2.10"\n'
+        'core = { group = "androidx.core", name = "core-ktx", version = "1.13.1" }\n')
+    (tmp_path / "A.kt").write_text("package a\nimport okhttp3.Call\nclass A(val c: Call)\n")
+    graph = scan_repo(tmp_path, modules=[KotlinModule()])
+    deps = {d["name"]: d["version"] for d in graph.stack["deps"] if d["kind"] == "maven"}
+    assert deps == {"com.squareup.okhttp3:okhttp": "4.12.0", "com.google.code.gson:gson": "2.10",
+                    "androidx.core:core-ktx": "1.13.1"}
     assert ("a.A", "maven:com.squareup.okhttp3:okhttp", "association") in graph.edges
 
 
@@ -151,3 +176,34 @@ def test_kotlin_and_java_link_through_shared_ids(tmp_path):
     held = edge(graph, "shop.Worker", "shop.Job", "composition")  # Kotlin holds a Java type
     assert calls(held) == {"start": 1}
     assert not any(n.external_refs for n in graph.nodes.values())
+
+
+SOFT_KEYWORD_NAME = """package p
+
+class Link {
+    @Volatile private var open = false
+
+    fun connect() {
+        open = true
+    }
+
+    fun close() {}
+}
+"""
+LOOSE_HEADER = "package p\n\nclass Broken {\n    fun ok() {}\n    val x = = = 1\n}\n"
+
+
+def test_soft_keyword_used_as_a_name_keeps_the_class(tmp_path):
+    # tree-sitter-kotlin reads `open = true` as a modifier and wraps the class in an ERROR node
+    write_files(tmp_path, {"Link.kt": SOFT_KEYWORD_NAME})
+    graph = scan_repo(tmp_path, modules=[KotlinModule()])
+    assert {m.name for m in graph.nodes["p.Link"].members} == {"open", "connect", "close"}
+    assert "parse_errors" not in graph.diagnostics
+
+
+def test_parse_error_reads_the_class_as_far_as_possible_and_warns(tmp_path):
+    write_files(tmp_path, {"Broken.kt": LOOSE_HEADER})
+    graph = scan_repo(tmp_path, modules=[KotlinModule()])
+    assert [m.name for m in graph.nodes["p.Broken"].members] == ["ok"]
+    assert graph.diagnostics["parse_errors"] == {"Broken.kt": 3}
+    assert {"kind": "parse-error", "names": ["Broken.kt:3"], "count": 1} in graph.nodes["p.Broken"].warnings

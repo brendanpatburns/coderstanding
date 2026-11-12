@@ -1,6 +1,10 @@
+import shutil
+from pathlib import Path
+
 from coderstanding.model import Call, Edge, Graph, Member, Node
-from coderstanding.notes import Notes
-from coderstanding.views import compute_view
+from coderstanding.notes import Notes, edge_key
+from coderstanding.scan import scan_repo
+from coderstanding.views import ViewContext, compute_view, start_entries, start_path, start_paths
 
 
 def make_graph(nodes, edges):
@@ -113,6 +117,18 @@ def test_owner_tie_goes_to_higher_level():
     view = compute_view(graph, level=2)
     assert edge_of(view, "Top→Far")["via"] == [["Part"]]
     assert "Mid→Far" not in pairs(view)
+
+
+def test_owner_tie_prefers_same_domain():
+    graph = make_graph({"Apps": 1, "Scan": 1, "Helper": 3, "Db": 1},
+                       [("Apps", "Helper", "composition"), ("Scan", "Helper", "composition"),
+                        ("Helper", "Db", "dependency", ["save"])])
+    notes = Notes()
+    for cls, domain in (("Apps", "Hosting"), ("Scan", "Scanning"), ("Helper", "Scanning")):
+        notes.set(f"node:{cls}", "claude", {"domain": domain})
+    view = compute_view(graph, notes, level=1)
+    assert edge_of(view, "Scan→Db")["via"] == [["Helper"]]
+    assert "Apps→Db" not in pairs(view)
 
 
 def test_owner_hidden_too_keeps_going_up():
@@ -419,3 +435,70 @@ def test_focus_hidden_connection_lights_its_derived_line():
     assert view["focus"]["edges"] == ["GameEngine→VFX"]
     assert {"GameEngine", "VFX"} <= set(view["focus"]["nodes"])
     assert not edge_of(view, "GameEngine→VFX")["faded"]
+
+
+# --- start paths (views.start_paths) ---
+
+def start_ctx(nodes, edges, hints=None):
+    notes = Notes()
+    for key, hint in (hints or {}).items():
+        notes.set(key, "x", {"hint": hint})
+    return ViewContext(make_graph(nodes, edges), notes)
+
+
+def ids(path):
+    return [step["id"] for step in path]
+
+
+MAIN = (1, "class", ["godot-main", "entry"])
+
+
+def test_start_path_follows_the_line_with_most_calls():
+    ctx = start_ctx({"Main": MAIN, "A": 1, "B": 1, "C": 1},
+                    [("Main", "A", "dependency", ["f"]), ("Main", "B", "dependency", ["f", "g", "h"]),
+                     ("B", "C", "dependency", ["f"])])
+    path = start_path(ctx, "Main")
+    assert ids(path) == ["Main", "B", "C"]
+    assert [s["calls"] for s in path] == [0, 3, 1]
+
+
+def test_start_path_prefers_a_hinted_line_over_more_calls():
+    ctx = start_ctx({"Main": MAIN, "A": 1, "B": 1},
+                    [("Main", "A", "dependency", ["f"]), ("Main", "B", "dependency", ["f", "g", "h"])],
+                    hints={edge_key("Main", "A"): "Main starts A"})
+    path = start_path(ctx, "Main")
+    assert ids(path) == ["Main", "A"] and path[1]["hint"] == "Main starts A"
+
+
+def test_start_path_skips_hubs_visited_classes_and_outside_code():
+    nodes = {"Main": MAIN, "Hub": (1, "class", ["hub"]), "A": 1, "B": 1,
+             "Lib": (1, "external", [])}
+    ctx = start_ctx(nodes, [("Main", "Hub", "dependency", ["f"] * 9), ("Main", "Lib", "dependency", ["f"] * 9),
+                            ("Main", "A", "dependency", ["f"]), ("A", "Main", "dependency", ["f"] * 5),
+                            ("A", "B", "dependency", ["f"]), ("B", "A", "dependency", ["f"])])
+    assert ids(start_path(ctx, "Main")) == ["Main", "A", "B"]  # ends: only visited classes are left
+
+
+def test_start_path_stops_at_six_steps():
+    names = [f"N{i}" for i in range(9)]
+    ctx = start_ctx({"Main": MAIN, **{n: 1 for n in names}},
+                    [("Main", names[0], "dependency", ["f"])]
+                    + [(a, b, "dependency", ["f"]) for a, b in zip(names, names[1:])])
+    assert len(start_path(ctx, "Main")) == 6
+
+
+def test_start_paths_order_app_starts_before_tools_and_drop_dead_ends():
+    nodes = {"Tool": (1, "class", ["script-main", "entry"]), "Main": MAIN, "Lonely": (1, "class", ["autoload", "entry"]),
+             "A": 1, "B": 1}
+    ctx = start_ctx(nodes, [("Tool", "A", "dependency", ["f"]), ("Main", "B", "dependency", ["f"])])
+    assert start_entries(ctx, 1) == ["Main", "Lonely", "Tool"]
+    assert [ids(p) for p in start_paths(ctx)] == [["Main", "B"], ["Tool", "A"]]  # Lonely has nowhere to go
+
+
+def test_start_path_on_the_e2e_fixture(tmp_path):
+    shutil.copytree(Path(__file__).parent / "e2e" / "fixture", tmp_path / "fixture")  # a scan writes into the folder
+    graph = scan_repo(tmp_path / "fixture", use_cache=False)
+    ctx = ViewContext(graph, Notes())
+    path = start_path(ctx, "res://src/main.gd", level=2)
+    assert ids(path)[:2] == ["res://src/main.gd", "Big"]  # Big: 3 calls, Player: 2
+    assert start_entries(ctx, 1)[0] == "res://src/main.gd"

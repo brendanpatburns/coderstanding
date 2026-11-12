@@ -5,3 +5,5 @@ docs/private/
 deploy/docker-compose.yml
 scripts/deploy-*.sh
 scripts/sync-*.sh
+issues/
+docs/trials/

@@ -8,16 +8,19 @@ import tree_sitter_python
 
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult,
                                     LanguageModule, Ref, Target, register)
-from coderstanding.model import Member, add_unique, child_id, entry_flags
+from coderstanding.model import Member, add_unique, child_id, entry_flags, is_public
 
 from . import doc_text
-from .ts_util import children_of_type, descendants, first_child_of_type, end_line, line, make_parser, text
+from .stubs import is_stub
+from .ts_util import (children_of_type, descendants, first_child_of_type, end_line, first_error_line,
+                      lifted_children, line, make_parser, text)
 
 PARSER = make_parser(tree_sitter_python.language())
 INTERFACE_BASES = {"Protocol", "ABC"}
 SKIPPED_TYPES = {"str", "int", "float", "bool", "bytes", "None", "list", "dict", "set",
                  "tuple", "object", "type", "Any", "self", "cls"}
 STOP_AT_SCOPES = ("class_definition",)
+OWN_RECEIVERS = ("self", "cls")  # `self.x()` / `cls.x()` call the class's own method x
 DOTTED_NAME = re.compile(r"^[A-Za-z_][\w.]*$")
 
 
@@ -73,6 +76,7 @@ class PythonFile:
         self.imported = set()  # file-local names bound by imports
         self.typing_names = set()
         self.local_classes = {}  # name -> id
+        self.own_functions = {}  # module or class id -> its function names (own calls, own_call)
 
     def read(self):
         root = PARSER.parse(self.ctx.read_bytes()).root_node
@@ -82,11 +86,12 @@ class PythonFile:
         if self.ctx.rel_path.rpartition("/")[2] == "__main__.py":  # `python -m package` starts it
             add_unique(module.flags, entry_flags("script-main"))
         self.result.declarations.append(module)
+        self.result.parse_error_line = first_error_line(root)
         self.find_classes(root, self.module_id)
         for node in descendants(root):  # imports anywhere: functions, try/except, TYPE_CHECKING
             if node.type in ("import_statement", "import_from_statement"):
                 self.read_import(node)
-        for statement in root.children:
+        for statement in lifted_children(root):
             self.read_statement(statement, module)
         self.read_scope(root, self.module_id, {})
         return self.result
@@ -94,11 +99,14 @@ class PythonFile:
     # --- statements -------------------------------------------------------------------
 
     def read_statement(self, node, module):
+        decorated = node
         if node.type == "decorated_definition":
             node = node.child_by_field_name("definition")
         if node.type == "function_definition":
+            self.own_functions.setdefault(self.module_id, set()).add(text(node.child_by_field_name("name")))
             module.members.append(Member(text(node.child_by_field_name("name")), "function",
-                                         line=line(node), end=end_line(node)))
+                                         line=line(node), end=end_line(node),
+                                         stub=function_stub(decorated, node)))
             self.read_signature(node, self.module_id)
         elif node.type == "class_definition":
             self.read_class(node, self.module_id)
@@ -181,12 +189,15 @@ class PythonFile:
         self.result.declarations.append(declaration)
         body = node.child_by_field_name("body")
         fields = self.read_fields(body, class_id, declaration)
-        for item in body.children:
-            item = item.child_by_field_name("definition") if item.type == "decorated_definition" else item
+        for decorated in lifted_children(body):
+            item = decorated.child_by_field_name("definition") \
+                if decorated.type == "decorated_definition" else decorated
             if item.type == "function_definition":
+                self.own_functions.setdefault(class_id, set()).add(text(item.child_by_field_name("name")))
                 declaration.members.append(Member(text(item.child_by_field_name("name")),
                                                   "method", line=line(item),
-                                                  end=end_line(item)))
+                                                  end=end_line(item),
+                                                  stub=function_stub(decorated, item)))
                 self.read_signature(item, class_id)
             elif item.type == "class_definition":
                 self.read_class(item, class_id)
@@ -262,7 +273,8 @@ class PythonFile:
         if field_name in fields:
             return
         fields[field_name] = type_name
-        declaration.members.append(Member(field_name, "field", type_name, line(node)))
+        declaration.members.append(Member(field_name, "field", type_name, line(node),
+                                          public=is_public(field_name, "python")))
         self.add_type_ref(class_id, type_name, kind, node, "field", from_member=FIELD_MEMBER)
 
     # --- type names and refs ----------------------------------------------------------
@@ -324,6 +336,8 @@ class PythonFile:
         if len(chain) >= 3 and chain[0] == "self" and chain[1] in fields:
             self.add_type_ref(owner_id, fields[chain[1]], "association", call, "call", chain[2],
                               member)
+        elif len(chain) == 2 and chain[0] in OWN_RECEIVERS and self.is_own(owner_id, chain[1]):
+            self.result.refs.append(Ref.own_call(owner_id, chain[1], line(call), member))
         elif len(chain) == 1:
             self.read_plain_call(chain[0], call, owner_id, member)
         elif len(chain) >= 2 and chain[0] != "self" and self.is_known(chain[0]):
@@ -333,13 +347,33 @@ class PythonFile:
     def is_known(self, name):
         return name in self.imported or name in self.local_classes
 
+    def is_own(self, owner_id, name):
+        return name in self.own_functions.get(owner_id, ())
+
     def read_plain_call(self, name, call, owner_id, member):
+        if owner_id == self.module_id and name not in self.imported and self.is_own(owner_id, name):
+            self.result.refs.append(Ref.own_call(owner_id, name, line(call), member))
+            return
         if name not in self.imported and name not in self.local_classes:
             return
         if is_class_like(name):
             self.add_type_ref(owner_id, name, "dependency", call, "create", from_member=member)
         else:
             self.add_type_ref(owner_id, name, "dependency", call, "call", name, member)
+
+
+NOT_STUB_DECORATORS = ("abstractmethod", "overload")  # empty by design
+CONSTRUCTOR = "__init__"
+
+
+def function_stub(decorated, function):
+    """`stubs.is_stub` for a function (DESIGN 7f); abstract methods, overloads and `__init__`
+    are empty by design."""
+    decorators = [text(d) for d in children_of_type(decorated, "decorator")]
+    if text(function.child_by_field_name("name")) == CONSTRUCTOR \
+            or any(word in d for d in decorators for word in NOT_STUB_DECORATORS):
+        return False
+    return is_stub(function.child_by_field_name("body"), function)
 
 
 @register

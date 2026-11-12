@@ -11,7 +11,7 @@ import threading
 from pathlib import Path
 
 from . import userconfig
-from .apps import (AppError, RELEVEL_SCOPES, old_scanner, parse_setting, app_details, clean_name, default_data_dir, find_app, load_registry,
+from .apps import (AppError, RELEVEL_SCOPES, old_scanner, parse_setting, app_details, clean_name, default_data_dir, find_app, load_registry, registered_name,
                    register, remove_app, rename_app)
 from .filewalk import assign_files
 from .graph_json import graph_summary
@@ -105,6 +105,7 @@ class Hub:
     def app(self, name=None):
         apps = self.known_apps()
         name = name or (self.initial.name if self.initial else next(iter(apps), None))
+        name = registered_name(name, apps)
         if name not in apps:
             raise KeyError(f"unknown app: {name}")
         return apps[name]
@@ -164,6 +165,10 @@ class Hub:
         new = rename_app(name, body.get("name"))
         self.forget(name)
         return {"renamed": [name, new], **self.listing(details=True)}
+
+    def busy(self):
+        """True while any scan runs (the idle exit waits for it)."""
+        return any(scan.get("state") == "running" for scan in list(self.scans.values()))
 
     def start_scan(self, name, body=None):
         """Rescan in the background; the listing shows progress and any error. `body`: optional

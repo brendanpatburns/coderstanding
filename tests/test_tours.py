@@ -7,7 +7,7 @@ import pytest
 from coderstanding.apps import App, REGISTRY_ENV
 from coderstanding.cli import main
 from coderstanding.fingerprints import SourceLines
-from coderstanding.notes import Notes
+from coderstanding.notes import Notes, node_key
 from coderstanding.scan import scan_repo
 from coderstanding.textout import format_tour, tour_markdown, tour_warning_lines
 from coderstanding.tours import MAX_AUDIO_BYTES, Tours, open_tours
@@ -96,7 +96,7 @@ def test_tour_json_contract(repo):
     assert step["audio"] == {"rec": None} and not step["stale"] and not step["lost"]
     assert step["focus"] == ["m.Player#hit"] and step["expand"] == ["m.Player"]
     assert tours.list_json()["tours"] == [{"id": "walk", "title": "A walk", "by": "you",
-                                           "ai": False, "steps": 2, "changed": 0, "ai_steps": 1, "comments": 0}]
+                                           "ai": False, "start": False, "steps": 2, "changed": 0, "ai_steps": 1, "comments": 0}]
 
 
 def test_anchor_follows_an_edit_above_it(repo):
@@ -239,3 +239,204 @@ def test_cli_tour_commands(repo, monkeypatch, capsys, tmp_path):
     assert "## Player#heal\nHeals." in (root / ".coderstanding/tours/new.md").read_text()
     main(["tour", "app", "walk", "--still-true"])
     assert "walk: still true (0 steps)" in capsys.readouterr().out
+
+
+def test_line_notes_round_trip_json_and_text(repo):
+    root, tours = repo
+    tour, step = tours.edit_note("walk", 1, "4", "Shows the hit.", cue="loses health")
+    assert (step.by, step.ai) == ("claude", True)
+    assert "notes: [{lines: +2..+2, text: Shows the hit., cue: loses health}]" in \
+        (root / ".coderstanding/tours/walk.md").read_text()
+    again = tours.get("walk").steps[0]
+    assert again.notes == step.notes and again.code.fp  # the excerpt's fp is untouched
+    data = tours.tour_json(tours.get("walk"))
+    assert data["steps"][0]["notes"] == [{"from": 4, "to": 4, "text": "Shows the hit.", "cue": "loses health"}]
+    assert data["steps"][1]["notes"] == []
+    assert format_tour("app", data, 1).splitlines()[-1] == 'note 4: Shows the hit. (at "loses health")'
+    assert '> note 4: Shows the hit. (at "loses health")' in tour_markdown("app", data)
+    tours.edit_note("walk", 1, "3-4", "Both lines.")
+    tours.edit_note("walk", 1, "4", "Changed.")  # same lines: replaced
+    notes = tours.tour_json(tours.get("walk"))["steps"][0]["notes"]
+    assert [(n["from"], n["to"], n["text"], n["cue"]) for n in notes] == [(3, 4, "Both lines.", None), (4, 4, "Changed.", None)]
+    tours.edit_note("walk", 1, "3-4", None)
+    assert len(tours.get("walk").steps[0].notes) == 1
+    with pytest.raises(ValueError, match="outside"):
+        tours.edit_note("walk", 1, "9", "No.")
+    with pytest.raises(ValueError, match="no note"):
+        tours.edit_note("walk", 1, "3", None)
+
+
+def test_line_notes_follow_edits_and_old_tours_load(repo):
+    root, tours = repo
+    assert all(s.notes == [] for s in tours.get("walk").steps)  # a tour without notes loads
+    tours.edit_note("walk", 1, "4", "The flash.")
+    graph = setup(root, "import os\n\n\n" + CODE)
+    note = tours_of(root, graph).tour_json(tours_of(root, graph).get("walk"))["steps"][0]["notes"][0]
+    assert (note["from"], note["to"]) == (7, 7)
+
+
+def test_put_takes_notes_in_todays_lines_and_counts_them_as_a_change(repo):
+    _, tours = repo
+    body = tours.tour_json(tours.get("walk"))
+    sent = [{"key": s["key"], "title": s["title"], "text": s["text"], "targets": s["targets"],
+             "code": s["code"] and {"at": s["code"]["at"], "lines": "+1..+2" if s["key"] == "k1" else "+0..+3",
+                                    "mark": s["code"]["mark"]}, "notes": s["notes"]} for s in body["steps"]]
+    sent[1]["notes"] = [{"from": 11, "to": 12, "text": "Makes one.", "cue": "makes"}]
+    tour = tours.put("walk", {"title": "A walk", "steps": sent}, by="you")
+    assert tour.steps[0].notes == [] and (tour.steps[0].by, tour.steps[0].ai) == ("you", False)
+    assert [(n.first, n.last, n.cue) for n in tour.steps[1].notes] == [(1, 2, "makes")]
+    assert (tour.steps[1].by, tour.steps[1].ai) == ("you", False)  # was an AI step: now yours
+    with pytest.raises(ValueError):
+        tours.put("walk", {"title": "A walk", "steps": [{**sent[1], "notes": [{"from": 11}]}]})
+
+
+def test_cli_tour_notes(repo, monkeypatch, capsys, tmp_path):
+    root, _ = repo
+    monkeypatch.setenv(REGISTRY_ENV, str(tmp_path / "reg.json"))
+    (tmp_path / "reg.json").write_text(json.dumps({"app": {"path": str(root)}}))
+    main(["rescan", "app"])
+    capsys.readouterr()
+    main(["tour", "app", "walk", "--step", "1", "--note", "3-4", "Two lines.", "--cue", "health"])
+    assert "walk step 1: note saved on lines 3-4 by claude (AI draft) (1 notes)" in capsys.readouterr().out
+    main(["tour", "app", "walk", "--step", "1"])
+    assert capsys.readouterr().out.splitlines()[-1] == 'note 3-4: Two lines. (at "health")'
+    main(["tour", "app", "walk", "--step", "1", "--drop-note", "3-4"])
+    assert "note removed on lines 3-4" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        main(["tour", "app", "walk", "--note", "3", "x"])
+
+
+def test_open_near_opens_the_classes_a_focused_function_calls(tmp_path):
+    graph = setup(tmp_path, """class Player:
+    def hit(self):
+        pass
+
+
+class World:
+    def __init__(self):
+        self.player = Player()
+
+    def run(self):
+        self.player.hit()
+""")
+    plain = compute_view(graph, level=5, focus=["m.World#run"])
+    assert plain["focus"]["near"] == ["m.Player"] and list(plain["expanded"]) == ["m.World"]
+    step = compute_view(graph, level=5, focus=["m.World#run"], open_near=True)
+    assert list(step["expanded"]) == ["m.Player", "m.World"]
+
+
+def test_start_flag_round_trips_and_old_tours_load_unchanged(repo):
+    root, tours = repo
+    assert tours.get("walk").start is False and "start" not in (root / ".coderstanding/tours/walk.md").read_text()
+    assert tours.row_json(tours.get("walk"))["start"] is False
+    tour = tours.get("walk")
+    tour.start = True
+    tours.save(tour)
+    assert "\nstart: true\n" in (root / ".coderstanding/tours/walk.md").read_text()
+    assert tours.tour_json(tours.get("walk"))["start"] is True
+    body = {"title": "A walk", "steps": [{"key": "k1", "targets": ["Player#hit"], "text": "x", "title": "Hits"}]}
+    assert tours.put("walk", body).start is True  # an editor save keeps the flag
+
+
+STARTER = {
+    "tool.py": "import a\n\n\ndef main():\n    a.run()\n\n\nif __name__ == '__main__':\n    main()\n",
+    "a.py": "import b\n\n\ndef run():\n    b.go()\n",
+    "b.py": "import c\n\n\ndef go():\n    c.work()\n    c.work()\n",
+    "c.py": "def work():\n    pass\n",
+}
+
+
+def test_draft_starts_writes_a_start_tour_per_path_and_leaves_existing_ones(tmp_path):
+    write_files(tmp_path, STARTER)
+    graph = scan_repo(tmp_path, use_cache=False)
+    tours = tours_of(tmp_path, graph)
+    for module in STARTER:  # the guessed levels put the modules at different depths: all on level 1
+        tours.notes.set(node_key(module[:-3]), "x", {"level": 1})
+    drafted, kept = tours.draft_starts("Begin here")
+    assert [(t.id, t.title, t.start, t.ai) for t in drafted] == [("start-tool", "Begin here", True, True)]
+    assert [s.targets for s in drafted[0].steps] == [["tool"], ["a"], ["b"], ["c"]]
+    assert "\nstart: true\n" in (tmp_path / ".coderstanding/tours/start-tool.md").read_text()
+    assert tours.draft_starts() == ([], ["start-tool"])
+
+
+def test_cli_draft_start_and_tours_mark_it(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "repo"
+    write_files(root, STARTER)
+    monkeypatch.setenv(REGISTRY_ENV, str(tmp_path / "reg.json"))
+    (tmp_path / "reg.json").write_text(json.dumps({"app": {"path": str(root)}}))
+    main(["rescan", "app"])
+    for module in STARTER:
+        main(["set", "app", module[:-3], "level=1"])
+    capsys.readouterr()
+    main(["tour", "app", "--draft-start"])
+    assert "drafted start-tool: 4 steps by claude (AI draft, start tour)" in capsys.readouterr().out
+    main(["tours", "app"])
+    assert "start-tool Start here: tool 4 steps [claude ai] start tour" in capsys.readouterr().out
+    main(["tour", "app", "--draft-start"])
+    assert "start-tool exists: left alone" in capsys.readouterr().out
+
+
+def test_view_options_round_trip_and_old_tours_load_unchanged(repo):
+    root, tours = repo
+    path = root / ".coderstanding/tours/walk.md"
+    old_text = path.read_text()
+    assert tours.get("walk").view == {} and "view" not in old_text  # old tour: no view, file unchanged
+    assert tours.tour_json(tours.get("walk"))["view"] == {} and tours.tour_json(tours.get("walk"))["steps"][0]["view"] == {}
+    tours.set_view("walk", {"lines": "all", "hide_kind": ["signal", "dependency"], "selfcalls": False})
+    tours.set_view("walk", {"boxtext": "full"}, number=2)
+    text = path.read_text()
+    assert "\nview: {lines: all, hide_kind: [signal, dependency], selfcalls: false}\n" in text
+    assert "    view: {boxtext: full}\n" in text
+    tour = tours.get("walk")
+    assert tour.view == {"lines": "all", "hide_kind": ["signal", "dependency"], "selfcalls": False}
+    assert [s.view for s in tour.steps] == [{}, {"boxtext": "full"}]
+    assert tour.steps[1].ai and tour.steps[1].by == "claude"  # not content: the author stays
+    data = tours.tour_json(tour)
+    assert data["view"]["lines"] == "all" and data["steps"][1]["view"] == {"boxtext": "full"}
+    tours.set_view("walk", {"lines": None})  # key= removes it
+    assert "lines" not in tours.get("walk").view
+
+
+def test_put_carries_view_options_and_keeps_them_when_an_older_editor_sends_none(repo):
+    _, tours = repo
+    step = {"key": "k1", "targets": ["Player#hit"], "text": "[[Player#hit]] loses health.", "title": "Hits",
+            "code": {"at": "Player#hit", "lines": "+1..+2", "mark": [4]}}
+    tour = tours.put("walk", {"title": "A walk", "view": {"external": 0}, "steps": [{**step, "view": {"lines": "all"}}]})
+    assert tour.view == {"external": 0} and tour.steps[0].view == {"lines": "all"}
+    assert tour.steps[0].by == "you"  # only the view changed: the step stays as it was
+    tour = tours.put("walk", {"title": "A walk", "steps": [step]})  # an older editor: no view anywhere
+    assert tour.view == {"external": 0} and tour.steps[0].view == {"lines": "all"}
+    with pytest.raises(ValueError):
+        tours.put("walk", {"title": "A walk", "view": {"lines": {"deep": 1}}, "steps": [step]})
+    with pytest.raises(ValueError):
+        tours.put("walk", {"title": "A walk", "view": "lines=all", "steps": [step]})
+
+
+def test_bad_view_in_a_file_is_dropped_not_fatal(repo):
+    root, tours = repo
+    path = root / ".coderstanding/tours/walk.md"
+    path.write_text(path.read_text().replace("title: A walk\n", "title: A walk\nview: {lines: all, Bad-Name: 1, deep: {a: 1}}\n"))
+    assert tours.get("walk").view == {"lines": "all"}
+
+
+def test_cli_tour_view(repo, monkeypatch, capsys, tmp_path):
+    root, _ = repo
+    monkeypatch.setenv(REGISTRY_ENV, str(tmp_path / "reg.json"))
+    (tmp_path / "reg.json").write_text(json.dumps({"app": {"path": str(root)}}))
+    main(["rescan", "app"])
+    capsys.readouterr()
+    main(["tour", "app", "walk", "--view", "lines=all", "selfcalls=0", "hide_kind=signal,dependency"])
+    assert capsys.readouterr().out.strip() == "walk tour view: lines=all selfcalls=0 hide_kind=signal,dependency"
+    main(["tour", "app", "walk", "--step", "2", "--view", "boxtext=full"])
+    assert capsys.readouterr().out.strip() == "walk step 2 view: boxtext=full"
+    main(["tour", "app", "walk"])
+    out = capsys.readouterr().out.splitlines()
+    assert out[1] == "view (whole tour): lines=all selfcalls=0 hide_kind=signal,dependency"
+    assert "view (this step): boxtext=full" in out
+    main(["tour", "app", "walk", "--step", "2"])
+    out = capsys.readouterr().out
+    assert "view (whole tour): lines=all" in out and "view (this step): boxtext=full" in out
+    main(["tour", "app", "walk", "--view", "lines="])
+    assert capsys.readouterr().out.strip() == "walk tour view: selfcalls=0 hide_kind=signal,dependency"
+    with pytest.raises(SystemExit):
+        main(["tour", "app", "walk", "--view", "nonsense"])

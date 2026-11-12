@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from coderstanding.apps import registry_path
 from coderstanding.cli import main
 from coderstanding.notes import load_notes
 
@@ -15,7 +16,7 @@ def app(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     repo = tmp_path / "game"
     shutil.copytree(FIXTURE, repo)
-    main(["add", "game", str(repo)])
+    main(["add", "game", str(repo), "--data", str(repo / ".coderstanding")])  # these tests read it there
     return repo
 
 
@@ -25,28 +26,41 @@ def run(capsys, *argv):
 
 
 def test_add_writes_registry(app, tmp_path):
-    assert "game" in (tmp_path / "home/.config/coderstanding/apps.json").read_text()
+    assert "game" in registry_path().read_text()
 
 
 def test_graph_by_name_and_path(app, capsys):
     capsys.readouterr()
-    lines = run(capsys, "graph", "game", "2")
-    assert lines[0] == "game L2 all 7/11"
+    lines = run(capsys, "graph", "game", "2", "--all")
+    assert lines[0] == "game L2 all 7/11 plan: 6 stubs"
     assert "Player > game.gd*: [dependency, signal] {add_score, score_changed → _on_score}" in lines
     assert "Player > fancy [addon]: [association, dependency] {follow, new}" in lines
-    assert run(capsys, "graph", str(app), "2")[1:] == lines[1:]
+    assert run(capsys, "graph", str(app), "2", "--all")[1:] == lines[1:]
     assert (app / ".coderstanding" / "graph.json").exists()
 
 
-def test_never_rescans_by_itself_but_rescan_does(app, capsys):
+def test_graph_hides_outside_lines_behind_a_count(app, capsys):
+    capsys.readouterr()
+    lines = run(capsys, "graph", "game", "2")
+    assert not any("[addon]" in line for line in lines)
+    assert lines[0] == "game L2 all 6/10 plan: 6 stubs"
+    assert "+1 lines to outside packages (--all)" in lines
+    assert "[addon]" in "\n".join(run(capsys, "graph", "game", "2", "--all"))
+    assert not any("outside packages" in line for line in run(capsys, "graph", "game", "2", "--no-external"))
+
+
+def test_rescans_a_changed_map_by_itself_and_rescan_does(app, capsys):
     run(capsys, "graph", "game")
     graph_json = app / ".coderstanding" / "graph.json"
     built = graph_json.stat().st_mtime
     os.utime(app / "src" / "player.gd", (built + 10, built + 10))
     run(capsys, "graph", "game")
-    assert graph_json.stat().st_mtime == built
+    assert graph_json.stat().st_mtime > built  # files changed: the read refreshed the map
+    refreshed = graph_json.stat().st_mtime
+    run(capsys, "graph", "game")
+    assert graph_json.stat().st_mtime == refreshed  # nothing changed: no second scan
     run(capsys, "rescan", "game")
-    assert graph_json.stat().st_mtime > built
+    assert graph_json.stat().st_mtime > refreshed
 
 
 def test_zoom_and_node(app, capsys):
@@ -56,7 +70,7 @@ def test_zoom_and_node(app, capsys):
     assert lines[-1].startswith("out: ")
     lines = run(capsys, "node", "game", "Player")
     assert lines[:2] == ["game node Player L3 all",
-                         "[class] src/player.gd:1 L2 46 lines (file), 13 members"]
+                         "[class] src/player.gd:1 L2 41 lines (file), 13 members"]
     assert "Player > Buff: [composition]" in lines
 
 
@@ -64,6 +78,20 @@ def test_ambiguous_name_lists_candidates(app, capsys):
     with pytest.raises(SystemExit) as error:
         main(["node", "game", "main"])
     assert "ambiguous: res://scenes/main.tscn, res://src/main.gd" in str(error.value)
+
+
+def test_curate_redo_and_path(app, capsys, tmp_path):
+    run(capsys, "set", "game", "Player", "level=1", "--by", "you")
+    run(capsys, "set", "game", "Player", "level=4", "domain=Game", "hint=the hero", "description=a hero")
+    assert not any(l.startswith("Player ") for l in run(capsys, "curate", "game"))  # default: only missing
+    lines = run(capsys, "curate", "game", "--redo")
+    assert "~AI draft to rewrite" in lines[0]
+    assert any(l.startswith("Player src/player.gd L1 ") and " ~domain,hint,description" in l
+               and "level" not in l.split("{")[0].split("L1 ")[1] for l in lines)  # human level not listed
+    only = run(capsys, "curate", "game", "--redo", "--path", "src/player,nothing/")
+    assert {l.split()[1] for l in only[1:] if " src/" in l} == {"src/player.gd"}
+    assert not any(" src/enemy" in l for l in only)
+    assert run(capsys, "curate", "game", "--path", "zzz")[0].startswith("game curate 0 ")
 
 
 def test_set_and_curate(app, capsys, tmp_path):
@@ -199,7 +227,7 @@ def test_view_command_matches_shared_text_and_sets_function_notes(app, capsys):
                 "--select", "Player#_ready")
     assert lines[0] == ("$ coderstanding view game --level 2 --expand Player "
                         "--select 'Player#_ready'")
-    assert lines[1] == "game L2 all 7/11"
+    assert lines[1] == "game L2 all 7/11 plan: 6 stubs"
     assert lines[lines.index("selected Player#_ready:") + 1] == "hint: starts up"
     notes = load_notes(app / ".coderstanding" / "notes.jsonl")
     assert notes.get("node:Player#_ready", "hint") == ("starts up", "ana")
@@ -284,3 +312,22 @@ def test_scan_with_output_keeps_cache_out_of_repo(tmp_path, capsys):
     main(["scan", str(repo), "-o", str(tmp_path / "out/graph.json")])
     assert not (repo / ".coderstanding").exists()
     assert any((tmp_path / "out/cache").iterdir())
+
+
+def test_warnings_show_outside_bucket(app, capsys):
+    (app / "tool.py").write_text("import bpy\n\n\nclass Tool:\n    def run(self):\n        return bpy.ops\n",
+                                 encoding="utf-8")
+    run(capsys, "rescan", "game")
+    lines = run(capsys, "warnings", "game")
+    assert any(line.startswith("outside (not in the repo on purpose): ") and "bpy" in line for line in lines)
+    assert not any(line.startswith("unresolved") and "bpy" in line for line in lines)
+
+
+def test_warnings_names_lists_each_unresolved_name_once_with_its_count(app, capsys):
+    (app / "tool.py").write_text("import mystery\n\n\nclass Tool:\n    def run(self):\n"
+                                 "        mystery.go()\n        return mystery.stop()\n", encoding="utf-8")
+    run(capsys, "rescan", "game")
+    lines = run(capsys, "warnings", "game", "--names")
+    assert lines[0].startswith("game unresolved names: ")
+    assert any(line.startswith("Tool ") and line.count("mystery ") == 1 for line in lines)
+    assert run(capsys, "warnings", "game", "--names", "Tool")[1].startswith("Tool ")
