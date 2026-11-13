@@ -23,7 +23,7 @@ else:  # Python 3.10: the same reader under its old name
 
 from .filewalk import DEFAULT_SKIP_DIRS, list_files
 from .godot_files import autoloads, declared_class_name, main_scene, quoted_list, read_config, unquote
-from .model import COMM_NAMESPACE, Call, Edge, Location, Node, merge_locations
+from .model import COMM_NAMESPACE, OPTIONAL_IMPORT, Call, Edge, Location, Node, merge_locations
 
 RENDERERS = {"Forward Plus": "forward_plus", "Mobile": "mobile",
              "GL Compatibility": "gl_compatibility"}
@@ -50,6 +50,8 @@ JS_GLOBAL_NAMES = {
     "Float32Array", "Float64Array", "Int8Array", "Int16Array", "Int32Array", "Uint8Array",
     "Uint8ClampedArray", "Uint16Array", "Uint32Array", "ArrayBuffer", "DataView", "Promise", "Map",
     "Set", "WeakMap", "WeakSet", "Date", "RegExp", "Error", "URL", "TextEncoder", "TextDecoder",
+    "WebSocket", "URLSearchParams", "AbortController", "Blob", "Headers", "Request", "Response",
+    "FormData", "Intl", "Symbol", "Proxy", "Reflect",  # browsers and Node 22 alike
 }
 GRADLE_DEP_RE = re.compile(
     r"""^\s*(\w+)\s*\(?\s*(?:platform\(\s*)?["']([^"':\s$]+):([^"':\s]+)(?::([^"'\s]+))?["']""", re.M)
@@ -533,7 +535,7 @@ def unresolved_names(node):
     name: the same name seen as several line kinds (field, call, ...) is added up."""
     names = Counter()
     for edge in node.external_refs.values():
-        if is_unresolved(node, edge.to):
+        if is_unresolved_ref(node, edge):
             names[edge.to] += len(edge.at)
     return names
 
@@ -543,6 +545,17 @@ def is_unresolved(node, label):
     dependency but is not. Engine APIs, the standard library and `outside` names are not."""
     return not (is_engine_name(node, label) or is_standard_name(node, label)
                 or is_outside_name(node, label))
+
+
+def is_optional_ref(edge):
+    """Only optional imports: the code copes without the name, so a miss is outside, not unresolved."""
+    return bool(edge.detail) and all(detail == OPTIONAL_IMPORT for detail in edge.detail)
+
+
+def is_unresolved_ref(node, edge):
+    """is_unresolved for one outside ref, leaving out optional imports and repo files that
+    have no node (Edge.repo_file)."""
+    return is_unresolved(node, edge.to) and not is_optional_ref(edge) and not edge.repo_file
 
 
 # --- communications nodes: sockets and network endpoints (DESIGN 8) ---
@@ -778,9 +791,9 @@ def map_outside_refs(graph, index):
             elif is_engine_name(node, edge.to):
                 usage.engine_refs += len(edge.at)
                 usage.engine_users.add(node.id)
-            elif is_unresolved(node, edge.to):
+            elif is_unresolved_ref(node, edge):
                 usage.unresolved[edge.to] += len(edge.at)
-            elif is_outside_name(node, edge.to):
+            elif is_outside_name(node, edge.to) or is_optional_ref(edge) or edge.repo_file:
                 usage.outside[edge.to] += len(edge.at)
         add_import_edges(graph, index, node)
     graph.fold_held_edges()

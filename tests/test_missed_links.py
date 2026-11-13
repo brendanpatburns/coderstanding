@@ -41,6 +41,22 @@ def test_local_declarations_shadow_page_globals(tmp_path):
     assert not [e for e in graph.edges.values() if e.from_id == "use.js" and e.to == "lib.js"]
 
 
+UMD_LIB = ("(function () {\nclass StepPlayer {}\nconst api = { StepPlayer };\n"
+           "if (typeof module !== 'undefined') module.exports = api;\n"
+           "else window.CoderTours = api;\n})();\n")
+UMD_USE = "const View = (() => {\nconst T = CoderTours;\nconst p = new T.StepPlayer();\n})();\n"
+
+
+def test_umd_script_global_reached_through_an_alias_and_a_member(tmp_path):
+    """`module.exports = api` else `window.CoderTours = api`: Node tests require the file, the page
+    loads it as a classic script; `const T = CoderTours; new T.StepPlayer()` uses the class."""
+    write(tmp_path, {"index.html": '<script src="tours.js"></script>\n<script src="view.js"></script>\n',
+                     "tours.js": UMD_LIB, "view.js": UMD_USE})
+    graph = scan(tmp_path)
+    assert edge(graph, "view.js", "tours.js.StepPlayer", "dependency").detail == ["create"]
+    assert {"kind": "unused"} not in graph.nodes["tours.js.StepPlayer"].warnings
+
+
 def test_python_imports_inside_functions_and_blocks(tmp_path):
     write(tmp_path, {
         "pkg/__init__.py": "", "pkg/server.py": "class Api:\n    pass\n",

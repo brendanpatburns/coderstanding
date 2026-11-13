@@ -331,3 +331,31 @@ def test_warnings_names_lists_each_unresolved_name_once_with_its_count(app, caps
     assert lines[0].startswith("game unresolved names: ")
     assert any(line.startswith("Tool ") and line.count("mystery ") == 1 for line in lines)
     assert run(capsys, "warnings", "game", "--names", "Tool")[1].startswith("Tool ")
+
+
+def test_warnings_names_lists_parse_error_lines_with_their_source(app, capsys):
+    (app / "broken.py").write_text("class Broken:\n    def run(self:\n        pass\n", encoding="utf-8")
+    run(capsys, "rescan", "game")
+    lines = run(capsys, "warnings", "game", "--names")
+    assert "parse errors: 1 files" in lines
+    assert any(line.startswith("broken ") and "broken.py:" in line and "def run" in line for line in lines)
+    (app / "fine.py").write_text("class Fine:\n    pass\n", encoding="utf-8")
+    run(capsys, "rescan", "game")
+    assert any("broken.py:" in line for line in run(capsys, "warnings", "game", "--names", "broken"))
+    assert not any("broken.py:" in line for line in run(capsys, "warnings", "game", "--names", "Fine"))
+
+
+def test_still_true_prints_the_confirmed_notes(app, capsys):
+    main(["set", "game", "Player", "hint=Holds the score"])
+    capsys.readouterr()
+    lines = run(capsys, "set", "game", "Player", "--still-true")
+    assert lines[0].endswith("Player: still true (hint)")
+    assert lines[1] == '  hint: "Holds the score"'
+
+
+def test_still_true_big_batch_needs_yes(app, capsys, monkeypatch):
+    monkeypatch.setattr("coderstanding.cli.STILL_TRUE_BATCH", 0)
+    with pytest.raises(SystemExit) as error:
+        main(["set", "game", "Player", "--still-true"])
+    assert "--yes" in str(error.value)
+    assert run(capsys, "set", "game", "Player", "--still-true", "--yes")[0].endswith("still true (no notes)")

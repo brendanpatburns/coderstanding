@@ -106,3 +106,25 @@ def test_view_text_and_warnings_show_stale(tmp_path):
     from coderstanding.textout import format_node
     text = format_node("app", view, "m.Player", short_name=str)
     assert "the hero (stale)" in text
+
+
+def test_stale_detail_shows_all_note_texts_and_commits(tmp_path, capsys):
+    import subprocess
+    from coderstanding.cli import main
+
+    git = lambda *args: subprocess.run(["git", "-C", str(tmp_path), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                                       check=True, capture_output=True)
+    write_files(tmp_path, {"m.py": CODE})
+    main(["add", "app", str(tmp_path), "--data", str(tmp_path / ".coderstanding")])
+    git("init", "-q")
+    main(["set", "app", "Player#hit", "hint=Takes a hit", "description=Lowers health"])
+    git("add", "m.py")
+    git("commit", "-qm", "first")
+    write_files(tmp_path, {"m.py": CODE.replace("-= 1", "-= 5")})
+    git("commit", "-qam", "bigger hits")
+    capsys.readouterr()
+    main(["warnings", "app", "--stale-detail"])
+    out = capsys.readouterr().out
+    assert "Player#hit m.py:2-4" in out
+    assert 'hint (stale): "Takes a hit"' in out and 'description (stale): "Lowers health"' in out
+    assert "bigger hits" in out

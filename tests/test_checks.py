@@ -185,3 +185,35 @@ def test_parse_error_warning_lists_the_file_and_line(tmp_path):
     assert [w for w in graph.nodes["broken"].warnings if w["kind"] == "parse-error"] == [
         {"kind": "parse-error", "names": ["broken.py:1"], "count": 1}]
     assert "parse-error" not in kinds(graph, "fine")
+
+
+def test_using_a_nested_class_uses_the_nodes_it_sits_in(tmp_path):
+    """`from .comments import Comments` uses the module `comments` and its package `pkg`; a
+    module only its own classes point at stays unused."""
+    graph = scan_fake(tmp_path, {
+        "init.fk": "type pkg module\n",
+        "comments.fk": "type pkg.comments module\ntype pkg.comments.Comments class\n",
+        "tours.fk": "type app module entry\nref dependency id:pkg.comments.Comments create\n",
+        "self.fk": "type pkg.lonely module\ntype pkg.lonely.Inner class\n"
+                   "ref dependency id:pkg.lonely call\n"})
+    unused = {i for i, n in graph.nodes.items() if "unused" in kinds(graph, i)}
+    assert unused == {"pkg.lonely", "pkg.lonely.Inner"}
+
+
+def test_own_decorator_uses_the_class_and_its_module(tmp_path):
+    """`@register class ShellModule` with `register` from the repo: the registry is handed the
+    class. An outside decorator (`@dataclass`) is no use."""
+    graph = scan_fake(tmp_path, {
+        "registry.fk": "type registry module entry\n",
+        "shell.fk": "type shell module\ntype shell.ShellModule class\n"
+                    "ref dependency id:registry decorator\n",
+        "data.fk": "type data module\ntype data.Point class\nref dependency dataclass decorator\n"})
+    unused = {i for i, n in graph.nodes.items() if "unused" in kinds(graph, i)}
+    assert unused == {"data", "data.Point"}
+
+
+def test_package_holding_an_entry_point_is_used(tmp_path):
+    """`python -m pkg` runs `pkg/__main__.py`, and Python runs `pkg/__init__.py` first."""
+    graph = scan_fake(tmp_path, {"init.fk": "type pkg module\n",
+                                 "main.fk": "type pkg.__main__ module script-main,entry\n"})
+    assert "unused" not in kinds(graph, "pkg")

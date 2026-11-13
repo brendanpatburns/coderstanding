@@ -33,6 +33,7 @@ from .notes import (FINGERPRINTED, NODE_PREFIX, STATUSES, TEXT_FIELDS, WRITABLE_
 from .textout import format_tour, tour_markdown, view_text
 from .cards import BY_FOLDER, FIELDS as CARD_FIELDS, PRIORITIES, SPEC, Card, link_index, open_cards
 from .tours import AUDIO_TYPES, MAX_AUDIO_BYTES, open_tours
+from .voices import Voices
 from . import planned, progress
 from .userconfig import hosted_origin
 from .worktrees import file_link_base
@@ -40,7 +41,9 @@ from .views import ALL_LINES, EXPLAINED, LINES, SCENE_TYPE, compute_view, effect
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 8517
-HUB_ROUTES = ("/api/apps", "/api/rescan")  # writes that need no per-app Api
+VOICES_PATH = "/api/voices"  # the built-in (Piper) voices: GET lists them
+SPEAK_PATH = "/api/voices/speak"  # POST {voice, text} -> one WAV clip
+HUB_ROUTES = ("/api/apps", "/api/rescan", SPEAK_PATH)  # writes that need no per-app Api
 ALIVE_PATH = "/api/alive"  # the open page's heartbeat (idle exit)
 SD_LISTEN_FDS_START = 3  # systemd socket activation: the first passed socket's fd
 LOCAL_HOSTS = (HOST, "localhost")
@@ -501,6 +504,14 @@ class Api:
         return self.layout()
 
 
+class RawBody:
+    """A route's answer that is not JSON: bytes and their type (a voice clip)."""
+
+    def __init__(self, data, content_type):
+        self.data = data
+        self.content_type = content_type
+
+
 class Handler(SimpleHTTPRequestHandler):
     """Static viewer files plus /api/* routes."""
 
@@ -509,6 +520,7 @@ class Handler(SimpleHTTPRequestHandler):
                       ".css": "text/css", ".json": "application/json", ".html": "text/html",
                       ".svg": "image/svg+xml"}
     hub = None  # set by make_server
+    voices = None  # the built-in voices (voices.Voices), set by make_server
     allow_origin = None  # set by make_server
     api = None  # the Api for this request's ?app=, set per request
     idle_watch = None  # IdleWatch with `serve --idle-exit`, set by make_server
@@ -620,6 +632,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.send_json({"alive": True})
         if url.path == "/api/apps":
             return self.send_json(self.hub.listing(details=params.get("details") == ["1"]))
+        if url.path == VOICES_PATH:
+            return self.send_json(self.voices.listing())
         if url.path == "/api/ref" and not params.get("app"):  # the ref names its app
             ref = refs.parse_ref(params.get("ref", [""])[0])
             params["app"] = [ref["app"]] if ref else []
@@ -751,7 +765,12 @@ class Handler(SimpleHTTPRequestHandler):
                          "/api/plan/keep", lambda body: self.api.plan_keep(body),
                          "/api/plan/accept", lambda body: self.api.plan_accept(body),
                          "/api/apps", lambda body: self.hub.add_app(body),
-                         "/api/rescan", lambda body: self.hub.start_scan(self.app_name, body))
+                         "/api/rescan", lambda body: self.hub.start_scan(self.app_name, body),
+                         SPEAK_PATH, lambda body: self.speak(body))
+
+    def speak(self, body):
+        """POST /api/voices/speak {voice, text}: one clip in a built-in voice (voices.Voices)."""
+        return RawBody(self.voices.speak(body.get("voice"), body.get("text")), "audio/wav")
 
     def do_DELETE(self):
         self.route_write("DELETE")
@@ -825,7 +844,10 @@ class Handler(SimpleHTTPRequestHandler):
         if per_app and not self.pick_app(params):
             return
         try:
-            self.send_json(action(self.read_body(types)))
+            result = action(self.read_body(types))
+            if isinstance(result, RawBody):
+                return self.send_text(result.data, result.content_type)
+            self.send_json(result)
         except AppError as error:
             self.send_error_json(HTTPStatus.BAD_REQUEST, str(error))
         except PermissionError as error:  # e.g. editing someone else's comment
@@ -913,17 +935,18 @@ class LoopbackServer(ThreadingHTTPServer):
 
 
 def make_server(api_or_hub, port=DEFAULT_PORT, viewer_dir=None, host=HOST,
-                allow_origin=None, idle_exit=None, sock=None):
+                allow_origin=None, idle_exit=None, sock=None, voices=None):
     """An Api (one fixed app, as tests use it) or a Hub (every registered app).
     Loopback only: there is no way to listen on a network address (DESIGN 18).
-    `idle_exit` seconds: attach an IdleWatch (server.idle_watch); `sock`: see LoopbackServer."""
+    `idle_exit` seconds: attach an IdleWatch (server.idle_watch); `sock`: see LoopbackServer;
+    `voices`: the built-in voices (default: Piper and the user's voices folder)."""
     if not is_loopback(host):
         raise ValueError(f"refusing to listen on {host!r}: Coderstanding serves this PC only "
                          "(127.0.0.1 / ::1 / localhost)")
     hub = api_or_hub if isinstance(api_or_hub, Hub) else Hub(None, fixed={api_or_hub.app.name: api_or_hub})
     watch = IdleWatch(idle_exit, hub.busy) if idle_exit else None
     handler = type("BoundHandler", (Handler,), {"hub": hub, "allow_origin": allow_origin,
-                                                "idle_watch": watch})
+                                                "idle_watch": watch, "voices": voices or Voices()})
     server = LoopbackServer((host, port), partial(handler, directory=str(viewer_dir or assets.viewer_dir())),
                             sock=sock)
     server.idle_watch = watch

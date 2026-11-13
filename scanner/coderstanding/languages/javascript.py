@@ -165,13 +165,16 @@ class JavaScriptFile:
 
     def is_classic_script(self, root):
         """A plain `.js` file without import/export/require: when a page loads it with
-        `<script src>`, its top-level names are global to the page's other classic scripts."""
+        `<script src>`, its top-level names are global to the page's other classic scripts. A
+        CommonJS file that also sets `window.X` (the UMD pattern: Node tests require it, the page
+        loads it) counts too."""
         if posixpath.splitext(self.ctx.rel_path)[1] != ".js":
             return False
-        source = self.ctx.read_bytes()
-        if b"require(" in source or b"module.exports" in source:
+        if any(n.type in ("import_statement", "export_statement") for n in root.children):
             return False
-        return not any(n.type in ("import_statement", "export_statement") for n in root.children)
+        source = self.ctx.read_bytes()
+        is_common_js = b"require(" in source or b"module.exports" in source
+        return not is_common_js or b"window." in source  # UMD: `module.exports = x` else `window.X = x`
 
     def read_page_globals(self, root):
         names = {}
@@ -220,13 +223,17 @@ class JavaScriptFile:
         """Refs for bare names this script does not declare; the resolver keeps those that
         another classic script on the same page declares (Ref.shared) and drops the rest."""
         self.collect_declared(root)
+        aliases = self.shared_aliases(root)
         seen = set()
         for node in descendants(root):
             if node.type != "identifier":
                 continue
-            name = text(node)
+            name = aliases.get(text(node), text(node))
             if name in self.declared or name in self.imported or name in RUNTIME_GLOBALS:
                 continue
+            if node.parent.type == "variable_declarator" and node.parent.child_by_field_name("name") == node:
+                continue  # `const T = CoderTours`: the alias's own name
+            name = self.with_property(node, name)
             detail, call = self.shared_use(node)
             member = enclosing_member(node)
             if not call and detail == "use":
@@ -236,9 +243,30 @@ class JavaScriptFile:
             self.result.refs.append(Ref(self.module_id, Target(name=name), "dependency",
                                         line(node), detail, call, from_member=member, shared=True))
 
+    def shared_aliases(self, root):
+        """`const T = CoderTours`: local name -> the bare name it holds, when that name is not
+        declared in this file (so it may be another script's page global)."""
+        found = {}
+        for declarator in descendants(root):
+            if declarator.type != "variable_declarator":
+                continue
+            name, value = declarator.child_by_field_name("name"), declarator.child_by_field_name("value")
+            if name is not None and value is not None and name.type == value.type == "identifier" \
+                    and text(value) not in self.declared and text(value) not in RUNTIME_GLOBALS:
+                found[text(name)] = text(value)
+        return found
+
+    @staticmethod
+    def with_property(node, name):
+        """`X.Y` read as the name `X.Y`: the resolver takes Y as a child of X's node if it has one."""
+        parent = node.parent
+        if parent.type == "member_expression" and parent.child_by_field_name("object") == node:
+            return f"{name}.{text(parent.child_by_field_name('property'))}"
+        return name
+
     @staticmethod
     def shared_use(node):
-        """(detail, called member) of a bare name: `f()` call, `x.f()` call of f, `new X`."""
+        """(detail, called member) of a bare name: `f()` call, `x.f()` call of f, `new X`, `new X.Y`."""
         parent = node.parent
         if parent.type == "call_expression" and parent.child_by_field_name("function") == node:
             return "call", text(node)
@@ -248,6 +276,8 @@ class JavaScriptFile:
             outer = parent.parent
             if outer.type == "call_expression" and outer.child_by_field_name("function") == parent:
                 return "call", text(parent.child_by_field_name("property"))
+            if outer.type == "new_expression" and outer.child_by_field_name("constructor") == parent:
+                return "create", ""  # `new X.Y()`
         return "use", ""
 
     # --- top level --------------------------------------------------------------------

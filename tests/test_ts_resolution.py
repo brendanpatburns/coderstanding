@@ -280,3 +280,11 @@ def test_re_export_loop_ends(tmp_path):
     graph = scan_repo(tmp_path, modules=[JavaScriptModule()], use_cache=False)
     assert ("main.ts", "b/index.ts.Real", "dependency") in graph.edges
     assert ("main.ts", "a/index.ts", "dependency") in graph.edges  # Ghost: the barrel itself
+
+
+def test_diagnose_leaves_platform_globals_out_of_unknown_names(tmp_path):
+    """`new WebSocket()` and `node:fs` are the platform, as in `warnings`: no unknown names."""
+    write(tmp_path, "a.js", "import fs from 'node:fs';\n"
+          "export class A { go() { this.s = new WebSocket('x'); fs.readFileSync('y'); } }\n")
+    text = diagnose_text(scan_repo(tmp_path, modules=[JavaScriptModule()], use_cache=False))
+    assert not [line for line in text if "type/class names" in line], text

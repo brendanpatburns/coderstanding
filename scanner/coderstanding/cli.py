@@ -13,16 +13,16 @@ from pathlib import Path
 from . import app_settings, field_rules, refs, textout
 from .textout import short_namer
 from . import worktrees
-from .apps import (AppError, graph_scan, candidates, data_for_add, load_names, load_registry, RELEVEL_SCOPES, SETTINGS, find_app, load_graph, register,
-                   refresh_map, relevel, remove_app, rename_app, rescan, worktree_app)
+from .apps import (AppError, data_home, graph_scan, candidates, data_for_add, load_names, load_registry, RELEVEL_SCOPES, SETTINGS, find_app, load_graph, register,
+                   refresh_map, relevel, remove_app, rename_app, rescan, stale_repo_cache, worktree_app)
 from .graph_json import write_graph
 from .cache import SCANNER_VERSION
 from .offline import helper_listening, install as install_offline_guard, privacy_report
 from .levels import parse_hub_threshold
-from .checks import RULE_FILTERS, unresolved_by_node, warnings_by_kind
+from .checks import RULE_FILTERS, parse_errors_by_node, unresolved_by_node, warnings_by_kind
 from .diagnose import diagnose_text
 from .notes import (AI_AUTHOR, FUNCTION_SEP, HUMAN_AUTHOR, clean_value, edge_key, function_key, is_function,
-                    human_author, node_key)
+                    human_author, node_key, FINGERPRINTED)
 from .readtargets import read_target_blocks
 from .setup_cli import SETUP_COMMANDS
 from .scan import default_output, scan_repo
@@ -31,13 +31,13 @@ from .name_reach import command_tests
 from .testcode import files_to_retest, is_test, is_test_path
 from .cards import KINDS, PRIORITIES, SORTS, SPEC, link_index, linked_texts, open_cards
 from .tours import open_tours, parse_view_pairs
-from .fingerprints import SourceLines
+from .fingerprints import SourceLines, key_ranges
 from . import planned, progress
 from .views import (ALL_LINES, CONCRETE, EXPLAINED, LINES, EXPAND_ALL, IMPACT_DEPTH, SCENE_TYPE, brief, compute_view, diff_tests, effective_level, find, find_text,
                     find_suggestions, globals_list, hit_callers, hotspots, impact, name_impact, outline, read_blocks, miss, resolve_class, resolve_target, resolve_unit, selection_id,
                     suggest_files, unique_namer, title_namer,
                     setup_of)
-from .filewalk import git_changed_lines, git_churn
+from .filewalk import git_changed_lines, git_churn, git_range_commits
 from .textindex import dupes, env_vars, read_index, under_path, uses
 
 SPEC_STAGES = SPEC.stages
@@ -1029,14 +1029,66 @@ def add_tests(commands):
 
 def run_unresolved_names(args, app, graph, notes):
     only_id = resolve_class(graph, notes, args.names) if args.names else None
-    print("\n".join(textout.unresolved_name_lines(app.name, unresolved_by_node(graph, only_id),
-                                                 title_namer(graph, notes))))
+    short_name = title_namer(graph, notes)
+    lines = textout.unresolved_name_lines(app.name, unresolved_by_node(graph, only_id), short_name)
+    lines += textout.parse_error_lines(parse_errors_by_node(graph, only_id),
+                                       lambda place: source_line_at(app.root, place), short_name)
+    print("\n".join(lines))
+
+
+def source_line_at(root, place):
+    """The text of the line a `file:line` place names ('' if the file cannot be read)."""
+    file, _, line_number = place.rpartition(":")
+    try:
+        return (root / file).read_text(encoding="utf-8", errors="replace").splitlines()[int(line_number) - 1]
+    except (OSError, ValueError, IndexError):
+        return ""
+
+
+STALE_COMMITS_SHOWN = 3
+STALE_RANGES_QUERIED = 3  # a connection can have dozens of call lines: ask git about the first few
+
+
+def range_places(ranges):
+    """`file:first-last` per file, spanning all that file's ranges (a connection's scattered lines)."""
+    spans = {}
+    for file, first, last in ranges:
+        low, high = spans.get(file, (first, last))
+        spans[file] = (min(low, first), max(high, last))
+    return [f"{file}:{low}" + (f"-{high}" if high != low else "") for file, (low, high) in spans.items()]
+
+
+def stale_detail_row(app, graph, notes, source, changed, key, stale_fields):
+    """What `--stale-detail` shows for one note key (see textout.stale_detail_lines). Only a
+    fingerprint is stored, not the old code, so "what changed" is the recent commits on the range."""
+    ranges = key_ranges(graph, source, key)
+    commits = {}
+    for file, first, last in ranges[:STALE_RANGES_QUERIED]:
+        for commit in git_range_commits(app.root, file, first, last, STALE_COMMITS_SHOWN):
+            commits.setdefault(commit[0], commit)
+    uncommitted = any(start <= last and first <= end for file, first, last in ranges
+                      for start, end in (changed or {}).get(file, ()))
+    notes_shown = [(name, notes.get(key, name)[0], name in stale_fields) for name in FINGERPRINTED
+                   if notes.get(key, name)[0]]
+    return {"key": key, "notes": notes_shown, "commits": list(commits.values())[:STALE_COMMITS_SHOWN],
+            "places": range_places(ranges),
+            "uncommitted": uncommitted}
+
+
+def run_stale_detail(app, graph, notes):
+    source = SourceLines(app.root)
+    changed = (git_changed_lines(app.root) or ({},))[0]
+    rows = [stale_detail_row(app, graph, notes, source, changed, key, fields)
+            for key, fields in notes.stale_notes(graph)]
+    print("\n".join(textout.stale_detail_lines(app.name, rows, title_namer(graph, notes))))
 
 
 def run_warnings(args):
     app, graph, notes = open_app(args)
     if args.names is not None:
         return run_unresolved_names(args, app, graph, notes)
+    if args.stale_detail:
+        return run_stale_detail(app, graph, notes)
     print(textout.format_warnings(app.name, warnings_by_kind(graph, notes, args.all),
                                   title_namer(graph, notes)))
     for line in textout.outside_lines(graph.stack, args.all):
@@ -1058,7 +1110,9 @@ def add_warnings(commands):
     app_args(parser, view_options=False)
     parser.add_argument("--all", action="store_true", help="also show ignored warnings and every outside name")
     parser.add_argument("--names", nargs="?", const="", metavar="CLASS",
-                        help="instead: list the unresolved names with their counts, per class (or just CLASS)")
+                        help="instead: list the lines the grammar failed to parse and the unresolved names with their counts, per class (or just CLASS)")
+    parser.add_argument("--stale-detail", action="store_true",
+                        help="instead: per stale note its code place, all its note texts and the recent commits on that code")
     parser.set_defaults(run=run_warnings)
 
 
@@ -1252,12 +1306,22 @@ def set_lines(args):
     return [args.items]
 
 
+STILL_TRUE_BATCH = 20  # more targets than this need --yes after the summary has been shown
+
+
 def run_still_true(args, app, graph, notes):
-    """`set --still-true Name ...`: the targets' notes are still right for today's code."""
-    for target in args.items:
-        key = note_target(graph, notes, target)
-        done = notes.confirm(key, graph)
-        print(f"{key}: still true ({', '.join(done) or 'no notes'})")
+    """`set --still-true Name ...`: the targets' notes are still right for today's code. Prints
+    what is confirmed (target, field, the note text); a big batch needs --yes."""
+    keys = [note_target(graph, notes, target) for target in args.items]
+    shown = {key: [(name, notes.get(key, name)[0]) for name in FINGERPRINTED if notes.get(key, name)[0]]
+             for key in keys}
+    for line in textout.still_true_lines(shown):
+        print(line)
+    if len(keys) > STILL_TRUE_BATCH and not args.yes:
+        sys.exit(f"error: {len(keys)} targets (more than {STILL_TRUE_BATCH}): read the list above, "
+                 f"then repeat with --yes to confirm them all")
+    for key in keys:
+        notes.confirm(key, graph)
     app.save_notes(notes)
 
 
@@ -1438,6 +1502,8 @@ def add_set(commands):
     parser.add_argument("--still-true", action="store_true",
                         help="items are targets (Name, A>B, Name#fn): keep their notes, mark them "
                              "up to date with the code (clears the stale mark)")
+    parser.add_argument("--yes", action="store_true",
+                        help=f"with --still-true: confirm more than {STILL_TRUE_BATCH} targets at once")
     parser.set_defaults(run=run_set)
 
 
@@ -1493,6 +1559,10 @@ def run_rescan(args):
         raise AppError("--reset-level-names only goes with --relevel")
     graph = rescan(app, key_values(args.setting))
     print(f"{app.name}: {len(graph.nodes)} nodes, {len(graph.edges)} edges -> {app.graph_path}")
+    stale = stale_repo_cache(app)
+    if stale:
+        print(f"warning: {stale} only holds an old generated cache (the cache now lives in "
+              f"{app.cache_dir.parent}); nothing reads it, delete it by hand", file=sys.stderr)
     if args.relevel:
         done = relevel(app, args.relevel, args.reset_level_names)
         print(f"relevel {args.relevel}: cleared {done['cleared']} level notes"
@@ -1554,12 +1624,14 @@ def run_privacy(args):
     origin = hosted_origin()
     source = (f"env {ALLOW_ORIGIN_ENV}" if os.environ.get(ALLOW_ORIGIN_ENV)
               else str(config_dir() / "hosted.json")) if origin else None
-    print(privacy_report(HOST, port, origin, source, helper_listening(HOST, port)))
+    from .voices import Voices
+    print(privacy_report(HOST, port, origin, source, helper_listening(HOST, port), Voices().summary()))
 
 
 def add_privacy(commands):
     parser = commands.add_parser("privacy", help="show that Coderstanding works fully offline: "
-                                 "network guard, bind address, allowed origin, voice policy")
+                                 "network guard, bind address, allowed origin, voice policy and the "
+                                 "built-in voices folder (drop Piper voices there)")
     parser.add_argument("--port", type=int, help="the helper's port (default 8517)")
     parser.set_defaults(run=run_privacy)
 
@@ -1600,11 +1672,19 @@ def build_parser():
     return parser
 
 
+def print_other_code_hint():
+    """The worktree hint, once per checkout and running copy of the code (marker in the data home),
+    so piped commands stay clean; it shows again when another copy of the code runs."""
+    running = Path(__file__).resolve().parents[1]
+    hint = worktrees.other_code_hint(running)
+    checkout = worktrees.checkout_top(Path.cwd())
+    if hint and worktrees.changed_since_shown(data_home(), f"other-code:{checkout}", str(running)):
+        print(hint, file=sys.stderr)
+
+
 def main(argv=None):
     install_offline_guard()  # before anything else runs (DESIGN 18)
-    hint = worktrees.other_code_hint(Path(__file__).resolve().parents[1])
-    if hint:
-        print(hint, file=sys.stderr)
+    print_other_code_hint()
     args = build_parser().parse_args(argv)
     try:
         args.run(args)

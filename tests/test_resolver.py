@@ -134,3 +134,15 @@ def test_self_calls_are_kept_as_a_self_edge(tmp_path):
         "a.fk": "type A class\nref dependency A call helper\nref dependency A call helper\n"})
     self_edge = graph.edges[("A", "A", "dependency")]
     assert [(c.member, c.count) for c in self_edge.calls] == [("helper", 2)]
+
+
+def test_path_to_an_unread_repo_file_is_no_outside_name(tmp_path):
+    """A stylesheet, data file or vendored script exists but has no node: it stays an outside
+    ref, found (not unresolved, no path miss)."""
+    graph = scan_fake(tmp_path, {
+        "a.fk": "type A class\nref dependency path:style.css\nref dependency path:gone.css\n",
+        "style.css": "body {}\n"})
+    refs = {ref.to: ref.repo_file for ref in graph.nodes["A"].external_refs.values()}
+    assert refs == {"style.css": True, "gone.css": False}
+    assert [miss.written for miss in graph.path_misses] == ["gone.css"]
+    assert {"kind": "unresolved", "count": 1} in graph.nodes["A"].warnings

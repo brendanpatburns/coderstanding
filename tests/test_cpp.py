@@ -217,6 +217,67 @@ def test_blank_compiler_words_keeps_length():
     assert b"__watcall" not in blanked and b"my__far" in blanked
 
 
+GCC_FILES = {
+    "a.c": "typedef unsigned short __attribute__((aligned(1), may_alias)) u16u;\n"
+           "extern int flag __attribute__((weak));\n"
+           "void hook(int mode) __attribute__((weak));\n"
+           "int kind(int code) {\n  switch (code) {\n  case 0x27 ... 0x2a: case 7: return 1;\n  default: return 0;\n  }\n}\n"
+           "int after_all(void) { return helper(); }\n",
+    "b.c": "int helper(void) { return 1; }\n",
+}
+
+
+def test_gcc_attributes_and_case_ranges_parse(tmp_path):
+    graph = scan_c(tmp_path, GCC_FILES)
+    assert not graph.diagnostics.get("parse_errors")
+    assert {m.name for m in graph.nodes["a"].members} == {"kind", "after_all"}
+    edge(graph, "a", "b", "dependency")  # a function after the extensions is still read
+
+
+GHIDRA_PARSE_FILES = {
+    "a.c": "void switchD_00016518::caseD_0(int param_1)\n{\n  int local;\n  if (param_1) {\n    local = 1;\n"
+           "LAB_000194b5:\n  }\n  switchD_00025661::default();\n  default();\n  F_2((&switchD_0002be79::table)[local]);\n}\n"
+           "undefined1  [10] __watcall F_3(int param_1)\n{\n  return in(1);\n}\n",
+    "b.c": "void F_2(int value)\n{\n}\n",
+    "c.c": "int size = offsetof(Network, players[2].name);\nvoid after(void) { F_2(1); }\n",
+}
+
+
+def test_ghidra_labels_scopes_and_offsetof_parse(tmp_path):
+    graph = scan_c(tmp_path, GHIDRA_PARSE_FILES)
+    assert not graph.diagnostics.get("parse_errors")
+    assert {m.name for m in graph.nodes["a"].members} == {"caseD_0", "F_3"}
+    edge(graph, "a", "b", "dependency")
+    edge(graph, "c", "b", "dependency")
+
+
+def test_lone_macro_calls_do_not_break_the_file(tmp_path):
+    files = {"a.c": "ARITH(8, u8)   /* generates functions */\nARITH(16, u16)\nint after(void) { return 1; }\n"
+                    "void FUN_00012345(int param_1)\n{\n}\n"}
+    graph = scan_c(tmp_path, files)
+    assert not graph.diagnostics.get("parse_errors")
+    assert {m.name for m in graph.nodes["a"].members} == {"after", "FUN_00012345"}
+
+
+def test_decompiler_case_fragments_are_never_unused_or_god(tmp_path):
+    graph = scan_c(tmp_path, {"a.c": "void switchD_00016518::caseD_0(int param_1)\n{\n}\n",
+                              "b.c": "void lonely(void)\n{\n}\n"})
+    fragment = graph.nodes["a"]
+    assert "fragment" in fragment.flags
+    assert not any(w["kind"] == "unused" for w in fragment.warnings)
+    assert any(w["kind"] == "unused" for w in graph.nodes["b"].warnings)
+
+
+def test_prototype_and_function_argument_link_to_the_defining_file(tmp_path):
+    files = {"a.c": "void f(void);\nvoid call_it(void (*callback)(void));\nvoid run_it(void) { call_it(f); }\n"
+                    "void only_reference(void) { int value = 1; call_it(value); }\n",
+             "b.c": "void f(void) {}\nvoid call_it(void (*callback)(void)) { callback(); }\n"}
+    graph = scan_c(tmp_path, files)
+    assert {m.name for m in graph.nodes["a"].members} == {"run_it", "only_reference"}  # prototypes are not members
+    assert set(calls(edge(graph, "a", "b", "dependency"))) == {"f", "call_it"}
+    assert not any(w["kind"] == "unused" for w in graph.nodes["b"].warnings)
+
+
 REWRITE_FILES = {
     "game/x.c": "REWRITE_CHECKED(272b4, .scratch = 1,\n    .vary = 2)\n{\n  helper();\n}\n\n"
                 "REWRITE(5)\n{\n}\n\nint plain(void) { return 0; }\n",
@@ -232,6 +293,18 @@ def test_function_macros_define_functions(tmp_path):
     edge(graph, "game/x", "game/y", "dependency")  # the macro body's call is read
 
 
+@pytest.mark.parametrize("generated_dir", ["a_out", "z_out"])  # scanned before and after the hand-written file
+def test_calls_go_to_the_macro_written_copy_of_a_function(tmp_path, generated_dir):
+    files = {
+        "game/x.c": "REWRITE(272b4)\n{\n}\n",
+        f"{generated_dir}/272b4.c": "void F_272b4(void) {}\n",
+        "game/caller.c": "void run(void) { F_272b4(); }\n",
+    }
+    graph = scan_c(tmp_path, files, function_macros={"REWRITE": "F_{1}"})
+    edge(graph, "game/caller", "game/x", "dependency")
+    assert not any(to == f"{generated_dir}/272b4" for _, to, _ in graph.edges)
+
+
 def test_function_macros_off_by_default_and_setting_changes_cache(tmp_path):
     write_files(tmp_path, REWRITE_FILES)
     cache_dir = tmp_path / "cache"
@@ -244,5 +317,38 @@ def test_function_macros_off_by_default_and_setting_changes_cache(tmp_path):
 def test_parse_function_macros_setting():
     from coderstanding.apps import AppError, parse_setting
     assert parse_setting("function_macros", '{"REWRITE": "F_{1}"}') == {"REWRITE": "F_{1}"}
+    assert parse_setting("function_macros", '{"ARITH": ["add{1}", "sub{1}"]}') == {"ARITH": ["add{1}", "sub{1}"]}
     with pytest.raises(AppError):
         parse_setting("function_macros", "[1]")
+    with pytest.raises(AppError):
+        parse_setting("function_macros", '{"ARITH": []}')
+
+
+def test_function_macro_without_a_body_defines_every_named_function(tmp_path):
+    files = {"cpu.h": "ARITH(8, u8)   /* generates functions */\nARITH(16, u16)\n",
+             "lift.c": "void run(void) { add8(1, 2); sar16(3, 4); }\n"}
+    graph = scan_c(tmp_path, files, function_macros={"ARITH": ["add{1}", "sar{1}"]})
+    assert {m.name for m in graph.nodes["cpu"].members} == {"add8", "sar8", "add16", "sar16"}
+    assert graph.nodes["cpu"].members[0].line == 1 and graph.nodes["cpu"].members[2].line == 2
+    assert set(calls(edge(graph, "lift", "cpu", "dependency"))) == {"add8", "sar16"}
+    assert not graph.nodes["lift"].external_refs
+
+
+def test_define_inside_a_brace_initializer_is_no_parse_error(tmp_path):
+    source = ("void f(void) {\n    static const struct { const char *name; int offset; } registers[] = {\n"
+              "#define REGISTER(r, scratch) { #r, scratch }\n        REGISTER(eax, 1), REGISTER(ebx, 2),\n    };\n"
+              "    g();\n}\nvoid g(void) {}\n")
+    graph = scan_c(tmp_path, {"a.c": source})
+    assert not graph.diagnostics.get("parse_errors")
+    assert {m.name: m.line for m in graph.nodes["a"].members} == {"f": 1, "g": 8}
+    assert not graph.nodes["a"].external_refs  # REGISTER is a macro of the file, not an unresolved name
+
+
+def test_decompiler_copy_that_lost_to_a_macro_written_copy_is_replaced_not_unused(tmp_path):
+    files = {"game/x.c": "REWRITE(272b4)\n{\n}\n", "out/272b4.c": "void F_272b4(void) {}\n",
+             "game/caller.c": "void run(void) { F_272b4(); }\n"}
+    graph = scan_c(tmp_path, files, function_macros={"REWRITE": "F_{1}"})
+    original = graph.nodes["out/272b4"]
+    assert "replaced" in original.flags and original.replaced_by == "game/x.c"
+    assert not {"unused", "god"} & {w["kind"] for w in original.warnings}
+    assert "replaced" not in graph.nodes["game/x"].flags

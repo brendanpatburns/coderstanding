@@ -60,6 +60,14 @@ def git_base(root):
     return out.decode().strip() if out else "HEAD"
 
 
+def git_range_commits(root, file, first, last, limit):
+    """[(short hash, date, subject)] newest first: commits that changed lines first..last of the
+    file; [] without git or history for it."""
+    out = git_output(root, "log", f"-n{limit}", "--no-patch", "--format=%h\t%as\t%s", f"-L{first},{last}:{file}")
+    rows = (line.split("\t", 2) for line in (out or b"").decode("utf-8", "replace").splitlines())
+    return [tuple(row) for row in rows if len(row) == 3]
+
+
 def git_changed_lines(root, ref=None):
     """(changed, ref) for the working tree against ref (default `git_base`), uncommitted changes
     included; changed = {path relative to root: [(first, last)] new-side lines} (a deletion = the

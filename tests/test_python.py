@@ -110,3 +110,42 @@ def test_class_size_is_its_span(tmp_path):
     assert (graph.nodes["m.A"].lines, graph.nodes["m.A"].span) == (3, True)
     assert (graph.nodes["m"].lines, graph.nodes["m"].span) == (6, False)
     assert graph.nodes["m"].file_lines == 9
+
+
+def scan_files(root, files):
+    for name, source in files.items():
+        (root / name).write_text(source)
+    return scan_repo(root, modules=[PythonModule()], use_cache=False)
+
+
+def test_classes_handed_to_calls_are_used(tmp_path):
+    """`Hub(Api)`, `type("B", (Handler,), {})`, `key=Foo`: a framework makes the instances."""
+    graph = scan_files(tmp_path, {
+        "server.py": "from hub import Hub\nclass Api: pass\nclass Handler: pass\n"
+                     "def serve():\n    Hub(Api, kind=Handler)\n"
+                     "    return type('Bound', (Handler,), {})\n",
+        "hub.py": "class Hub: pass\n"})
+    assert edge(graph, "server", "server.Api", "dependency").detail == ["arg"]
+    assert "arg" in edge(graph, "server", "server.Handler", "dependency").detail
+    assert {"kind": "unused"} not in graph.nodes["server.Handler"].warnings
+
+
+def test_own_class_decorator_is_a_ref(tmp_path):
+    graph = scan_files(tmp_path, {
+        "registry.py": "def register(cls):\n    return cls\n",
+        "shell.py": "from registry import register\nfrom dataclasses import dataclass\n"
+                    "@register\nclass ShellModule: pass\n@dataclass\nclass Point: pass\n"})
+    assert edge(graph, "shell.ShellModule", "registry", "dependency").detail == ["decorator"]
+    assert {"kind": "unused"} not in graph.nodes["shell.ShellModule"].warnings
+
+
+def test_import_guarded_by_import_error_is_optional(tmp_path):
+    """`try: import PyQt6 except ImportError: import PySide6`: PyQt6 may be missing."""
+    graph = scan_files(tmp_path, {"tray.py": (
+        "try:\n    from PyQt6.QtCore import QTimer\nexcept ImportError:\n    from PySide6.QtCore import QTimer\n"
+        "try:\n    import yaml\nexcept OSError:\n    pass\n")})
+    refs = {edge.to: edge.detail for edge in graph.nodes["tray"].external_refs.values()}
+    assert refs["PyQt6.QtCore.QTimer"] == ["optional-import"]
+    assert refs["PySide6.QtCore.QTimer"] == refs["yaml"] == ["import"]
+    assert [w for w in graph.nodes["tray"].warnings if w["kind"] == "unresolved"] == \
+        [{"kind": "unresolved", "count": 2}]  # PySide6 and yaml: no dependency file names them

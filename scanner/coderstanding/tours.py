@@ -55,6 +55,12 @@ class LineNote:
     cue: str = None  # words of the step text the note pops up at (None: in order through the step)
 
 
+def with_full_stop(text):
+    """The text ending in sentence punctuation, so note texts joined into one step stay apart
+    in every view (the text output also puts each on its own paragraph)."""
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
 @dataclass
 class Step:
     key: str
@@ -672,8 +678,8 @@ class Tours:
         parts = [self.notes.value(key, name) for name in ("hint", "description")]
         if kind == "node" and not any(parts):
             parts.append(self.graph.nodes[ids[0]].doc)
-        words = " ".join(p.strip() for p in parts if p)
-        return f"[[{target}]]" + (f": {words}" if words else ".")
+        paragraphs = [with_full_stop(p.strip()) for p in parts if p and p.strip()]
+        return f"[[{target}]]" + (": " + "\n\n".join(paragraphs) if paragraphs else ".")
 
     def draft_code(self, target, found):
         kind, *ids = found

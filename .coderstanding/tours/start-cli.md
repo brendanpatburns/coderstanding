@@ -7,13 +7,13 @@ start: true
 steps:
   - key: 8ad04c
     targets: [cli]
-    code: {at: cli, lines: +0..+7, fp: e6d6e5268f, was: 1-8}
+    code: {at: cli, lines: +0..+7, fp: 1d26bd908e, was: 1-8}
   - key: a034e7
     targets: [views]
     code: {at: views, lines: +0..+7, fp: d159188406, was: 1-8}
   - key: 9fdf51
     targets: [checks]
-    code: {at: checks, lines: +0..+7, fp: 84e01a9e64, was: 1-8}
+    code: {at: checks, lines: +0..+7, fp: 4cc36b55a4, was: 1-8}
   - key: 8bbeb7
     targets: [scan]
     code: {at: scan, lines: +0..+7, fp: d3027e520f, was: 1-8}
@@ -23,7 +23,7 @@ steps:
 ---
 
 ## cli
-[[cli]]: The coderstanding command line: one command per thing you can ask The coderstanding command: one command for each thing you can do or ask (scan, graph, zoom, node, set, specs, tours and many more). Most commands only read the saved map and never scan by themselves. It is the main entry point for both people and AI agents.
+Start with the command line. Everything you or an AI agent asks of Coderstanding is one command here: reading the map (graph, zoom, node), writing notes (set), plans and progress, tours, and setup. Most commands only read the saved map; only scan and rescan read the code.
 
 ## views
 [[views]]: Decides what to show at each level, zoom and filter, for both CLI and viewer The one place that decides what is on screen: which classes show at a level, how hidden classes fold into visible ones, zoom, focus, filters and badges. The command line and the viewer both ask it, so they always agree. Also answers the reading questions: outline, find, impact and brief.

@@ -69,11 +69,15 @@ def registry_path():
     return Path(other) if other else userconfig.config_dir() / "apps.json"
 
 
+def data_home():
+    """The parent of the default data folders (other one by env, for tests)."""
+    home = os.environ.get(DATA_HOME_ENV)
+    return Path(home) if home else userconfig.data_home()
+
+
 def default_data_dir(name):
     """Where a new app's graph, notes and cache go unless told otherwise: out of the repo."""
-    home = os.environ.get(DATA_HOME_ENV)
-    base = Path(home) if home else userconfig.data_home()
-    return base / name
+    return data_home() / name
 
 
 IN_REPO_DATA = ".coderstanding"  # a data folder inside the repo (this repo's own tours and specs live so)
@@ -102,6 +106,16 @@ def save_registry(apps):
 def has_own_files_in_repo(repo):
     folder = Path(repo) / IN_REPO_DATA
     return any((folder / own).exists() for own in OWN_FILES)
+
+
+def stale_repo_cache(app):
+    """The repo's own `.coderstanding/` when the app keeps its data elsewhere and that folder holds
+    a cache and nothing but generated files (left from before the cache moved): None otherwise.
+    Only reported, never deleted."""
+    folder = app.root / IN_REPO_DATA
+    if app.data.resolve() == folder.resolve() or not (folder / "cache").is_dir():
+        return None
+    return folder if all(entry.name in GENERATED_FILES for entry in folder.iterdir()) else None
 
 
 def data_for_add(name, repo, data=None):

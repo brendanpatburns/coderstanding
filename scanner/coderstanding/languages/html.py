@@ -41,6 +41,11 @@ def is_classic_script(tag):
     return name == "script" and attributes(tag).get("type", "").lower() != "module"
 
 
+def is_stray_greater_than(error):
+    """tree-sitter-html fails on a bare `>` in text (`a > b`), which HTML allows."""
+    return error.type == "ERROR" and error.child_count > 0 and error.children[0].type == ">"
+
+
 def repo_path(ctx, written):
     """Repo-relative path of a link written in this page, or "" when it is not a repo file."""
     written = written.split("?")[0].split("#")[0]
@@ -62,7 +67,7 @@ class HtmlModule(LanguageModule):
             module_id, posixpath.basename(module_id), "module", 1,
             namespace=posixpath.dirname(module_id), file_node=True)])
         root = PARSER.parse(ctx.read_bytes()).root_node
-        result.parse_error_line = first_error_line(root)
+        result.parse_error_line = first_error_line(root, is_stray_greater_than)
         for tag in descendants(root):
             if tag.type in ("start_tag", "self_closing_tag"):
                 rel = repo_path(ctx, linked_path(tag))

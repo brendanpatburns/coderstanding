@@ -936,8 +936,35 @@ step text, without needing any audio file: the seek bar counts words (user, 2026
   (read, write, delete, list orphans with the lost notes).
   Opus at 32 kbps is about 4 kB per second; `tour_audio: ignore` keeps recordings out of git.
 - **Voices**: on-device only (`localService`, section 18); otherwise whatever the browser has (Linux Firefox/Chromium need speech-dispatcher with a
-  voice, e.g. espeak-ng; Chromium loads voices late). A voice picker per browser. No server-side
-  TTS: generated audio files (Piper) were dropped in favour of word-count seeking (2026-10-30).
+  voice, e.g. espeak-ng; Chromium loads voices late). A voice picker per browser. (Generated
+  audio files per step were dropped in favour of word-count seeking, 2026-10-30; the built-in
+  voices below make clips per speech chunk instead, so the chunk timing still holds.)
+- **Built-in voices** (Piper, 2026-11-13; Windows gives apps no Narrator natural voices, so
+  Coderstanding brings its own): optional extra `pip install "coderstanding[voices]"` (`piper-tts`,
+  GPL: never bundled or vendored; the public MIT copy does not ship it; without it everything
+  works as before). Voices come only from a folder the user fills by hand, `<data home>/voices/`
+  (`voices.voices_dir`: Linux `~/.local/share/coderstanding/voices`, Windows
+  `%LOCALAPPDATA%\coderstanding\data\voices`; follows `CODERSTANDING_DATA_HOME`): one voice =
+  `<name>.onnx` + `<name>.onnx.json` from Piper's voice list on Hugging Face. No download code.
+  Server (`voices.py` `Voices`, `server.py`): `GET /api/voices` = folder, installed, found count,
+  voices `{name, lang, quality}` (none while Piper is missing); `POST /api/voices/speak {voice,
+  text}` = one WAV clip, same write rules as other POSTs (JSON body, own origin or the hosted
+  page), names only from the listing (no paths). A model loads once and stays; each clip is made
+  once and cached in `voices/cache/<sha256(voice, file size+mtime, text)>.wav` (newest 2000 kept).
+  Viewer (`tours.js`): built-in voices come first in the picker ("<name> (en-US) - built-in",
+  value `built-in:<name>` so a speech-dispatcher Piper voice of the same name stays apart),
+  tier 0, auto-picked when present (a remembered voice still wins). The player is unchanged: its
+  speech engine is a `VoiceRouter` that sends a request (`SpeechRequest`) in a built-in voice to
+  `ClipSynth` (every chunk's clip asked for at once, played one after another at the speed as
+  `playbackRate`, start/end/error like an utterance) and any other to the browser as a real
+  utterance. So chunk timing, the learned pace, seeking, speed and Read notes aloud work the
+  same; the first clip may wait for the model (15 s start timeout, 2.5 s for browser voices).
+  The picker's tooltip names the folder; the hint under the player says so too when only robot
+  voices exist or voice files wait for Piper; `coderstanding privacy` prints the folder.
+  **Licences**: each Piper voice has its own (its model card names the dataset); check it before
+  work use. Clear ones: `en_US-ljspeech` (LJ Speech, public domain) and the OpenSLR 83 British
+  voices such as `en_GB-northern_english_male` and `en_GB-southern_english_female` (CC BY-SA 4.0).
+  `en_US-lessac` (Blizzard 2013 data) has an unclear licence for work use.
 - **Hosted page**: works like the local page (every call goes to the local helper, `apiBase`).
 - **Exports**: `--md` and "Save as Markdown" leave audio out; the lean `tour` text prints
   `audio: rec (stale)` on a step's title line only when asked (`--audio`).
@@ -1409,7 +1436,7 @@ connection, no decoration. Rules:
     `  name -> ReturnType  file:first-last  — hint` per function, `fields:`, and `inside:` for
     nested types. Function end lines are stored by the readers (`Member.end`, scanner version 7).
   - `find <app> <words...> [--all] [--tests]`: classes and functions whose name, path, notes
-    (hint, description, rules, review) or code doc contain every word, best first (name beats
+    (hint, description, rules, review) or code doc contain any word, most words first, then best (name beats
     function name beats hint beats other notes); `Name  kind  file:first-last  — hint`, 20 by default.
   - `impact <app> <target> [--depth N]` (default 3): `1: A, B#f` per distance (function targets
     follow calling functions; a caller with no known function counts as its class), then
@@ -1536,6 +1563,10 @@ Built against the approved mock-up (`docs/mockups/tours.html`) and the tours JSO
   clock (boundary events only correct it) and waits at 98% for the voice's `end`; a voice that
   sends no `start` within 2.5 s, or errors, leaves the step on the clock with a note; voices
   that load late start speaking at the current word.
+- **Built-in voices** (Piper, 7c Audio): at start the tab asks `GET /api/voices` (an older server
+  or a failure = browser voices only), adds them to the picker first and gives the player a
+  `VoiceRouter` (built-in clips through `CoderApps.requestBlob` + blob URLs, else the browser's
+  `speechSynthesis`). The picker's tooltip names the voices folder and the licence note.
 - Collapsible spec sidebar (section 7): nested boxes, own detail slider, spec zoom, search, status
   chips, highlight attached classes, edit and add specs.
 - Search box that also forces a matching hidden node visible.
@@ -1626,12 +1657,18 @@ Built by the view engine (it is view data, not scan data); text output prints
     use their own lines; files (modules, scripts, scenes) use the file's lines outside the file's types, counted once (`span` false,
     printed `(file)`). Members = the node's member list.
   - Warnings (`checks.py`, at scan, stored in graph.json v2): unused = no incoming line from
-    non-test code, skipping entry/autoload/test/outside nodes; god = distinct neighbours
+    non-test code, skipping entry/autoload/test/outside nodes and web pages (a person opens them);
+    a line to a nested node also uses the nodes it sits in (a module's class, a package's module),
+    but a class pointing at its own module is no use; a class decorated by an own function
+    (`@register`, a plugin registry) is used by it; a node holding an entry (a Python package
+    with `__main__`) is used; god = distinct neighbours
     >= max(20, 6 x repo median); cycle = strongly connected set > 1 over non-inheritance
     lines; degree and cycles ignore tests, outside code and type/nested-type pairs; unsure =
     outgoing unsure lines; unresolved = outside refs that are no package, engine API,
-    standard library or "outside" name (host-program modules like `bpy`, asset files like `.glb`:
-    counted apart in the stack's `outside` bucket, never warned). Static reading misses dynamic loads, so `unused` is a hint.
+    standard library or "outside" name (host-program modules like `bpy`, asset files like `.glb`,
+    optional imports in a `try:` whose `except` catches ImportError, repo files that have no node
+    such as stylesheets and vendored scripts (`Edge.repo_file`): counted apart in the stack's
+    `outside` bucket, never warned). Static reading misses dynamic loads, so `unused` is a hint.
   - Note fields have one set of rules each (who it is for, what goes in, what does not, a good and
     a bad example), built in as `docs/field_rules.json`; a project may override any part, and add
     house rules for AI notes, in `<data>/fields.md` (beside tours; shared through git; a section per
@@ -2050,6 +2087,9 @@ The user runs it at work on company code: it must make **zero** outside calls (u
   voice = the silent timeline with the usual note. If a browser reports no on-device voice at all,
   the picker lists what it has, marked "online", with "Choose a voice (online)" selected: an online
   voice is used only after you pick it by name, never by default (2026-11-11). "Online" = the name looks like a network voice (`Online`, `Google …`, WaveNet) and `localService` is not true; espeak-ng via speech-dispatcher is reported non-local by Chromium but is on the device, so it is not labelled online and may be auto-picked. The picker shows the best 8 for the page language (tiers: Natural/Neural/Piper/Siri, other plain, espeak base, then espeak `+variants` and robots, exact language first) with "More voices..." for the full list; the top-ranked is auto-picked, a remembered name wins, and an espeak-only best voice shows a hint to install a better one (2026-11-11).
+  **Built-in voices** (Piper, section 7c Audio, 2026-11-13) run on this PC: the local server makes
+  the clips with the user's own voice files; nothing is downloaded, and the guard stays as it is
+  (Piper and onnxruntime make no socket calls; checked under the guard).
 - **Hosted page**: the deliberate exception. With no `~/.config/coderstanding/hosted.json` (and
   no `--allow-origin` / env) there is no cross-origin access at all: the **work setting**.
 - **Tray**: polls `127.0.0.1:8517` through a no-proxy opener (an `HTTP_PROXY` at work never sees

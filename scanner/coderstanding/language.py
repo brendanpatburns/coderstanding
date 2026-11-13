@@ -115,6 +115,9 @@ class FileResult:
     imports: list = field(default_factory=list)  # prefixes tried after the scope chain (C# usings)
     aliases: dict = field(default_factory=dict)  # file-local name -> Target (preload consts, imports)
     global_aliases: dict = field(default_factory=dict)  # name -> Target for every file (autoloads)
+    # global_aliases names this file wins when another file defines the same name (a hand-written
+    # C function against its decompiler copy); two preferred, or none, keep the last file read
+    preferred_aliases: list = field(default_factory=list)
     marks: list = field(default_factory=list)  # Mark
     # Names this file's node offers beyond its own children (JS barrels, default exports):
     # exported name -> Target, resolved in this file; `Target(path=..., member=name)` asks for them.

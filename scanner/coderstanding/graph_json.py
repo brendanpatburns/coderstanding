@@ -11,7 +11,7 @@ VERSION = 2  # 2: node size (lines, span), warnings, test flag
 
 
 def _edge_body(edge):
-    return {
+    body = {
         "kind": edge.kind,
         "detail": edge.detail,
         "calls": [{"member": c.member, "from_member": c.from_member, "count": c.count,
@@ -20,6 +20,9 @@ def _edge_body(edge):
         "unsure": edge.unsure,
         "auto": edge.auto,
     }
+    if edge.repo_file:
+        body["repo_file"] = True
+    return body
 
 
 def edge_to_json(edge):
@@ -48,6 +51,8 @@ def node_to_json(node):
         data["file_lines"] = node.file_lines
     if node.doc:
         data["doc"] = node.doc
+    if node.replaced_by:
+        data["replaced_by"] = node.replaced_by
     if node.file_kind:
         data["file_kind"] = node.file_kind
     if node.hub_degree:
@@ -95,6 +100,7 @@ def edge_from_json(data, from_id=None):
                for c in data.get("calls", [])],
         at=[Location.from_json(a) for a in data.get("at", [])],
         unsure=data.get("unsure", False), auto=data.get("auto", ""),
+        repo_file=data.get("repo_file", False),
     )
 
 
@@ -103,7 +109,7 @@ def node_from_json(data):
         id=data["id"], name=data["name"], kind=data["kind"], lang=data["lang"],
         file=data["file"], line=data.get("line", 1), flags=list(data.get("flags", [])),
         base=data.get("base", ""), namespace=data.get("namespace", ""),
-        doc=data.get("doc", ""), file_kind=data.get("file_kind", ""),
+        doc=data.get("doc", ""), replaced_by=data.get("replaced_by", ""), file_kind=data.get("file_kind", ""),
         level=data.get("level", 0), lines=data.get("lines", 0), span=data.get("span", False),
         file_lines=data.get("file_lines", 0),
         warnings=list(data.get("warnings", [])), hub_degree=data.get("hub_degree", 0),

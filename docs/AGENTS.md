@@ -21,6 +21,7 @@
 - Offline only (DESIGN 18): never add a call to another machine (no web APIs, CDNs, online
   voices, telemetry). `tests/test_offline.py` scans for network APIs; a new loopback-only use goes
   in its allowlist with a reason. New entry points call `offline.install()` first.
+- Notes stay local (user, 2026-11-12): `.coderstanding/notes.jsonl` is gitignored on purpose and is not shared. Note edits made in a worktree land in that worktree's `.coderstanding/`; the lead copies the file over main's by hand (back up main's first). Tours, specs and memos are tracked.
 
 ## How to write a language module
 

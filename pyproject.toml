@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "coderstanding"
-version = "0.3.0"
+version = "0.3.1"
 description = "Scan a code base and show its classes and connections as a graph"
 readme = "README.md"
 license = "MIT"
@@ -29,6 +29,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest"]
 tray = ["PySide6"]  # the optional tray icon (`coderstanding tray`)
+voices = ["piper-tts>=1.3"]  # built-in Piper voices for the tours (GPL; optional, never bundled)
 
 [project.scripts]
 coderstanding = "coderstanding.cli:main"

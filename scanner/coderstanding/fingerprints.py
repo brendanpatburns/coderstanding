@@ -14,7 +14,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from .model import FUNCTION_KINDS
-from .notes import edge_key, function_key, node_key
+from .notes import ARROW, FUNCTION_SEP, edge_key, function_key, node_key
 
 FINGERPRINT_LENGTH = 10  # hex digits kept: plenty to notice a change, cheap to store
 
@@ -64,11 +64,30 @@ def function_spans(node):
     return spans
 
 
+def edge_places(edges):
+    """Sorted distinct (file, line) where the connections are made."""
+    return sorted({(loc.file, loc.line) for e in edges for loc in [*e.at, *(a for c in e.calls for a in c.at)]})
+
+
 def edge_lines(source, edges):
     """Text of the distinct lines where the pair's connections are made."""
-    places = {(loc.file, loc.line) for e in edges
-              for loc in [*e.at, *(a for c in e.calls for a in c.at)]}
-    return [line for file, number in sorted(places) for line in source.span(file, number, number + 1)]
+    return [line for file, number in edge_places(edges) for line in source.span(file, number, number + 1)]
+
+
+def key_ranges(graph, source, key):
+    """[(file, first, last)] (1-based, both included): the code a note key's fingerprint covers
+    (class span, function span, or the connection's lines); empty when the code is gone."""
+    kind, _, rest = key.partition(":")
+    if kind == "edge":
+        from_id, _, to = rest.partition(ARROW)
+        edges = [e for e in graph.edges.values() if (e.from_id, e.to) == (from_id, to)]
+        return [(file, number, number) for file, number in edge_places(edges)]
+    node_id, _, name = rest.partition(FUNCTION_SEP)
+    node = graph.nodes.get(node_id)
+    if node is None:
+        return []
+    spans = function_spans(node).get(name, []) if name else [(node.line, class_end(node))]
+    return [(node.file, first, (end if end else len(source.of(node.file)) + 1) - 1) for first, end in spans]
 
 
 def compute_fingerprints(root, graph):

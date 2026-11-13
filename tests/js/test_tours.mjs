@@ -436,3 +436,194 @@ test("a step that ended can be followed by the next one playing", () => {
   player.play();
   assert.ok(env.spoken.length > before, "the next step speaks");
 });
+
+// ---------- built-in voices (Piper through the local server) ----------
+
+const LISTING = { folder: "/data/voices", installed: true, found: 2, add: "<name>.onnx + <name>.onnx.json",
+  install: 'pip install "coderstanding[voices]"', licence: "Each Piper voice has its own licence.",
+  voices: [{ name: "en_US-ljspeech-high", lang: "en-US" }, { name: "de_DE-thorsten-medium", lang: "de-DE" }] };
+const BUILT_IN = LISTING.voices.map(T.builtInVoice);
+
+test("built-in voices: first in the picker, tier 0, picked by default; a remembered browser voice still wins", () => {
+  const browser = [{ name: "Microsoft Zira", lang: "en-US", localService: true },
+    { name: "Natural Jenny", lang: "en-US", localService: true }];
+  const all = [...BUILT_IN, ...browser];
+  assert.equal(T.voiceTier(BUILT_IN[0]), 0);
+  const choices = T.voiceChoices(all, "en-US");
+  assert.deepEqual(choices.map((v) => v.name), ["built-in:en_US-ljspeech-high", "Natural Jenny", "Microsoft Zira"]);
+  assert.equal(T.pickVoice(all, "", "en-US"), BUILT_IN[0]);
+  assert.equal(T.pickVoice(all, "Microsoft Zira", "en-US").name, "Microsoft Zira");
+  assert.equal(T.voiceLabel(BUILT_IN[0]), "en_US-ljspeech-high (en-US) - built-in");
+  assert.equal(T.voiceLabel({ name: "Google US English", lang: "en-US" }), "Google US English (en-US) - online");
+  assert.ok(!T.onlyRobotVoices([...BUILT_IN, { name: "English (America)", lang: "en-US" }], "en-US"));
+  // same name as a speech-dispatcher Piper voice: still two voices
+  const twin = { name: "en_US-ljspeech-high", lang: "en-US", localService: true };
+  assert.equal(T.pickVoice([...BUILT_IN, twin], "en_US-ljspeech-high", "en-US"), twin);
+});
+
+test("built-in voices: the hint names the folder, the install line and the licence", () => {
+  assert.match(T.builtInHint(LISTING), /from \/data\/voices\. Each Piper voice has its own licence/);
+  const empty = { ...LISTING, found: 0, voices: [] };
+  assert.match(T.builtInHint(empty), /add Piper voices to \/data\/voices \(<name>\.onnx/);
+  const missing = { ...LISTING, installed: false, voices: [] };
+  assert.match(T.builtInHint(missing), /2 Piper voices found .* not installed: pip install "coderstanding\[voices\]"/);
+  assert.equal(T.builtInHint(null), "");
+  const robots = [{ name: "English (America)", lang: "en-US" }];
+  assert.match(T.voiceHint(robots, "en-US", empty), /^Only robot voices found\. For natural built-in voices, add/);
+  assert.match(T.voiceHint(robots, "en-US", null), /speech-dispatcher/);
+  assert.equal(T.voiceHint([{ name: "Natural Jenny", lang: "en-US" }], "en-US", empty), "");
+  assert.match(T.voiceHint([{ name: "Natural Jenny", lang: "en-US" }], "en-US", missing), /not installed/);
+});
+
+/** A fake page for built-in voices: a VoiceRouter over a ClipSynth whose clips load at once (or
+ *  when `held` is resolved) and fake audio elements; `audios` = every clip made, in order. */
+function clipEnv(browserVoices = []) {
+  const env = fakeEnv({ voices: browserVoices });
+  const browser = env.synth;
+  env.loads = [];
+  env.released = [];
+  env.audios = [];
+  const clips = new T.ClipSynth({
+    load: (voice, text) => { env.loads.push({ voice, text }); return `blob:${env.loads.length}`; },
+    release: (url) => env.released.push(url),
+    makeAudio: (url) => {
+      const audio = { url, playbackRate: 1, paused: true, play() { this.paused = false; return Promise.resolve(); },
+        pause() { this.paused = true; } };
+      env.audios.push(audio);
+      return audio;
+    },
+  });
+  clips.voices = BUILT_IN;
+  env.synth = new T.VoiceRouter({ browser, clips, Utterance: class { constructor(text) { this.text = text; } } });
+  env.Utterance = T.SpeechRequest;
+  return env;
+}
+
+const settle = () => new Promise((done) => setTimeout(done, 0));
+
+/** Plays the clips one after another like the browser would: each `perChar` seconds per character. */
+async function playClips(env, player, perChar, firstWord = 0) {
+  let word = firstWord, worst = 0;
+  for (let k = 0; k < env.loads.length; k++) {
+    await settle();
+    const audio = env.audios.at(-1), text = env.loads[k].text, list = T.words(text), last = word + list.length - 1;
+    assert.equal(audio.url, `blob:${k + 1}`, `clip ${k} plays in order`);
+    audio.onplaying();
+    assert.equal(player.word, word, `clip ${k} start on its first word`);
+    const ms = text.length * perChar * 1000;
+    for (let t = 50; t < ms; t += 50) {
+      env.run(50);
+      const truth = word + T.wordAtChar(T.charStarts(list).starts, (t / ms) * text.length);
+      worst = Math.max(worst, Math.abs(player.word - truth));
+    }
+    env.run(ms % 50 || 50);
+    audio.onended();
+    if (k < env.loads.length - 1) assert.equal(player.word, last, `clip ${k} end on its last word`);
+    word = last + 1;
+  }
+  return worst;
+}
+
+test("built-in voice: one clip per chunk, asked for at once, played in order with the highlight in step", async () => {
+  const env = clipEnv();
+  const player = new T.StepPlayer(env);
+  player.setVoice(BUILT_IN[0], "en-US");
+  player.load(LONG);
+  player.play();
+  assert.equal(env.loads.length, player.track.chunks.length, "every chunk's clip asked for at once");
+  assert.ok(env.loads.every((load) => load.voice === "en_US-ljspeech-high"));
+  assert.equal(env.loads.map((load) => load.text).join(" "), T.words(T.spokenText(LONG)).join(" "));
+  assert.equal(env.spoken.length, 0, "nothing sent to the browser voice");
+  const worst = await playClips(env, player, 0.07);
+  assert.ok(worst <= 2, `within two words between clip events: ${worst}`);
+  assert.equal(env.ends, 1);
+  assert.deepEqual(env.released, env.loads.map((_, k) => `blob:${k + 1}`), "every clip released");
+});
+
+test("built-in voice: speed sets the clip's rate; a seek drops the queue and asks from that word", async () => {
+  const env = clipEnv();
+  const player = new T.StepPlayer(env);
+  player.setVoice(BUILT_IN[0], "en-US");
+  player.load(LONG);
+  player.play();
+  await settle();
+  player.setRate(1.5);  // not started yet: takes effect on the next queue
+  const before = env.loads.length;
+  player.seek(player.track.dur / 2);
+  await settle();
+  assert.equal(env.audios.at(-1).playbackRate, 1.5);
+  assert.ok(env.audios.slice(0, -1).every((old) => old.paused), "the old clip stopped");
+  assert.ok(env.released.includes("blob:1"), "dropped clips released");
+  const word = player.word;
+  assert.ok(word > 0);
+  assert.equal(env.loads[before].text.split(" ")[0], player.track.words[word], "asked again from the word there");
+});
+
+test("built-in voice: a clip that cannot load or play falls back to the clock with a note", async () => {
+  const env = clipEnv();
+  env.synth.clips.env.load = () => Promise.reject(new Error("Piper is not installed"));
+  const player = new T.StepPlayer(env);
+  player.setVoice(BUILT_IN[0], "en-US");
+  player.load(LONG);
+  player.play();
+  await settle();
+  assert.ok(env.notes.at(-1).includes("Piper is not installed"));
+  env.run(60000);
+  assert.equal(env.ends, 1, "the step still ends on the clock");
+});
+
+test("built-in voice: the first clip may wait for the model longer than a browser voice", async () => {
+  const env = clipEnv();
+  env.synth.clips.env.load = () => new Promise(() => {});  // still loading
+  const player = new T.StepPlayer(env);
+  player.setVoice(BUILT_IN[0], "en-US");
+  player.load(LONG);
+  player.play();
+  env.run(T.START_TIMEOUT_MS + 500);
+  assert.ok(!env.notes.includes(T.NOTES.noStart));
+  env.run(T.BUILT_IN_START_MS);
+  assert.ok(env.notes.includes(T.NOTES.noStart));
+});
+
+test("built-in voice reads line notes aloud too: the step waits, the note is a clip, then it goes on", async () => {
+  const env = clipEnv();
+  const player = new T.StepPlayer(env);
+  player.readNotes = true;
+  player.setVoice(BUILT_IN[0], "en-US");
+  player.load(LONG);
+  player.setNotes([{ at: 2, text: "Look here." }]);
+  player.play();
+  await settle();
+  env.audios.at(-1).onplaying();
+  env.run(1200);
+  assert.equal(player.readingNote, 0);
+  assert.equal(env.loads.at(-1).text, "Look here.");
+  await settle();
+  const note = env.audios.at(-1);
+  assert.equal(note.url, `blob:${env.loads.length}`);
+  const before = env.loads.length;
+  note.onplaying();
+  note.onended();
+  assert.equal(player.readingNote, -1);
+  assert.ok(player.usesVoice);
+  assert.ok(env.loads[before].text.startsWith(player.track.words[player.word]), "narration again from its word");
+});
+
+test("voice router: a browser voice gets a real utterance whose events reach the player", () => {
+  const browserVoice = { name: "Natural Jenny", lang: "en-US", localService: true };
+  const env = clipEnv([browserVoice]);
+  const player = new T.StepPlayer(env);
+  player.setVoice(browserVoice, "en-US");
+  player.load(LONG);
+  player.play();
+  assert.equal(env.loads.length, 0);
+  assert.equal(env.spoken.length, player.track.chunks.length);
+  const native = env.spoken[0];
+  assert.equal(native.voice, browserVoice);
+  assert.ok(player.queue[0].native === native, "kept referenced through the request");
+  native.onstart();
+  assert.equal(player.word, 0);
+  native.onend();
+  assert.equal(player.word, T.words(native.text).length - 1);
+  assert.deepEqual(env.synth.getVoices().map((v) => v.name).slice(0, 2), BUILT_IN.map((v) => v.name));
+});

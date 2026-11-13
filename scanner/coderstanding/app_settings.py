@@ -51,11 +51,17 @@ def parse_exclude(value):
     return [str(pattern).strip() for pattern in patterns if str(pattern).strip()]
 
 
+def is_name_template(value):
+    return isinstance(value, str) or (isinstance(value, list) and value and all(isinstance(item, str) for item in value))
+
+
 def parse_function_macros(value):
-    """{macro name: function name template} from a dict or JSON text (`{"REWRITE": "F_{1}"}`)."""
+    """{macro name: function name template, or a list of them} from a dict or JSON text
+    (`{"REWRITE": "F_{1}"}`, `{"ARITH": ["add{1}", "sub{1}"]}`)."""
     macros = json.loads(value) if isinstance(value, str) and value.strip() else (value or {})
-    if not isinstance(macros, dict) or not all(isinstance(template, str) for template in macros.values()):
-        raise ValueError("function_macros: expected {macro: name template}, e.g. {\"REWRITE\": \"F_{1}\"}")
+    if not isinstance(macros, dict) or not all(is_name_template(template) for template in macros.values()):
+        raise ValueError("function_macros: expected {macro: name template or list of them}, "
+                         "e.g. {\"REWRITE\": \"F_{1}\"}")
     return macros
 
 

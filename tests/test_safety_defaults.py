@@ -4,6 +4,7 @@ a worktree's notes go to its own in-repo data folder; the worktree-code hint."""
 import subprocess
 
 from coderstanding import apps, worktrees
+from coderstanding import cli
 from coderstanding.cli import main
 from conftest import REAL_REGISTRY
 from helpers import write_files
@@ -94,3 +95,13 @@ def test_hint_when_running_other_checkouts_code(tmp_path):
     assert "bin/coderstanding" in worktrees.other_code_hint(tmp_path / "main" / "scanner", tree)
     assert worktrees.other_code_hint(tree / "scanner", tree) is None
     assert worktrees.other_code_hint(tree / "scanner", tmp_path) is None
+
+
+def test_other_code_hint_prints_once_per_checkout(tmp_path, monkeypatch, capsys):
+    tree = tmp_path / "wt"
+    write_files(tree, {"bin/coderstanding": "#!/bin/sh\n", "scanner/x.py": ""})
+    (tree / ".git").mkdir()
+    monkeypatch.chdir(tree)
+    for expected in (True, False):
+        cli.print_other_code_hint()
+        assert ("bin/coderstanding" in capsys.readouterr().err) is expected

@@ -20,7 +20,7 @@ steps:
     code: {at: PythonModule, lines: +0..+5, mark: [+1, +2, +4, +5], fp: 50b676058e, was: 343-348}
   - key: resolve
     targets: [scan>resolver, resolver#build_graph, resolver>model]
-    code: {at: resolver#build_graph, lines: +0..+15, mark: [+5, +6, +11, +12], fp: 96ccc38b22, was: 238-253}
+    code: {at: resolver#build_graph, lines: +0..+15, mark: [+5, +6, +11, +12], fp: 75f61c4145, was: 282-297}
     notes: [{lines: +5..+6, text: "Pass one: every declaration becomes a node.", cue: First every declaration}, {lines: +11..+13, text: "Pass two: each reference becomes an edge, or an outside reference.", cue: Then every raw}]
   - key: levels
     targets: [scan>levels, levels#guess_levels]

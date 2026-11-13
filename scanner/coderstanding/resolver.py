@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import paths
-from .model import STRUCT_KINDS, Call, Edge, Graph, Location, Node, child_id
+from .model import STRUCT_KINDS, Call, Edge, Graph, Location, Node, REPLACED_FLAG, child_id
 
 
 @dataclass
@@ -46,6 +46,7 @@ class Resolution:
     label: str = ""  # outside name, used when id is ""
     unsure: bool = False
     basic: bool = False  # a basic type of the language: no edge, nothing unresolved
+    repo_file: bool = False  # label is a repo file without a node: an outside ref, never unresolved
 
 
 BASIC = Resolution(basic=True)
@@ -57,6 +58,8 @@ class Resolver:
     graph: Graph
     file_nodes: dict = field(default_factory=dict)  # rel_path -> node id
     global_aliases: dict = field(default_factory=dict)  # name -> (Target, declaring Parsed)
+    preferred_aliases: set = field(default_factory=set)  # global_aliases names set by a preferred file
+    replaced: dict = field(default_factory=dict)  # rel_path -> (Parsed, {name: node id of the preferred copy}) of files that lost names
     path_maps: dict = field(default_factory=dict)  # module name -> its read_path_map()
     file_parsed: dict = field(default_factory=dict)  # file node id -> Parsed (its exports)
     path_misses: dict = field(default_factory=dict)  # (module, written, from file) -> PathMiss
@@ -157,9 +160,16 @@ class Resolver:
             node_id = self._file_node(base, parsed.module.path_suffixes)
             if node_id:
                 return Resolution(node_id)
+        if self._is_unread_repo_file(rel):
+            return Resolution(label=rel, repo_file=True)
         self.path_misses.setdefault((parsed.module.name, written, parsed.rel_path),
                                     PathMiss(written, parsed.rel_path, bases, matched))
         return Resolution(label=rel)
+
+    def _is_unread_repo_file(self, rel):
+        """A repo file no reader turns into a node (a stylesheet, a vendored or minified script,
+        a data file): found, so nothing is missing, but there is no class to link to."""
+        return not rel.startswith("../") and (Path(self.root) / rel).is_file()
 
     def _file_node(self, base, suffixes):
         """The file node at base + one of the suffixes, else with base's extension dropped."""
@@ -215,6 +225,34 @@ class Resolver:
             scope = scope.rpartition(".")[0]
         return None
 
+    def add_global_aliases(self, parsed):
+        """Record the file's global names; a later file does not take a name from a preferred one.
+        A copy that loses a name to a preferred one is noted in `replaced`."""
+        for name, target in parsed.result.global_aliases.items():
+            preferred = name in parsed.result.preferred_aliases
+            held = self.global_aliases.get(name)
+            held_preferred = name in self.preferred_aliases
+            if held_preferred and not preferred:
+                self._note_replaced(name, parsed, held[0])
+                continue
+            if held and preferred and not held_preferred:
+                self._note_replaced(name, held[1], target)
+            self.global_aliases[name] = (target, parsed)
+            if preferred:
+                self.preferred_aliases.add(name)
+
+    def _note_replaced(self, name, loser, winner_target):
+        self.replaced.setdefault(loser.rel_path, (loser, {}))[1][name] = winner_target.id
+
+    def flag_replaced(self):
+        """Flag each file whose global names were all taken by preferred copies, with the file of
+        the copy that replaced it (the first one, when several did)."""
+        for loser, winners in self.replaced.values():
+            if set(loser.result.global_aliases) <= set(winners):
+                node = self.graph.nodes[next(iter(loser.result.global_aliases.values())).id]
+                node.flags.append(REPLACED_FLAG)
+                node.replaced_by = self.graph.nodes[next(iter(winners.values()))].file
+
     def _global_alias(self, name):
         alias = self.global_aliases.get(name)
         if not alias:
@@ -248,8 +286,8 @@ def build_graph(root, parsed_files, repo="", path_maps=None):
     resolver = Resolver(root, graph, path_maps=dict(path_maps or {}))
     for parsed in parsed_files:
         add_declarations(graph, resolver, parsed)
-        for name, target in parsed.result.global_aliases.items():
-            resolver.global_aliases[name] = (target, parsed)
+        resolver.add_global_aliases(parsed)
+    resolver.flag_replaced()
     resolver.link_pages(parsed_files)
     for parsed in parsed_files:
         apply_marks(graph, resolver, parsed)
@@ -337,7 +375,7 @@ def add_ref(graph, resolver, parsed, ref):
         from_id=ref.from_id, to=found.id or found.label, kind=kind,
         detail=[ref.detail] if ref.detail else [],
         calls=[Call(ref.call, 1, [location], ref.from_member)] if ref.call else [],
-        at=[location], unsure=found.unsure, auto=ref.auto,
+        at=[location], unsure=found.unsure, auto=ref.auto, repo_file=found.repo_file,
     )
     if found.id:
         graph.add_edge(edge)

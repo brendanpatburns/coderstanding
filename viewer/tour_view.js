@@ -28,6 +28,7 @@ const tv = {
   moreVoices: false, // the picker lists every voice, not the best few
   voiceTries: 0,     // fillVoices retries while the browser lists no voices
   voiceTimer: 0,
+  builtIn: null,     // GET /api/voices: the built-in voices' folder and list (null: none)
   noteCues: [],      // the spoken word each line note of the shown step pops up at
   noteTexts: [],     // and their texts
   gliding: false,    // the camera and boxes are moving to a step's frame
@@ -43,10 +44,17 @@ const editable = () => true;  // every page edits: the local server, or the host
 
 // ---------- the player ----------
 
-const synth = "speechSynthesis" in window ? window.speechSynthesis : null;
+const browserSynth = "speechSynthesis" in window ? window.speechSynthesis : null;
+const clips = new T.ClipSynth({  // the built-in voices: one WAV clip per speech chunk from the local server
+  load: async (voice, text) => URL.createObjectURL(await CoderApps.requestBlob("/api/voices/speak", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ voice, text }) })),
+  release: (url) => URL.revokeObjectURL(url),
+  makeAudio: (url) => new Audio(url),
+});
+const synth = new T.VoiceRouter({ browser: browserSynth, clips, Utterance: window.SpeechSynthesisUtterance });
 const player = new T.StepPlayer({
   synth,
-  Utterance: window.SpeechSynthesisUtterance,
+  Utterance: T.SpeechRequest,
   makeAudio: (url) => Object.assign(new Audio(CoderApps.url(url)), { preload: "auto" }),
   now: () => performance.now(),
   frame: (fn) => requestAnimationFrame(fn),
@@ -68,7 +76,7 @@ function savedVoice() { try { return localStorage.getItem(VOICE_KEY) || ""; } ca
 
 /** The voice picker: voices for the page's language (Chromium + espeak-ng lists thousands). */
 function fillVoices() {
-  const all = synth ? synth.getVoices() : [];
+  const all = synth.getVoices();
   const lang = pageLang();
   const chosen = T.pickVoice(all, savedVoice(), lang);
   if (chosen && !T.voiceChoices(all, lang).includes(chosen)) tv.moreVoices = true;  // a remembered voice under "More voices..."
@@ -81,16 +89,30 @@ function fillVoices() {
     const option = document.createElement("option");
     option.value = v && v !== "choose" && v !== "more" ? v.name : v === "more" ? MORE_VOICES : "";
     option.textContent = v === "choose" ? "Choose a voice (online)" : v === "more" ? "More voices..."
-      : v ? `${v.name} (${v.lang})${T.isOnline(v) ? " - online" : ""}` : "No voices found";
+      : v ? T.voiceLabel(v) : "No voices found";
     return option;
   }));
-  $("voiceHint").hidden = !T.onlyRobotVoices(all, lang);
+  const hint = T.voiceHint(all, lang, tv.builtIn);
+  $("voiceHint").textContent = hint;
+  $("voiceHint").hidden = !hint;
   pick.disabled = !choices.length;
-  pick.title = choices.length ? `${choices.length} voices for ${pageLang()}` : T.NOTES.noVoice;
+  pick.title = [choices.length ? `${choices.length} voices for ${pageLang()}` : T.NOTES.noVoice,
+    T.builtInHint(tv.builtIn)].filter(Boolean).join("\n");
   if (chosen) pick.value = chosen.name;
   player.setVoice(chosen, chosen?.lang || pageLang());
   player.voicesChanged();
-  if (!all.length) retryVoices();
+  if (!browserSynth?.getVoices().length) retryVoices();  // the browser lists its voices late
+}
+
+/** The built-in (Piper) voices from the local server; an older server or none: browser voices only. */
+async function loadBuiltInVoices() {
+  try {
+    tv.builtIn = await CoderApps.request("/api/voices");
+  } catch {
+    tv.builtIn = null;
+  }
+  clips.voices = (tv.builtIn?.voices || []).map(T.builtInVoice);
+  fillVoices();
 }
 
 /** Some browsers list voices late and not always with `voiceschanged`: look again a few times. */
@@ -1033,8 +1055,9 @@ function bind() {
   document.addEventListener("coder:select", () => { if (tv.editing && !$("tabTours").hidden) { readEditor(); renderPanel(); } });
   bindResizer($("tourResizer"), { edge: "left", cssVar: "--details-w", element: () => $("tourPanel") },
     () => requestAnimationFrame(() => { cy.resize(); scheduleFan(); }));
-  if (synth) synth.addEventListener("voiceschanged", fillVoices);
+  if (browserSynth) browserSynth.addEventListener("voiceschanged", fillVoices);
   fillVoices();
+  loadBuiltInVoices();
 }
 
 // ---------- entering and leaving the tab ----------

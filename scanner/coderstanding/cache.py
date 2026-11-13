@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import language, model
 
-SCANNER_VERSION = 29  # bump to invalidate every cache entry
+SCANNER_VERSION = 35  # bump to invalidate every cache entry
 CACHE_DIR_ENV = "CODERSTANDING_CACHE_DIR"
 GITIGNORE_LINES = ("cache/", "graph.json", ".gitignore")  # the last one: a folder of only generated files stays invisible to git
 

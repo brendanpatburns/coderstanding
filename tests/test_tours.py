@@ -440,3 +440,10 @@ def test_cli_tour_view(repo, monkeypatch, capsys, tmp_path):
     assert capsys.readouterr().out.strip() == "walk tour view: selfcalls=0 hide_kind=signal,dependency"
     with pytest.raises(SystemExit):
         main(["tour", "app", "walk", "--view", "nonsense"])
+
+
+def test_draft_text_keeps_hint_and_description_apart(repo):
+    _, tours = repo
+    tours.notes.set(node_key("m.Player"), "x", {"hint": "Holds health", "description": "Takes hits."})
+    step = tours.draft("apart", "Apart", ["Player"]).steps[0]
+    assert step.text == "[[Player]]: Holds health.\n\nTakes hits."

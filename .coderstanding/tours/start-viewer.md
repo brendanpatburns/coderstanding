@@ -1,13 +1,13 @@
 ---
 id: start-viewer
 title: "Start here: the viewer page"
-start: true
 by: claude
 ai: true
+start: true
 steps:
   - key: 042bf4
     targets: [app.js]
-    code: {at: app.js, lines: +0..+7, fp: 69c689fed7, was: 1-8}
+    code: {at: app.js, lines: +0..+7, fp: e46284aa56, was: 1-8}
   - key: f6da68
     targets: [server]
     code: {at: server, lines: +0..+7, fp: 8a5f998926, was: 1-8}
@@ -20,7 +20,7 @@ steps:
 ---
 
 ## app.js
-[[app.js]]: The viewer page: draws the map the helper sends and handles clicks The heart of the viewer web page. It asks the local helper for a view and draws it; it holds no map logic itself. It wires up the toolbar, the depth ruler, the details panel and the graph, and the other viewer scripts plug into it.
+The viewer is a plain web page. It asks the local helper what to draw and draws it as boxes and lines; it holds no map logic of its own. Other viewer scripts (domains, tours, specs, the depth ruler) plug into this one.
 
 ## server
 [[server]]: The local helper: serves the viewer and answers its questions The local helper: a small web server on this PC only, which serves the viewer and answers its questions about every registered project. The hosted web page also talks to it. It reads saved maps and never scans by itself.

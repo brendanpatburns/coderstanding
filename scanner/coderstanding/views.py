@@ -574,7 +574,7 @@ def node_json(ctx, node_id, faded):
     return {"id": node_id, "name": node.name, "kind": node.kind, "level": ctx.level(node_id),
             "title": notes_json["nickname"] or sole_function(node, ctx.holders),  # THE box title, else `name`
             "flags": flags, "file": node.file, "line": node.line, "faded": faded,
-            "hub_degree": node.hub_degree, "file_kind": node.file_kind, "domain": ctx.domain(node_id),
+            "replaced_by": node.replaced_by, "hub_degree": node.hub_degree, "file_kind": node.file_kind, "domain": ctx.domain(node_id),
             "domain_by": notes.domain_and_author(node)[1],
             "dep": node.namespace if node.kind == "external" else None,
             "comm": node.comm or None, "rpcs": [m.name for m in node.members if m.rpc and not node.comm],
@@ -1394,15 +1394,19 @@ def missing_fixtures(graph, notes, path, setup, index):
 NAME_POINTS, EXACT_BONUS, HINT_POINTS, PATH_POINTS, NOTE_POINTS, DOC_POINTS = 10, 5, 5, 3, 2, 1
 FUNCTION_NAME_POINTS, FIELD_NAME_POINTS, MEMBER_POINTS = 8, 8, 2
 ALL_IN_NAME_BONUS, WHOLE_NAME_BONUS = 10, 20
+# one matched word outweighs everything else a word can earn (best is ~15), so hits rank by
+# how many words matched first, then by how well
+MATCHED_WORD_BONUS = 100
 NAMING_POINTS = (NAME_POINTS, FUNCTION_NAME_POINTS)
 SNIPPET_MAX = 80
 
 
 def match_score(words, places, name=None):
-    """Sum over words of the best points x match quality among the places (text, points);
-    None when a word matches nowhere. Bonuses rank: the whole name (or one word equal to it) >
-    every word in the name > words spread over name and notes > typos. `name` = the name's text."""
-    total, in_name = 0, True
+    """Per matched word: MATCHED_WORD_BONUS plus its best points x match quality among the
+    places (text, points); None when no word matches anywhere. Ranking: more words matched >
+    the whole name (or one word equal to it) > every word in the name > words spread over name
+    and notes > typos. `name` = the name's text."""
+    total, matched, in_name = 0, 0, True
     for word in words:
         best = 0
         for text, points in places:
@@ -1411,9 +1415,13 @@ def match_score(words, places, name=None):
                 exact = quality == EXACT and points in NAMING_POINTS and text.lower() == word
                 best = max(best, points * quality + (EXACT_BONUS if exact else 0))
         if not best:
-            return None
-        total += best
+            in_name = False
+            continue
+        matched += 1
+        total += MATCHED_WORD_BONUS + best
         in_name = in_name and name is not None and text_quality(word, name) >= PART
+    if not matched:
+        return None
     if name is not None:
         if "".join(split_words(name)) == "".join(words):
             total += WHOLE_NAME_BONUS
@@ -1441,9 +1449,9 @@ def find_hit(unit, kind, file, line, end, score, hint):
 
 
 def find(graph, notes, words, include_tests=False, texts=None):
-    """Classes, functions and fields matching every word (fuzzy, see wordmatch) in their name,
+    """Classes, functions and fields matching any of the words (fuzzy, see wordmatch) in their name,
     path, notes, code doc or linked spec / memo / tour text (`texts`: class id -> [(title, text)]),
-    best first: [{unit, kind, file, line, end, score, hint}]."""
+    most words matched first, then best match: [{unit, kind, file, line, end, score, hint}]."""
     words, texts = [w.lower() for w in words], texts or {}
     holders = {i.rpartition(".")[0] for i in graph.nodes}
     hits = []

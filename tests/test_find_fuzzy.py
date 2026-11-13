@@ -68,9 +68,9 @@ def test_notes_and_typos_match_and_whole_name_ranks_first(app, capsys):
 
 
 def test_no_hit_says_so_and_suggests(app, capsys):
-    out = run(capsys, "find", "t", "lobbyy", "zzz")
+    out = run(capsys, "find", "t", "qqqq", "zzz")
     assert "(names + notes, not file text)" in out[0] and out[-1] == "for literal text: find t --text <pattern>"
-    near = run(capsys, "find", "t", "lobbx", "zzz")  # a word with a close name, but not all
+    near = run(capsys, "find", "t", "lobbxx", "zzz")  # a word with a close name, but no match
     assert any(l.startswith("close names:") for l in near)
 
 
@@ -93,3 +93,17 @@ def test_linked_spec_text_is_searched(app, capsys):
 def test_lost_notes_stay_silent_in_find(app, capsys):
     run(capsys, "find", "t", "lobby")
     assert "lost" not in capsys.readouterr().err
+
+
+def test_multi_word_find_ranks_by_words_matched(app, capsys):
+    lines = run(capsys, "find", "t", "lobby", "reporter", "zebra")  # "zebra" matches nothing
+    assert lines[1].startswith("Lobby")  # both real words match: ranked above a one-word hit
+    assert any(l.startswith("CrashReporter") for l in lines)  # one word is enough
+    assert [l for l in lines if l.startswith("CrashReporter")] != []
+    order = [l.split()[0] for l in lines[1:] if l.split()]
+    assert order.index("Lobby") < order.index("CrashReporter")
+
+
+def test_find_with_no_word_matching_still_has_no_hits(app, capsys):
+    lines = run(capsys, "find", "t", "zebra", "giraffe")
+    assert not any(l.startswith(("Lobby", "CrashReporter")) for l in lines)

@@ -94,7 +94,7 @@ package; `coderstanding <command> --help` lists every option.
   (`--deep` adds the tests of its direct users); `tests <app> --diff [REF]` does it for the git diff (REF default: merge base with main; uncommitted included) and lists changed units with no test (per changed function its direct tests, else its class's; dependents' tests only if a def line changed; `many tests reach` = run `impact` for those; it prints every test file, never "+N more"; also tests that quote a CLI command whose runner (`run_<command>`) sits above the changed function in its callers, an `e2e:` line with `node tests/e2e/run.mjs --only ...` when viewer code changed, and `tour steps over this code (may go stale)`, which `impact` prints too). Tests are hidden in graph/zoom/node unless
   `--tests`.
 - `coderstanding warnings <app>`: unused classes, god classes, dependency cycles, unsure lines
-  and unresolved outside refs (not `bpy` or asset files: those are "outside", one `outside:` summary line with the count and top names; `--all` lists every name), one line per kind. `warnings <app> --names [Class]` lists the unresolved names with counts, per class. A `parse-error` line lists files the grammar could not fully parse (`file:line`; declarations there are read as far as possible, the rest may be missing). Godot apps also get `signal-unconnected`,
+  and unresolved outside refs (not `bpy` or asset files: those are "outside", one `outside:` summary line with the count and top names; `--all` lists every name), one line per kind. `warnings <app> --names [Class]` lists, per class, the unresolved names with counts, then the parse-error lines (`file:line` and the source text). A `parse-error` line lists files the grammar could not fully parse (`file:line`; declarations there are read as far as possible, the rest may be missing). Godot apps also get `signal-unconnected`,
   `signal-unemitted`, `bad-handler` (`_on_..` handlers only) and `autoload-unused`, with the
   signal / handler names in `[..]`; they are hints (dynamic connects, string-named signals and
   runtime-added functions are not seen), so check the code before acting. Per-folder ignore rules: `coderstanding rules <app>`
@@ -141,8 +141,8 @@ package; `coderstanding <command> --help` lists every option.
   folder, rescanned from the cache when its files change, dropped when the worktree is gone), so
   line numbers match your branch; notes, specs and tours still come from the app. The
   `note: worktree ...` and lost-notes lines print only when they change, not on every call.
-- Looking for something by name or topic: `coderstanding find <app> word [word...]` (all words
-  must match, fuzzily, in class/function/field names, notes, code docs or linked spec/memo/tour
+- Looking for something by name or topic: `coderstanding find <app> word [word...]` (hits ranked by how many words
+  match, fuzzily, in class/function/field names, notes, code docs or linked spec/memo/tour
   text; `crash hour` finds `MAX_PER_HOUR`. That is names and notes; for literal text
   in any file (code, docs, scripts, config) use `find <app> --text <regex>`: one line per hit with
   its function or heading, code first, 40 full lines then a `file: N hits` line per remaining file
@@ -343,7 +343,7 @@ the code should not go.
 - C code that a macro turns into functions (`REWRITE(272b4) { ... }`) reads as a function when the
   app's `function_macros` setting names the macro and a name template ({1} = the first argument):
   `settings <app> 'function_macros={"REWRITE": "F_{1}"}'`. Only a macro call at the start of a line,
-  followed by `{`, counts. Compiler words tree-sitter-c lacks (`__watcall`, `__far`, ...) are blanked
+  followed by `{`, counts; a macro with no body after it (`ARITH(8, u8)`) defines each named function with an empty body, and a value may be a list of templates (`{"ARITH": ["add{1}", "sub{1}"]}`) for a macro that makes several functions. Compiler words tree-sitter-c lacks (`__watcall`, `__far`, ...) are blanked
   before parsing, and decompiler names (`undefined4`, `CONCAT31`, `in`) are built-ins, never unresolved.
 - `set` writes AI drafts (author `claude`, `ai: true`, whichever agent you are); human values (any other author) are
   never overwritten. `--by NAME` writes as that person, only when the user asks. Function

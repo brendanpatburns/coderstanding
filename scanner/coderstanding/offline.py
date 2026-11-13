@@ -111,7 +111,7 @@ def helper_listening(host, port, timeout=0.3):
         return False
 
 
-def privacy_report(host, port, origin, origin_source, listening):
+def privacy_report(host, port, origin, origin_source, listening, built_in_voices=""):
     """`coderstanding privacy`: the current offline state, one line per point, plus a verdict.
     Plain values in, text out (no systemd, /proc or other OS-specific checks)."""
     from_where = f" (from {origin_source})" if origin_source else ""
@@ -128,6 +128,7 @@ def privacy_report(host, port, origin, origin_source, listening):
                                   "none: no other site may call the local helper (work setting)"),
         "  speech            on-device voices only (localService); online voices (Google, "
         "Microsoft Online) are never used; no local voice = silent timeline",
+        *([f"  built-in voices   {built_in_voices}"] if built_in_voices else []),
         "  git               local commands only (ls-files; protocol.allow=never, no lazy fetch)",
     ]
     if not active():

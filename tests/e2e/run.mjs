@@ -1233,6 +1233,30 @@ async function main() {
       await page.eval("TourView.player.env.synth = __realSynth");
     });
 
+    await step("Tours built-in voices: the picker shows the voices folder; voice files wait for Piper", async () => {
+      // A voice file pair in the isolated data home's voices folder (never played: no sound).
+      const folder = join(isolated.CODERSTANDING_DATA_HOME, "voices");
+      const files = ["en_US-e2e-medium.onnx", "en_US-e2e-medium.onnx.json"].map((name) => join(folder, name));
+      mkdirSync(folder, { recursive: true });
+      writeFileSync(files[0], "not a model");
+      writeFileSync(files[1], JSON.stringify({ language: { code: "en_US" }, audio: { quality: "medium" } }));
+      try {
+        await openTour("tab=tours&tour=first-steps&step=1");
+        await page.waitFor("TourView.state.builtIn", { what: "built-in voices listed" });
+        const listing = await page.eval("TourView.state.builtIn");
+        assert(listing.folder === folder && listing.found === 1, `listing: ${JSON.stringify(listing)}`);
+        assert((await page.eval("document.getElementById('tourVoice').title")).includes(folder), "the picker's hint names the folder");
+        if (listing.installed) {
+          assert(await page.eval("document.getElementById('tourVoice').options[0].textContent === 'en_US-e2e-medium (en-US) - built-in'"), "built-in voice first");
+        } else {
+          const hint = await page.eval("(() => { const hint = document.getElementById('voiceHint'); return hint.hidden ? '' : hint.textContent; })()");
+          assert(hint.includes("not installed") && hint.includes(folder), `hint: ${hint}`);
+        }
+      } finally {
+        files.forEach((file) => rmSync(file, { force: true }));
+      }
+    });
+
     await step("Tours keyboard: arrows, Home, Space", async () => {
       await openTour("tab=tours&tour=first-steps&step=1");
       await page.key("ArrowRight");

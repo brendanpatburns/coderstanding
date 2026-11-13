@@ -1,8 +1,9 @@
 """Warnings per node (docs/DESIGN.md 12a), computed once after the scan resolves.
 
 Kinds, stored on `node.warnings` as small dicts:
-- `unused`: nothing outside tests points at it (entry points, autoloads, tests and outside
-  code are never unused).
+- `unused`: nothing outside tests points at it (entry points, autoloads, tests, web pages and
+  outside code are never unused). A use of a nested node uses the nodes it sits in (a module's
+  class, a package's module); an own decorator (`@register`) uses the class it decorates.
 - `god`: far more neighbours than the repo's norm: degree >= max(GOD_MIN, GOD_FACTOR x median).
 - `cycle`: part of a dependency cycle (strongly connected set > 1 over non-inheritance lines).
   `group` names the cycle by its smallest id, `size` counts its members.
@@ -23,13 +24,13 @@ import re
 from collections import Counter
 from statistics import median
 
-from .model import ANY_SIGNAL, EDGE_KINDS, EMIT_DETAIL, SIGNAL_ARROW, STRUCT_KINDS
+from .model import ANY_SIGNAL, EDGE_KINDS, EMIT_DETAIL, FRAGMENT_FLAG, REPLACED_FLAG, SIGNAL_ARROW, STRUCT_KINDS
 from .stack import unresolved_names
 from .testcode import is_test
 
 GOD_MIN = 20  # never call a class with fewer neighbours than this a god class
 GOD_FACTOR = 6  # ... nor one below this many times the median degree
-ALWAYS_USED_FLAGS = ("entry", "autoload", "test")
+ALWAYS_USED_FLAGS = ("entry", "autoload", "test", FRAGMENT_FLAG, REPLACED_FLAG)
 WARNING_HELP = {  # one line each, shown by the viewer
     "unused": "Nothing outside tests points at it",
     "god": "Far more connections than the repo's norm",
@@ -76,16 +77,54 @@ def god_threshold(degrees):
     return max(GOD_MIN, round(GOD_FACTOR * median(degrees))) if degrees else GOD_MIN
 
 
+STARTED_FLAGS = ("entry", "autoload")  # started by the engine or the interpreter, not by code
+NEVER_UNUSED_FILE_KINDS = ("Web page",)  # a person opens a page in a browser; code rarely points at it
+DECORATOR_DETAIL = "decorator"
+
+
+def enclosing_ids(node_id):
+    """The ids a nested id sits in, innermost first: `a.b.C` -> `a.b`, `a`."""
+    parts = node_id.split(".")
+    return [".".join(parts[:i]) for i in range(len(parts) - 1, 0, -1)]
+
+
+def mark_used(used, node_id, user_id):
+    """`node_id` is used by `user_id`, and so is every node it sits in that does not also hold
+    the user: importing a module's class uses the module (and its Python package). A class
+    pointing at the module it sits in is no use of that module."""
+    for target in [node_id, *enclosing_ids(node_id)]:
+        if user_id != target and not user_id.startswith(target + "."):
+            used.add(target)
+
+
+def is_registering_decorator(graph, edge):
+    """A class decorated by one of the repo's own functions (`@register`): the decorator is
+    handed the class, so the class is used by it. Functions resolve to their module node."""
+    target = graph.nodes.get(edge.to)
+    return DECORATOR_DETAIL in edge.detail and target is not None and target.kind == "module"
+
+
 def used_ids(graph):
-    """Ids something outside tests points at."""
-    return {e.to for e in graph.edges.values()
-            if e.from_id != e.to and not is_test(graph.nodes.get(e.from_id))}
+    """Ids something outside tests points at (and the nodes they sit in), classes handed to an
+    own decorator, and the nodes holding an entry point (a Python package with `__main__`)."""
+    used = set()
+    for edge in graph.edges.values():
+        if edge.from_id == edge.to or is_test(graph.nodes.get(edge.from_id)):
+            continue
+        mark_used(used, edge.to, edge.from_id)
+        if is_registering_decorator(graph, edge):
+            mark_used(used, edge.from_id, edge.to)
+    for node_id, node in graph.nodes.items():
+        if set(node.flags) & set(STARTED_FLAGS):
+            used.update(enclosing_ids(node_id))
+    return used
 
 
 def unused_ids(graph, ids):
     used = used_ids(graph)
     return {i for i in ids if i not in used
-            and not set(graph.nodes[i].flags) & set(ALWAYS_USED_FLAGS)}
+            and not set(graph.nodes[i].flags) & set(ALWAYS_USED_FLAGS)
+            and graph.nodes[i].file_kind not in NEVER_UNUSED_FILE_KINDS}
 
 
 def cycle_groups(graph, ids):
@@ -144,6 +183,17 @@ def unresolved_by_node(graph, only_id=None):
     ids = [only_id] if only_id else sorted(checked_ids(graph))
     found = {node_id: unresolved_names(graph.nodes[node_id]) for node_id in ids}
     return {node_id: names for node_id, names in found.items() if names}
+
+
+def parse_errors_by_node(graph, only_id=None):
+    """node id -> [`file:line`] of the files the grammar could not fully parse (the `parse-error`
+    warnings); the checked nodes that have any, or the ones in `only_id`'s file."""
+    ids = checked_ids(graph)
+    only_file = graph.nodes[only_id].file if only_id else None
+    found = {node_id: [place for warning in graph.nodes[node_id].warnings if warning["kind"] == "parse-error"
+                       for place in warning["names"]]
+             for node_id in sorted(ids) if only_file in (None, graph.nodes[node_id].file)}
+    return {node_id: places for node_id, places in found.items() if places}
 
 
 # --- Godot loose ends: signals nobody connects / emits, handlers that do not exist, autoloads ---
@@ -304,7 +354,7 @@ def check_graph(graph, layers=(), notes=None):
     degrees = {i: len(n) for i, n in links.items()}
     threshold = god_threshold(list(degrees.values()))
     for node_id, degree in degrees.items():
-        if degree >= threshold:
+        if degree >= threshold and not {FRAGMENT_FLAG, REPLACED_FLAG} & set(graph.nodes[node_id].flags):
             graph.nodes[node_id].warnings.append(
                 {"kind": "god", "degree": degree, "threshold": threshold})
     for group in cycle_groups(graph, ids):

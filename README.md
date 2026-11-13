@@ -86,6 +86,15 @@ amber = scanning; restart/stop/log menu) that quits with it. The tray needs Qt:
 (pipx) or `python -m pip install "coderstanding[tray]"`. On Windows the log is
 `%LOCALAPPDATA%\coderstanding\helper.log`; on Linux use `journalctl --user -u coderstanding-helper`.
 
+Natural voices for tours (optional, on this PC): `python -m pip install "coderstanding[voices]"`
+(Piper, GPL, not shipped with Coderstanding), then put Piper voices (`<name>.onnx` +
+`<name>.onnx.json` from Piper's voice list on Hugging Face) in the voices folder:
+`~/.local/share/coderstanding/voices` on Linux, `%LOCALAPPDATA%\coderstanding\data\voices` on
+Windows (`coderstanding privacy` prints it). They come first in the tour player's Voice picker,
+marked "built-in". Each voice has its own licence (see its model card): check it before using
+one for work. Clear dataset licences: `en_US-ljspeech` (LJ Speech, public domain) and the OpenSLR 83
+British voices such as `en_GB-northern_english_male` (CC BY-SA 4.0); `en_US-lessac` is unclear for work.
+
 ### From source (development)
 
 ```bash
@@ -194,7 +203,8 @@ Coderstanding makes no outside network calls, so it is safe to point at company 
   site can call the helper. Tour narration uses only on-device voices (`localService`): online
   voices, such as Chrome's "Google …" voices or Edge's "Microsoft … Online (Natural)" voices,
   would send the text to their vendor and are never used. Without a local voice, tours play
-  silently on their timeline. On Windows, the built-in voices are local.
+  silently on their timeline. On Windows, the system voices are local. The optional built-in
+  Piper voices run on this PC too, from voice files you add yourself.
 
 ## More
 

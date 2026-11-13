@@ -17,7 +17,7 @@ import tree_sitter_cpp
 
 from coderstanding.language import (FIELD_MEMBER, Declaration, FileResult, LanguageModule, Ref, Target,
                                    register)
-from coderstanding.model import Member, child_id, entry_flags
+from coderstanding.model import FRAGMENT_FLAG, Member, child_id, entry_flags
 
 from . import doc_text
 from .ts_util import children_of_type, descendants, end_line, first_error_line, line, make_parser, text
@@ -40,6 +40,7 @@ DECOMPILER_INTRINSICS = frozenset(
     {"in", "out", "swi", "halt", "halt_baddata", "halt_unimplemented", "POPCOUNT", "LZCOUNT",
      "ROUND", "FLOOR", "CEIL", "TRUNC", "NAN", "ABS", "SQRT", "INT2FLOAT", "FLOAT2FLOAT", "PIECE",
      "SUBPIECE", "CPUID"})
+DECOMPILER_FRAGMENT_NAME = re.compile(r"^caseD_\w+$")  # one case of a switch, cut out as a function
 DECOMPILER_INTRINSIC_PATTERN = re.compile(r"^(CONCAT|SUB|ZEXT|SEXT|CARRY|SCARRY|SBORROW)\d+$")  # `CONCAT31`
 # Compiler-specific words tree-sitter-c does not know (calling conventions and the like): blanked
 # before parsing so the declaration around them still reads. (__cdecl, __stdcall, __fastcall,
@@ -47,8 +48,30 @@ DECOMPILER_INTRINSIC_PATTERN = re.compile(r"^(CONCAT|SUB|ZEXT|SEXT|CARRY|SCARRY|
 COMPILER_WORDS = ("__watcall", "__cdecl16near", "__cdecl16far", "__stdcall16far", "__stdcall16near",
                   "__pascal", "__far", "__near", "__huge", "__interrupt", "__loadds",
                   "__saveregs", "__export", "__far16", "__near16", "__syscall", "__regcall",
-                  "__cdecl16", "__stdcall16", "__fortran", "__regparm1", "__regparm2", "__regparm3")
+                  "__cdecl16", "__stdcall16", "__fortran", "__regparm1", "__regparm2", "__regparm3",
+                  "SDLCALL")  # SDL's calling-convention macro
 COMPILER_WORD_PATTERN = re.compile(rb"\b(?:" + b"|".join(word.encode() for word in COMPILER_WORDS) + rb")\b")
+# GCC `__attribute__((...))` (one nesting level inside, as in `aligned(1)`): blanked too.
+GCC_ATTRIBUTE_PATTERN = re.compile(rb"\b__attribute__\s*\(\((?:[^()]|\([^()]*\))*\)\)")
+# GCC case range `case 1 ... 4:`: the range end is blanked, leaving `case 1:`.
+CASE_RANGE_PATTERN = re.compile(rb"(\bcase\b[^:;{}]*?)(\.\.\.[^:;{}]*)(?=:)")
+# Ghidra pseudo-C: a label right before `}` (C before C23 needs a statement there) gets `;` for its
+# `:`; and the C++ scope in `void switchD_00016518::caseD_0()` is blanked.
+LABEL_BEFORE_BRACE_PATTERN = re.compile(rb"^([ \t]*(?!default\b)[A-Za-z_]\w*):(?=\s*\})", re.MULTILINE)
+SWITCH_SCOPE_PATTERN = re.compile(rb"\bswitchD_\w+::")
+ARRAY_TYPE_PATTERN = re.compile(rb"\b(undefined\d?)(\s+\[\d+\])")  # Ghidra's `undefined1 [10]` return type
+# Ghidra's jump to a switch's default: `default()`, or `switchD_00025661::default()`
+BARE_DEFAULT_CALL_PATTERN = re.compile(rb"(?:\bswitchD_\w+::)?\bdefault\s*\(\s*\)")
+# `offsetof(Type, items[2].name)`: the grammar reads only a plain field there, so `[`, `]` and `.` become `_`.
+OFFSETOF_PATTERN = re.compile(rb"\boffsetof\s*\([^()]*\)")
+OFFSETOF_PATH_TABLE = bytes.maketrans(b"[].", b"___")
+# A macro call alone on a line with no `;` or body (`ARITH(8, u8)`; not a Ghidra `FUN_` name) makes functions the reader
+# cannot see; blanked so it does not break what follows.
+LONE_MACRO_CALL_PATTERN = re.compile(
+    rb"^(?!FUN_)(?=[A-Z0-9_]*[A-Z]{2})[A-Z][A-Z0-9_]*[ \t]*\((?:[^()\n]|\([^()\n]*\))*\)(?=[ \t]*(?:/\*.*\*/[ \t]*|//.*)?$)", re.MULTILINE)
+# A `#define` on the line after a line ending in `{` or `,` (inside a brace initializer): the grammar fails
+# there, so the line is blanked in place and its text moved to the end of the file (hoist_inner_defines).
+INNER_DEFINE_PATTERN = re.compile(rb"(?<=[{,]\n)[ \t]*#[ \t]*define\b(?:[^\n]*\\\n)*[^\n]*")
 # Standard names that are plain numbers or sizes: a typedef of one is a basic type too.
 STANDARD_BASIC_TYPES = frozenset(
     {f"{prefix}int{bits}_t" for prefix in ("", "u") for bits in (8, 16, 32, 64)}
@@ -84,9 +107,32 @@ def is_decompiler_intrinsic(name):
 
 
 def blank_compiler_words(source):
-    """The source bytes with compiler-specific words replaced by spaces (same length, so line
-    and column numbers stay)."""
-    return COMPILER_WORD_PATTERN.sub(lambda found: b" " * len(found.group()), source)
+    """The source bytes with compiler-specific words (and GCC attributes and case ranges) replaced
+    by spaces, and Ghidra's label/scope oddities patched (same length, so line and column numbers
+    stay)."""
+    def blank(found):
+        return b" " * len(found.group())
+    source = COMPILER_WORD_PATTERN.sub(blank, source)
+    source = GCC_ATTRIBUTE_PATTERN.sub(blank, source)
+    source = CASE_RANGE_PATTERN.sub(lambda found: found.group(1) + b" " * len(found.group(2)), source)
+    source = ARRAY_TYPE_PATTERN.sub(lambda found: found.group(1) + b" " * len(found.group(2)), source)
+    source = BARE_DEFAULT_CALL_PATTERN.sub(blank, source)
+    source = LONE_MACRO_CALL_PATTERN.sub(blank, source)
+    source = OFFSETOF_PATTERN.sub(lambda found: found.group().translate(OFFSETOF_PATH_TABLE), source)
+    source = LABEL_BEFORE_BRACE_PATTERN.sub(lambda found: found.group(1) + b";", source)
+    return hoist_inner_defines(SWITCH_SCOPE_PATTERN.sub(blank, source))
+
+
+def hoist_inner_defines(source):
+    """Source with each `#define` line inside a brace initializer blanked (newlines stay, so line
+    numbers do) and its text added at the end, where the grammar reads it and the macro is known."""
+    hoisted = []
+
+    def hoist(found):
+        hoisted.append(found.group().strip())
+        return re.sub(rb"[^\n]", b" ", found.group())
+    source = INNER_DEFINE_PATTERN.sub(hoist, source)
+    return source + b"\n" + b"\n".join(hoisted) + b"\n" if hoisted else source
 
 
 def split_arguments(text):
@@ -113,10 +159,12 @@ def closing_paren(text, open_position):
     return -1
 
 
-def expand_function_macros(source, function_macros):
+def expand_function_macros(source, function_macros, defined_names=None):
     """`MACRO(a, b) { body }` at the start of a line -> `void <name>(void) { body }` for every
-    macro in function_macros ({macro: name template, {1} = first argument}), so the block reads as
-    a function. Newlines inside the arguments are kept, so line numbers stay."""
+    macro in function_macros ({macro: name template or list of templates, {1} = first argument}),
+    so the block reads as a function. A macro with no body after it (`ARITH(8, u8)`) defines each
+    named function with an empty body. Newlines inside the arguments are kept, so line numbers
+    stay. The function names made this way are added to defined_names (a set), if given."""
     if not function_macros:
         return source
     text = source.decode("utf-8", errors="replace")
@@ -124,15 +172,21 @@ def expand_function_macros(source, function_macros):
     pieces, copied_to = [], 0
     for found in pattern.finditer(text):
         close = closing_paren(text, found.end() - 1)
-        after = text[close + 1:].lstrip() if close >= 0 else ""
-        if not after.startswith("{") or found.start() < copied_to:
+        if close < 0 or found.start() < copied_to:
             continue
         arguments = split_arguments(text[found.end():close])
-        name = function_macros[found.group(1)].format(*[""] + arguments) if arguments[0] else ""
-        if not name.isidentifier():
+        templates = function_macros[found.group(1)]
+        names = [template.format(*[""] + arguments) if arguments[0] else ""
+                 for template in ([templates] if isinstance(templates, str) else templates)]
+        if not names or not all(name.isidentifier() for name in names):
             continue
+        has_body = text[close + 1:].lstrip().startswith("{")
+        if defined_names is not None:
+            defined_names.update(names)
         newlines = "\n" * text.count("\n", found.start(), close)
-        pieces += [text[copied_to:found.start()], f"void {name}(void){newlines}"]
+        empty_body = "" if has_body else "{}"
+        declarations = "".join(f"void {name}(void){empty_body} " for name in names)
+        pieces += [text[copied_to:found.start()], declarations.rstrip() if has_body else declarations, newlines]
         copied_to = close + 1
     return ("".join(pieces) + text[copied_to:]).encode("utf-8")
 
@@ -315,7 +369,7 @@ class BodyReader:
 
     def read(self, *nodes):
         handlers = {"declaration": self._declaration, "new_expression": self._new_expression,
-                    "call_expression": self._call_expression}
+                    "call_expression": self._call_expression, "argument_list": self._arguments}
         for node in nodes:
             if node is None:
                 continue
@@ -359,6 +413,12 @@ class BodyReader:
                 text(node.child_by_field_name("argument")) == "this":
             return text(node.child_by_field_name("field"))
         return ""
+
+    def _arguments(self, node):
+        for argument in node.named_children:
+            name = text(argument)
+            if argument.type == "identifier" and name not in self.variables:
+                self.reader.add_function_reference(self.sink, name, argument)
 
     def _call_expression(self, node):
         function = node.child_by_field_name("function")
@@ -420,10 +480,13 @@ class CppFile:
         # A source file with a header next to it leaves the function list to the header.
         self.lists_functions = self.is_header or not self._has_header()
         self.listed = set()  # function names already in the module's members
-        self.local_functions = set()  # functions this file declares or defines
+        self.local_functions = set()  # functions this file defines (a header: declares)
+        self.prototypes = set()  # functions a source file only declares
+        self.function_references = []  # (name, Ref) of a name passed as an argument, filtered to prototypes at the end
         self.local_types = {}  # qualified name -> id, for types declared in this file
         self.type_info = {}  # type id -> TypeInfo
         self.alias_targets = {}  # qualified alias name -> Target, for aliases of aliases
+        self.macro_functions = set()  # functions written as `function_macros` blocks: hand-written ones
         self.macros = set()  # names #defined in this file
         self.free_calls = []  # (name, Ref), filtered against local functions/macros at the end
         self.anonymous = 0  # depth of `namespace {` blocks around the current node
@@ -432,7 +495,8 @@ class CppFile:
         return any((self.ctx.root / f"{self.module_id}{ext}").is_file() for ext in HEADER_EXTS)
 
     def read(self):
-        source = blank_compiler_words(expand_function_macros(self.ctx.read_bytes(), self.function_macros))
+        source = blank_compiler_words(
+            expand_function_macros(self.ctx.read_bytes(), self.function_macros, self.macro_functions))
         root = parse_tree(self.ctx.rel_path, source).root_node
         self.module.doc = doc_text.file_doc(root, DOC_MARKERS, ("preproc_include", "preproc_def", "preproc_ifdef"))
         self.result.declarations.append(self.module)
@@ -443,6 +507,8 @@ class CppFile:
         self.result.refs += [self.free_call_ref(name, ref) for name, ref in self.free_calls
                              if name not in self.macros and not is_decompiler_intrinsic(name)
                              and (name not in self.local_functions or self.is_own_call(name, ref))]
+        self.result.refs += [ref for name, ref in self.function_references
+                             if name in self.prototypes and name not in self.local_functions]
         return self.result
 
     # --- namespace level --------------------------------------------------------------
@@ -563,18 +629,25 @@ class CppFile:
                 self.add_held(sink, type_node, declarator, node)
 
     def add_function(self, function, node, namespace, sink):
-        """A free function declared or defined here: module member, global alias, types."""
+        """A free function declared or defined here: module member, global alias, types. A
+        prototype in a source file only names a function defined elsewhere: not a member."""
         name = short_name(function.child_by_field_name("declarator"))
-        if name:
+        if name and node.type != "function_definition" and not self.is_header:
+            self.prototypes.add(name)
+        elif name:
             self.local_functions.add(name)
             if self.lists_functions and name not in self.listed:
                 self.listed.add(name)
                 self.module.members.append(Member(name, "function", line=line(node), end=end_line(node),
                                                   stub=is_stub(node.child_by_field_name("body"))))
+            if DECOMPILER_FRAGMENT_NAME.match(name):
+                self.module.flags.append(FRAGMENT_FLAG)
             if name == "main" and node.type == "function_definition":
                 self.module.flags.extend(entry_flags("program-main"))
             if self.is_header or self.has_external_linkage(node):
                 self.result.global_aliases[join(namespace, name)] = Target(id=self.module_id)
+                if name in self.macro_functions:
+                    self.result.preferred_aliases.append(join(namespace, name))
         self.read_signature(sink, node, function)
 
     def has_external_linkage(self, node):
@@ -649,6 +722,13 @@ class CppFile:
                   scope=sink.scope,
                   from_member=sink.member)
         self.free_calls.append((name, ref))
+
+    def add_function_reference(self, sink, name, node):
+        """A name passed as an argument (`run(on_done)`): a call edge when it turns out to be a
+        function this file only declares."""
+        self.function_references.append(
+            (name, Ref(sink.owner, Target(name=name), "dependency", line(node), "call", name,
+                       scope=sink.scope, from_member=sink.member)))
 
     # --- types ------------------------------------------------------------------------
 

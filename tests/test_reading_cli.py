@@ -60,9 +60,9 @@ def test_find_ranks_name_before_function_and_limits(app, capsys):
     assert run(capsys, "find", "t", "join")[1:] == ["Net#join  method  net.py:5-6"]
 
 
-def test_find_needs_every_word_and_searches_code_docs(app, capsys):
-    out = run(capsys, "find", "t", "join", "nothing")
-    assert out[0].startswith("t find join nothing: 0/0") and out[-1] == "for literal text: find t --text <pattern>"
+def test_find_needs_one_word_and_searches_code_docs(app, capsys):
+    out = run(capsys, "find", "t", "nothing", "nowhere")
+    assert out[0].startswith("t find nothing nowhere: 0/0") and out[-1] == "for literal text: find t --text <pattern>"
     docs = run(capsys, "find", "t", "packets")
     assert any(line.startswith("net  module") and "Network layer" in line for line in docs)
 

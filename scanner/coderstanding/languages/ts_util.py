@@ -54,13 +54,16 @@ def lifted_children(node, named=False):
     return found
 
 
-def first_error_line(root):
-    """Line of the first syntax error in a parsed file (an ERROR or missing node), 0 if none."""
+def first_error_line(root, is_harmless=None):
+    """Line of the first syntax error in a parsed file (an ERROR or missing node), 0 if none.
+    `is_harmless(node)`: errors the grammar reports in valid code (a reader's known gaps)."""
     if not root.has_error:
         return 0
     stack = [root]
     while stack:
         node = stack.pop()
+        if is_harmless and is_harmless(node):
+            continue  # its whole subtree is the one known gap
         if node.type == "ERROR" or node.is_missing:
             return line(node)
         stack.extend(reversed([child for child in node.children if child.has_error or child.is_missing]))

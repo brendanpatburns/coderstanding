@@ -326,6 +326,8 @@ def node_detail(node):
     if node.get("domain"):
         parts.append(f"domain={node['domain']}" + (" (rule)" if node.get("domain_by") == "rule" else ""))
     parts += [text for text in (size_text(node), marks_text(node)) if text]
+    if node.get("replaced_by"):
+        parts.append(f"replaced by {node['replaced_by']}")
     lines = [" ".join(parts) + (f": {node['hint']}{stale_mark(node, 'hint')}" if node.get("hint") else "")]
     lines += plan_detail_lines(node)
     if node.get("warnings"):
@@ -570,16 +572,45 @@ def warning_group_lines(kind, items, short_name):
     return [f"{kind}: {', '.join(counted)}"]
 
 
+def note_label(key, short_name):
+    """`A`, `A#f` or `A>B`: a note key as the commands print it."""
+    kind, _, rest = key.partition(":")
+    if kind == "edge":
+        return ">".join(short_name(i) for i in rest.split(ARROW, 1))
+    node_id, sep, fn = rest.partition(FUNCTION_SEP)
+    return short_name(node_id) + sep + fn
+
+
 def stale_lines(items, short_name):
     """`stale: A hint, A#f review, A>B description`: notes whose code changed since written."""
-    def label(key):
-        kind, _, rest = key.partition(":")
-        if kind == "edge":
-            return ">".join(short_name(i) for i in rest.split(ARROW, 1))
-        node_id, sep, fn = rest.partition(FUNCTION_SEP)
-        return short_name(node_id) + sep + fn
     return ["stale (code changed since the note): "
-            + ", ".join(f"{label(key)} {'/'.join(w['fields'])}" for key, w in items)]
+            + ", ".join(f"{note_label(key, short_name)} {'/'.join(w['fields'])}" for key, w in items)]
+
+
+def stale_detail_lines(app, rows, short_name):
+    """`warnings --stale-detail`: per stale note key its code place, every note text there (so one
+    pass handles hint and description), the stale fields marked, and the recent commits on that
+    code. `rows`: dicts key, notes [(field, text, stale)], places ["file:first-last"], commits
+    [(hash, date, subject)], uncommitted (bool)."""
+    lines = [f"{app} stale notes: {len(rows)}"]
+    for row in rows:
+        lines.append(f"{note_label(row['key'], short_name)} {', '.join(row['places']) or '(code gone)'}")
+        lines += [f'  {name}{" (stale)" if stale else ""}: "{clip(" ".join(str(text).split()), STALE_TEXT_MAX)}"'
+                  for name, text, stale in row["notes"]]
+        if row["uncommitted"]:
+            lines.append("  code: uncommitted changes in this range")
+        lines += [f"  code: {commit} {date} {subject}" for commit, date, subject in row["commits"]]
+    return lines
+
+
+def still_true_lines(shown):
+    """`--still-true` summary: per target `A#f: still true`, then one `field: "note text"` line per
+    confirmed note (clipped); `shown` is {key: [(field, text)]}."""
+    lines = []
+    for key, fields in shown.items():
+        lines.append(f"{key}: still true ({', '.join(name for name, _ in fields) or 'no notes'})")
+        lines += [f'  {name}: "{clip(" ".join(str(text).split()), STILL_TRUE_TEXT_MAX)}"' for name, text in fields]
+    return lines
 
 
 def format_warnings(app, groups, short_name=str):
@@ -604,6 +635,24 @@ def unresolved_name_lines(app, by_node, short_name=str):
     return lines
 
 
+PARSE_ERROR_TEXT_MAX = 100  # characters of the source line shown in --names
+
+
+def parse_error_lines(by_node, line_text, short_name=str):
+    """`--names`: `parse errors: N files`, then `Node file:line  source text` for each. line_text
+    maps `file:line` to the source line ('' when it cannot be read)."""
+    if not by_node:
+        return []
+    lines = [f"parse errors: {sum(len(places) for places in by_node.values())} files"]
+    for node_id, places in by_node.items():
+        for place in places:
+            shown = line_text(place).strip()[:PARSE_ERROR_TEXT_MAX]
+            lines.append(f"{short_name(node_id)} {place}" + (f"  {shown}" if shown else ""))
+    return lines
+
+
+STALE_TEXT_MAX = 160  # characters of each note text in --stale-detail
+STILL_TRUE_TEXT_MAX = 80  # characters of each confirmed note shown
 OUTSIDE_SHOWN = 3  # names in the summary line; --all lists every stored name
 
 

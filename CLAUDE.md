@@ -27,6 +27,7 @@ user-written text on connections.
 ## Dev setup
 - Python venv at `.venv/` (gitignored): `.venv/bin/pip install -e ".[dev]"` once `pyproject.toml`
   exists. Needs Fedora `python3-devel` to build tree-sitter on Python 3.15.
+  Optional built-in tour voices: `pip install -e ".[voices]"` (piper-tts, GPL, never vendored) plus Piper voice files in `<data home>/voices/` (DESIGN 7c Audio); `tests/test_voices.py` uses a fake synthesizer, its real-Piper test skips without piper-tts or `~/.local/share/piper-tts/voices/`.
 - Tests: `.venv/bin/pytest <files>` for your own work: the files `coderstanding tests coderstanding --diff` lists for your change (not only new tests); the full suite runs after merges.
   Viewer JS tests: `node --test tests/js/test_layout.mjs tests/js/test_badges.mjs` (no npm needed).
   Viewer end-to-end checks in headless Chromium (Node 22 + `chromium-browser`, no packages):

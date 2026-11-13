@@ -1,8 +1,8 @@
 // Tours player logic (DESIGN 7c Audio): spoken words, word spans for the follow-along highlight,
-// speech chunks, the learned speaking pace and the step player (your recording, else the
-// browser voice in chunks, else a silent clock). No DOM here: the page hands in the browser
-// parts (speech, audio, clock, storage), so `node --test tests/js/test_tours.mjs` drives the
-// player with fakes.
+// speech chunks, the learned speaking pace and the step player (your recording, else a
+// voice in chunks (a built-in Piper voice from the local server, or the browser's), else a silent
+// clock). No DOM here: the page hands in the browser parts (speech, audio, clock, storage), so
+// `node --test tests/js/test_tours.mjs` drives the player with fakes.
 (() => {
 const DEFAULT_PACE = 0.07;       // seconds per character at 1x until a voice's own pace is learned
 const PACE_LIMITS = [0.02, 0.3]; // a chunk timed outside this is not speech (cut short, stuck)
@@ -11,6 +11,7 @@ const PACE_KEY = "coderstanding-tour-pace";
 const MIN_SENTENCE = 12;         // characters: a shorter sentence joins the next chunk
 const MIN_CLAUSE = 40;           // characters before a comma, semicolon or colon may end a chunk
 const START_TIMEOUT_MS = 2500;   // no "start" from the voice by then: it is not coming, run on the clock
+const BUILT_IN_START_MS = 15000; // the same for a built-in voice: its first clip may wait for the model to load
 const LINK = /\[\[([^\]]+)\]\]/g;
 const RECORD_TYPES = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm"];
 
@@ -233,9 +234,11 @@ const ROBOT_VOICE = /klatt|robosoft|whisper|croak/i;
 const ESPEAK_BASE = /espeak|^[A-Za-z ]+ \([^)]*\)$/;
 const SHORT_TIERS = 3;  // tiers below this make the short list; espeak variants and robots only under "More voices"
 
-/** How good a voice probably sounds, 0 best: 0 natural/neural/Piper/Siri/Google, 1 other plain
- *  voices, 2 espeak-ng base voices, 3 espeak variants ("+Adam"), 4 robot variants (klatt, Robosoft, whisper, croak). */
+/** How good a voice probably sounds, 0 best: 0 built-in (Piper through the local server) and
+ *  natural/neural/Piper/Siri/Google, 1 other plain voices, 2 espeak-ng base voices, 3 espeak
+ *  variants ("+Adam"), 4 robot variants (klatt, Robosoft, whisper, croak). */
 function voiceTier(voice) {
+  if (voice.builtIn) return 0;
   const name = voice.name;
   if (ROBOT_VOICE.test(name)) return 4;
   if (name.includes("+")) return 3;
@@ -244,15 +247,17 @@ function voiceTier(voice) {
 }
 
 /** `voices` for `lang` (e.g. "en-GB"), best first: the page language (else all languages), then
- *  by tier, then the exact language ("en-GB") before its dialects ("en-GB-X-GBCWMD", "en-029"),
- *  then the browser's order. */
+ *  built-in voices before the browser's, then by tier, then the exact language ("en-GB") before
+ *  its dialects ("en-GB-X-GBCWMD", "en-029"), then the browser's order. */
 function rankedVoices(voices, lang) {
   const want = langKey(lang);
   const prefix = want.split("-")[0];
   const same = voices.filter((v) => langKey(v.lang).split("-")[0] === prefix);
   const exact = (v) => (langKey(v.lang) === want ? 0 : 1);
+  const browser = (v) => (v.builtIn ? 0 : 1);
   return (same.length ? same : [...voices]).map((v, i) => [v, i])
-    .sort((a, b) => voiceTier(a[0]) - voiceTier(b[0]) || exact(a[0]) - exact(b[0]) || a[1] - b[1]).map(([v]) => v);
+    .sort((a, b) => browser(a[0]) - browser(b[0]) || voiceTier(a[0]) - voiceTier(b[0])
+      || exact(a[0]) - exact(b[0]) || a[1] - b[1]).map(([v]) => v);
 }
 
 /** The voices worth offering for `lang`: on-device ones (see offeredVoices), at most 8 of the
@@ -281,6 +286,160 @@ function pickVoice(voices, name, lang) {
   return chosen || voiceChoices(localVoices(voices), lang)[0] || null;
 }
 
+// ---------- built-in voices (Piper on the local server, DESIGN 7c Audio) ----------
+
+const BUILT_IN_PREFIX = "built-in:";  // keeps a built-in voice's name apart from a browser voice of the same name
+
+/** A voice for the picker and the player from one GET /api/voices entry {name, lang}. */
+function builtInVoice(entry) {
+  return { name: BUILT_IN_PREFIX + entry.name, label: entry.name, piper: entry.name, lang: entry.lang,
+    builtIn: true, localService: true, voiceURI: BUILT_IN_PREFIX + entry.name, default: false };
+}
+
+/** The picker's text for a voice. */
+function voiceLabel(voice) {
+  if (voice.builtIn) return `${voice.label} (${voice.lang}) - built-in`;
+  return `${voice.name} (${voice.lang})${isOnline(voice) ? " - online" : ""}`;
+}
+
+/** Where built-in voices come from, for the picker's hint (GET /api/voices `listing`), or "". */
+function builtInHint(listing) {
+  if (!listing) return "";
+  if (listing.found && !listing.installed) {
+    return `${listing.found} Piper voices found in ${listing.folder}, but Piper is not installed: ${listing.install}.`;
+  }
+  if (listing.voices?.length) return `Built-in voices run on this PC, from ${listing.folder}. ${listing.licence}`;
+  return `For natural built-in voices, add Piper voices to ${listing.folder} (${listing.add}). ${listing.licence}`;
+}
+
+const ROBOT_HINT = "Only robot voices found.";
+const SYSTEM_VOICE_HINT = "Install a better voice (e.g. Piper for speech-dispatcher on Linux).";
+
+/** The line under the player about voices, or "" for none: shown when only robot voices are
+ *  found, or when Piper voice files wait for Piper to be installed. `listing` = GET /api/voices
+ *  (null: the server has no built-in voices). */
+function voiceHint(voices, lang, listing) {
+  const robot = onlyRobotVoices(voices, lang);
+  if (!robot && !(listing?.found && !listing.installed)) return "";
+  return [robot ? ROBOT_HINT : "", listing ? builtInHint(listing) : SYSTEM_VOICE_HINT].filter(Boolean).join(" ");
+}
+
+/** What the player hands the speech engine: the text and how to say it, with utterance-style
+ *  handlers. A plain object, so a built-in voice can take it; the browser gets a real utterance. */
+class SpeechRequest {
+  constructor(text) {
+    this.text = text;
+    this.rate = 1;
+    this.voice = null;
+    this.lang = "";
+  }
+}
+
+const SPEECH_EVENTS = ["onstart", "onend", "onerror", "onboundary"];
+
+/**
+ * speechSynthesis-like speech in the built-in voices. `env`: load(voiceName, text) -> Promise of
+ * an audio URL (one clip, made once by the server), release(url) when a clip is done,
+ * makeAudio(url) -> audio element. Every request's clip is asked for at once (the next ones are
+ * ready when the current one ends), then the clips play one after another at the request's rate;
+ * each sends start, end and error like an utterance (no word events), so the player's chunk
+ * timing works as with a browser voice.
+ */
+class ClipSynth {
+  constructor(env) {
+    this.env = env;
+    this.voices = [];      // builtInVoice() entries, set by the page
+    this.queue = [];
+    this.current = null;
+  }
+
+  getVoices() { return this.voices; }
+
+  speak(request) {
+    this.queue.push({ request, clip: Promise.resolve(this.env.load(request.voice.piper, request.text)) });
+    if (!this.current) this.next();
+  }
+
+  cancel() {
+    const dropped = [this.current, ...this.queue].filter(Boolean);
+    this.current = null;
+    this.queue = [];
+    dropped.forEach((item) => {
+      item.canceled = true;
+      item.audio?.pause();
+      item.clip.then((url) => this.env.release?.(url), () => {});
+    });
+  }
+
+  next() {
+    const item = this.current = this.queue.shift() || null;
+    if (!item) return;
+    item.clip.then((url) => {
+      if (!item.canceled) this.play(item, url);
+    }, (error) => this.done(item, { error: error?.message || String(error) }));
+  }
+
+  play(item, url) {
+    const audio = item.audio = this.env.makeAudio(url);
+    item.url = url;
+    audio.playbackRate = item.request.rate || 1;
+    audio.onplaying = () => {
+      if (item.canceled || item.started) return;
+      item.started = true;
+      item.request.onstart?.({});
+    };
+    audio.onended = () => this.done(item, null);
+    audio.onerror = () => this.done(item, { error: "audio-failed" });
+    Promise.resolve(audio.play()).catch((error) =>
+      this.done(item, { error: error?.name === "NotAllowedError" ? "not-allowed" : error?.message || String(error) }));
+  }
+
+  /** A clip ended (`failure` null) or failed: tell its request, then play the next one. */
+  done(item, failure) {
+    if (item.canceled || item !== this.current) return;
+    if (item.url) this.env.release?.(item.url);
+    this.current = null;
+    if (failure) item.request.onerror?.(failure);
+    else item.request.onend?.({});
+    this.next();
+  }
+}
+
+/** The player's speech engine (speechSynthesis-like): requests in a built-in voice go to `clips`
+ *  (a ClipSynth), the rest to the browser's `browser` speechSynthesis as a real `Utterance` made
+ *  from the request, its events passed back. Either part may be null. */
+class VoiceRouter {
+  constructor({ browser, clips, Utterance }) {
+    this.browser = browser;
+    this.clips = clips;
+    this.Utterance = Utterance;
+  }
+
+  /** Built-in voices first, then the browser's. */
+  getVoices() { return [...(this.clips?.getVoices() || []), ...(this.browser?.getVoices() || [])]; }
+
+  speak(request) {
+    if (request.voice?.builtIn) this.clips.speak(request);
+    else this.browser?.speak(this.utterance(request));
+  }
+
+  cancel() {
+    this.clips?.cancel();
+    this.browser?.cancel();
+  }
+
+  /** The browser utterance for a request; kept on it (Chromium drops events of collected ones). */
+  utterance(request) {
+    const u = new this.Utterance(request.text);
+    u.rate = request.rate;
+    if (request.voice) u.voice = request.voice;
+    if (request.lang) u.lang = request.lang;
+    SPEECH_EVENTS.forEach((name) => { u[name] = (event) => request[name]?.(event); });
+    request.native = u;
+    return u;
+  }
+}
+
 /** The recording format: Opus in WebM, else in Ogg, else plain WebM ("" = browser default). */
 function recorderType(isTypeSupported) {
   return RECORD_TYPES.find((type) => isTypeSupported(type)) || "";
@@ -290,7 +449,8 @@ function recorderType(isTypeSupported) {
 
 /**
  * Plays one step at a time. `env` gives the browser parts:
- *   synth (speechSynthesis-like or null), Utterance (constructor), makeAudio(url) -> audio element,
+ *   synth (speechSynthesis-like or null; the page's is a VoiceRouter over the built-in and the
+ *   browser voices), Utterance (constructor; the page's is SpeechRequest), makeAudio(url) -> audio element,
  *   now() ms, frame(fn)/cancelFrame(id) (animation frames), later(fn, ms)/cancelLater(id),
  *   storage (localStorage-like, for the learned pace), onChange() after every move,
  *   onEnd() when a step played to its end, onNote(text) for notes.
@@ -611,7 +771,7 @@ class StepPlayer {
     env.cancelLater(this.startTimer);
     this.startTimer = env.later(() => {
       if (live() && !t.started && t.speaking) { t.speaking = false; this.note(NOTES.noStart); }
-    }, START_TIMEOUT_MS);
+    }, this.voice?.builtIn ? BUILT_IN_START_MS : START_TIMEOUT_MS);
   }
 
   startClock(token) {
@@ -696,10 +856,11 @@ class StepPlayer {
   note(text) { this.env.onNote?.(text); }
 }
 
-const api = { DEFAULT_PACE, START_TIMEOUT_MS, MIN_SENTENCE, MIN_CLAUSE, NOTES, linkWords, speakable, words,
+const api = { DEFAULT_PACE, START_TIMEOUT_MS, BUILT_IN_START_MS, MIN_SENTENCE, MIN_CLAUSE, NOTES, linkWords, speakable, words,
   spokenText, spansOf, stepSpans, spanState, charStarts, wordAtChar, chunksOf, wordsBefore, fmtTime, source,
   lineNoteCues, lineNotesShown, lineNotesText, parseLineNotes,
-  localVoices, isOnline, offeredVoices, voiceChoices, hasMoreVoices, onlyRobotVoices, voiceTier, pickVoice, recorderType, PaceBook, StepPlayer };
+  localVoices, isOnline, offeredVoices, voiceChoices, hasMoreVoices, onlyRobotVoices, voiceTier, pickVoice, recorderType, PaceBook, StepPlayer,
+  builtInVoice, voiceLabel, builtInHint, voiceHint, SpeechRequest, ClipSynth, VoiceRouter };
 if (typeof module !== "undefined") module.exports = api;
 else window.CoderTours = api;
 })();

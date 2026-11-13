@@ -97,19 +97,31 @@ CoderApps.url = (path) => {
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
 
-/** fetch an /api/ path as JSON (throws the server's error). A network failure (helper gone)
- * re-probes and retries once when it is back, else shows the start UI and throws. */
-CoderApps.request = async (path, options = {}) => {
-  let response;
+/** fetch an /api/ path. A network failure (helper gone) re-probes and retries once when it is
+ * back, else shows the start UI and throws. */
+async function fetchApi(path, options) {
   try {
-    response = await fetch(CoderApps.url(path), options);
+    return await fetch(CoderApps.url(path), options);
   } catch (error) {
     if (!await CoderApps.recover()) throw error;
-    response = await fetch(CoderApps.url(path), options);
+    return fetch(CoderApps.url(path), options);
   }
+}
+
+/** fetch an /api/ path as JSON (throws the server's error). */
+CoderApps.request = async (path, options = {}) => {
+  const response = await fetchApi(path, options);
   const data = await response.json();
   if (!response.ok) throw Object.assign(new Error(data.error || response.statusText), { data });
   return data;
+};
+
+/** fetch an /api/ path as a Blob (a voice clip); throws the server's JSON error. */
+CoderApps.requestBlob = async (path, options = {}) => {
+  const response = await fetchApi(path, options);
+  if (response.ok) return response.blob();
+  const data = await response.json().catch(() => ({}));
+  throw Object.assign(new Error(data.error || response.statusText), { data });
 };
 
 /** The local helper's URL from hosted.json: deploy/hosted.json names it on the hosted shell;

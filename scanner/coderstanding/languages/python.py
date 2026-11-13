@@ -8,7 +8,7 @@ import tree_sitter_python
 
 from coderstanding.language import (FIELD_MEMBER, INIT_MEMBER, Declaration, FileResult,
                                     LanguageModule, Ref, Target, register)
-from coderstanding.model import Member, add_unique, child_id, entry_flags, is_public
+from coderstanding.model import OPTIONAL_IMPORT, Member, add_unique, child_id, entry_flags, is_public
 
 from . import doc_text
 from .stubs import is_stub
@@ -22,6 +22,8 @@ SKIPPED_TYPES = {"str", "int", "float", "bool", "bytes", "None", "list", "dict",
 STOP_AT_SCOPES = ("class_definition",)
 OWN_RECEIVERS = ("self", "cls")  # `self.x()` / `cls.x()` call the class's own method x
 DOTTED_NAME = re.compile(r"^[A-Za-z_][\w.]*$")
+IMPORT_ERRORS = {"ImportError", "ModuleNotFoundError"}
+VALUE_CONTAINERS = ("tuple", "list", "set", "list_splat", "parenthesized_expression")
 
 
 def module_id_for(ctx):
@@ -64,6 +66,27 @@ def attribute_chain(node):
         parts.insert(0, text(node.child_by_field_name("attribute")))
         node = node.child_by_field_name("object")
     return [text(node)] + parts if node.type == "identifier" else []
+
+
+def is_optional_import(node):
+    """An import in the body of a `try:` whose `except` catches ImportError: the code runs
+    without it (an optional extra, or an alternative package tried first)."""
+    while node.parent is not None:
+        block, node = node, node.parent
+        if node.type == "try_statement" and block == node.child_by_field_name("body") \
+                and catches_import_error(node):
+            return True
+    return False
+
+
+def catches_import_error(try_statement):
+    """An `except` naming ImportError / ModuleNotFoundError, or a bare `except:`."""
+    for handler in children_of_type(try_statement, "except_clause"):
+        caught = handler.child_by_field_name("value")
+        if caught is None or IMPORT_ERRORS & {text(n) for n in [caught, *descendants(caught)]
+                                              if n.type == "identifier"}:
+            return True
+    return False
 
 
 class PythonFile:
@@ -172,8 +195,8 @@ class PythonFile:
         return ".".join(package + ([text(sub)] if sub is not None else []))
 
     def add_import_ref(self, target, node):
-        self.result.refs.append(Ref(self.module_id, target, "dependency", line(node),
-                                    "import"))
+        detail = OPTIONAL_IMPORT if is_optional_import(node) else "import"
+        self.result.refs.append(Ref(self.module_id, target, "dependency", line(node), detail))
 
     # --- classes ----------------------------------------------------------------------
 
@@ -187,6 +210,7 @@ class PythonFile:
                                   end_line=end_line(node), base=bases[0] if bases else "",
                                   doc=docstring(node.child_by_field_name("body")))
         self.result.declarations.append(declaration)
+        self.read_class_decorators(node, class_id)
         body = node.child_by_field_name("body")
         fields = self.read_fields(body, class_id, declaration)
         for decorated in lifted_children(body):
@@ -202,6 +226,19 @@ class PythonFile:
             elif item.type == "class_definition":
                 self.read_class(item, class_id)
         self.read_scope(body, class_id, fields)
+
+    def read_class_decorators(self, node, class_id):
+        """`@register` / `@registry.add(...)` on a class: a ref to the decorator (detail
+        `decorator`); an own decorator is handed the class, so checks.py counts it as a use."""
+        if node.parent is None or node.parent.type != "decorated_definition":
+            return
+        for decorator in children_of_type(node.parent, "decorator"):
+            expression = decorator.named_children[0] if decorator.named_children else None
+            if expression is not None and expression.type == "call":
+                expression = expression.child_by_field_name("function")
+            name = ".".join(attribute_chain(expression)) if expression is not None else ""
+            if name and self.is_known(name.partition(".")[0]):
+                self.add_type_ref(class_id, name, "dependency", decorator, "decorator")
 
     def read_bases(self, node, class_id):
         arguments = node.child_by_field_name("superclasses")
@@ -333,6 +370,7 @@ class PythonFile:
         function = call.child_by_field_name("function")
         chain = attribute_chain(function)
         member = self.enclosing_function_name(call) or INIT_MEMBER
+        self.read_class_arguments(call, owner_id, member)
         if len(chain) >= 3 and chain[0] == "self" and chain[1] in fields:
             self.add_type_ref(owner_id, fields[chain[1]], "association", call, "call", chain[2],
                               member)
@@ -343,6 +381,24 @@ class PythonFile:
         elif len(chain) >= 2 and chain[0] != "self" and self.is_known(chain[0]):
             self.add_type_ref(owner_id, ".".join(chain[:-1]), "dependency", call, "call",
                               chain[-1], member)
+
+    def read_class_arguments(self, call, owner_id, member):
+        """A known class handed to a call as a value: `Hub(Api)`, `type("B", (Handler,), {})`,
+        `isinstance(x, Foo)`, `key=Foo`. The callee uses it (a framework instantiates it)."""
+        arguments = call.child_by_field_name("arguments")
+        values = list(arguments.named_children) if arguments is not None else []
+        while values:
+            value = values.pop()
+            if value.type == "keyword_argument":
+                value = value.child_by_field_name("value")
+            if value is None:
+                continue
+            if value.type in VALUE_CONTAINERS:
+                values.extend(value.named_children)
+                continue
+            name = ".".join(attribute_chain(value))
+            if name and self.is_known(name.partition(".")[0]) and is_class_like(name):
+                self.add_type_ref(owner_id, name, "dependency", value, "arg", from_member=member)
 
     def is_known(self, name):
         return name in self.imported or name in self.local_classes

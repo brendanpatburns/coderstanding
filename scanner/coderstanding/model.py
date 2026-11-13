@@ -10,7 +10,14 @@ NODE_KINDS = ("class", "interface", "struct", "record", "enum", "script", "inner
 APP_START_FLAGS = ("godot-main", "godot-main-scene", "autoload", "program-main")
 TOOL_FLAGS = ("script-main",)
 ENTRY_MECHANISMS = APP_START_FLAGS + TOOL_FLAGS
-NODE_FLAGS = ("abstract", "static", "singleton", "partial", "entry", "test", "hub", "library") + ENTRY_MECHANISMS
+# A piece a decompiler cut out of a bigger function (Ghidra's `caseD_0`, one case of a switch):
+# it is reached by a jump, not a call, so it is never reported unused or god.
+FRAGMENT_FLAG = "fragment"
+# A decompiler copy of a function that a hand-written copy replaced (`Node.replaced_by` = that
+# copy's file): the original is kept for reference, calls go to the copy, so it is never unused or god.
+REPLACED_FLAG = "replaced"
+NODE_FLAGS = ("abstract", "static", "singleton", "partial", "entry", "test", "hub", "library",
+              FRAGMENT_FLAG, REPLACED_FLAG) + ENTRY_MECHANISMS
 EDGE_KINDS = ("generalization", "realization", "composition", "association",
               "dependency", "signal")
 HOLDING_KINDS = ("composition", "association")
@@ -21,6 +28,7 @@ INIT_MEMBER = "<init>"  # Call.from_member for initializers and top-level code
 FIELD_MEMBER = "<field>"  # Call.from_member for a field's type reference
 SIGNAL_ARROW = " → "  # a signal call is written `signal → handler`
 EMIT_DETAIL = "emit"  # Ref.detail of `sig.emit()` / `EmitSignal(..)`; the call is the signal name
+OPTIONAL_IMPORT = "optional-import"  # Ref.detail of an import the code copes without (`except ImportError`)
 LAMBDA_HANDLER = "lambda"  # a signal handler written inline
 VARIABLE_HANDLER = "<callable>"  # a handler held in a variable: its function is unknown
 GLOBAL_KINDS = ("autoload", "class_name", "global-class")  # how a global is reached by name
@@ -148,6 +156,9 @@ class Edge:
     at: list = field(default_factory=list)
     unsure: bool = False
     auto: str = ""
+    # An outside ref to a repo file no reader turns into a node (a stylesheet, a vendored
+    # script): found, so never unresolved (stack.is_unresolved_ref).
+    repo_file: bool = False
 
     @property
     def key(self):
@@ -161,6 +172,7 @@ class Edge:
         self.at = merge_locations(self.at, other.at)
         self.unsure = self.unsure and other.unsure
         self.auto = self.auto or other.auto
+        self.repo_file = self.repo_file or other.repo_file
 
     def _call(self, from_member, member):
         for call in self.calls:
@@ -188,6 +200,7 @@ class Node:
     span: bool = False
     file_lines: int = 0  # the whole file's lines, set only when span is False (node_span)
     doc: str = ""  # the code's own header comment (short), a default description
+    replaced_by: str = ""  # with the `replaced` flag: the file of the copy that replaced this one
     file_kind: str = ""  # filekinds.py: Code, Scene, Configuration, Data, ...; "" without a file
     hub_degree: int = 0  # levels.py: neighbour count, set with the `hub` flag on promoted classes
     warnings: list = field(default_factory=list)  # checks.py: [{"kind": ..., ...}]

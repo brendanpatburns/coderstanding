@@ -12,7 +12,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from .stack import npm_package
+from .stack import is_unresolved_ref, npm_package
 
 CLASS_KINDS = ("class", "interface", "enum", "struct", "record")
 ALIAS_MARKERS = ("@/", "~/", "#/", "$/", "~", "#", "$")  # common alias spellings, not npm names
@@ -139,9 +139,10 @@ def class_counts(graph):
 
 
 def name_counts(graph):
-    """Unresolved names (not import paths) in JS/TS code: (matching a repo class's name, others)."""
+    """Unresolved names (not import paths) in JS/TS code: (matching a repo class's name, others);
+    the standard library and platform globals (`node:fs`, `WebSocket`) are left out, as in warnings."""
     js_refs = [e for n in graph.nodes.values() if n.lang == "javascript"
-               for e in n.external_refs.values()]
+               for e in n.external_refs.values() if is_unresolved_ref(n, e)]
     paths = {e.to for e in js_refs if "import" in e.detail}  # names imported from them share it
     class_names = {n.name for n in graph.nodes.values() if n.kind in CLASS_KINDS}
     matching, other = Counter(), Counter()
